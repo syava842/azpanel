@@ -107,11 +107,11 @@ Expected: `синтаксис-ок`. Для любых других клиент
 
 - [ ] **Step 4: Подключить тестового клиента с самого 94, без маршрутов и адресов**
 
-`<профиль>` — путь из шага 2.
+`/root/azpanel-probe/test-udp.ovpn` — путь из шага 2.
 
 ```bash
 ssh root@192.0.2.94 'cd /root/azpanel-probe
-openvpn --config "<профиль>" --route-nopull --ifconfig-noexec --route-noexec --disable-dco \
+openvpn --config /root/azpanel-probe/test-udp.ovpn --route-nopull --ifconfig-noexec --route-noexec --disable-dco \
   --log a.log --writepid a.pid --daemon azt-probe
 for i in $(seq 1 30); do grep -qE "Initialization Sequence Completed|AUTH_FAILED|Exiting" a.log && break; sleep 1; done
 tail -5 a.log; kill "$(cat a.pid)"; sleep 1
@@ -3508,12 +3508,12 @@ Expected: число сессий по каждому клиенту совпа�
 
 - [ ] **Step 3: Отказ сверх лимита**
 
-`<профиль>` — путь из задачи 1, шаг 2.
+`/root/azpanel-probe/test-udp.ovpn` — путь из задачи 1, шаг 2.
 
 ```bash
 ssh root@192.0.2.94 'cd /root/azpanel-probe && rm -f a.log b.log
 /opt/azpanel/bin/azpanel limit set azpanel-test-1 1
-ovpn() { openvpn --config "<профиль>" --route-nopull --ifconfig-noexec --route-noexec --disable-dco --log "$1.log" --writepid "$1.pid" --daemon "azt-$1"; }
+ovpn() { openvpn --config /root/azpanel-probe/test-udp.ovpn --route-nopull --ifconfig-noexec --route-noexec --disable-dco --log "$1.log" --writepid "$1.pid" --daemon "azt-$1"; }
 wait_log() { for i in $(seq 1 30); do grep -qE "Initialization Sequence Completed|AUTH_FAILED|Exiting" "$1.log" && break; sleep 1; done; }
 ovpn a; wait_log a; grep -cE "Initialization Sequence Completed" a.log
 ovpn b; wait_log b; grep -E "AUTH_FAILED|Initialization Sequence Completed" b.log | head -2
@@ -3528,7 +3528,7 @@ Expected: `a` — `1` (подключился); `b` — `AUTH_FAILED`; в `sessi
 ```bash
 ssh root@192.0.2.94 'cd /root/azpanel-probe
 kill "$(cat a.pid)"; pkill -f "azt-b" ; sleep 2; rm -f b.log
-openvpn --config "<профиль>" --route-nopull --ifconfig-noexec --route-noexec --disable-dco --log b.log --writepid b.pid --daemon azt-b
+openvpn --config /root/azpanel-probe/test-udp.ovpn --route-nopull --ifconfig-noexec --route-noexec --disable-dco --log b.log --writepid b.pid --daemon azt-b
 for i in $(seq 1 30); do grep -qE "Initialization Sequence Completed|AUTH_FAILED|Exiting" b.log && break; sleep 1; done
 grep -cE "Initialization Sequence Completed" b.log; kill "$(cat b.pid)"
 grep azpanel-test-1 /opt/azpanel/log/hook.log | tail -3'
@@ -3540,7 +3540,7 @@ Expected: `1`; в `hook.log` — `отключение` для `a`, затем `
 
 ```bash
 ssh root@192.0.2.94 'cd /root/azpanel-probe; systemctl stop azpanel-node; rm -f a.log
-openvpn --config "<профиль>" --route-nopull --ifconfig-noexec --route-noexec --disable-dco --log a.log --writepid a.pid --daemon azt-a
+openvpn --config /root/azpanel-probe/test-udp.ovpn --route-nopull --ifconfig-noexec --route-noexec --disable-dco --log a.log --writepid a.pid --daemon azt-a
 for i in $(seq 1 30); do grep -qE "Initialization Sequence Completed|AUTH_FAILED|Exiting" a.log && break; sleep 1; done
 grep -cE "Initialization Sequence Completed" a.log; kill "$(cat a.pid)"
 journalctl -u "openvpn-server@*" --since "-2min" | grep -m2 "azpanel hook"
