@@ -85,6 +85,3 @@ func sortedKeys(m map[string]int) []string {
 	sort.Strings(out)
 	return out
 }
-
-func runInstall(args []string) error   { return errors.New("установщик — задача 13") }
-func runUninstall(args []string) error { return errors.New("установщик — задача 13") }
