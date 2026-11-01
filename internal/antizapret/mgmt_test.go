@@ -57,9 +57,30 @@ func TestNormalizeAddr(t *testing.T) {
 		"tcp4-server:1.2.3.4:5": "1.2.3.4:5",
 		"udp6:::ffff:1.2.3.4:5": "1.2.3.4:5",
 		"udp:1.2.3.4:5":         "1.2.3.4:5",
+		// IPv6: со скобками и без, IPv4 в IPv6 — к виду IPv4.
+		"udp6:2001:db8::1:1194":      "[2001:db8::1]:1194",
+		"udp6:[2001:db8::1]:1194":    "[2001:db8::1]:1194",
+		"[2001:DB8::1]:1194":         "[2001:db8::1]:1194",
+		"udp6:[::ffff:1.2.3.4]:5":    "1.2.3.4:5",
+		"[AF_INET6]2001:db8::1:1194": "[2001:db8::1]:1194",
 	} {
 		if got := NormalizeAddr(in); got != want {
 			t.Errorf("NormalizeAddr(%q) = %q, ждали %q", in, got, want)
+		}
+	}
+}
+
+// Хук собирает адрес из trusted_ip и trusted_port; ключ должен совпасть с
+// тем, что даёт снимок для той же сессии.
+func TestNormalizeAddrHookMatchesSnapshot(t *testing.T) {
+	for _, c := range []struct{ snapshot, ip, port string }{
+		{"udp4:203.0.113.5:40001", "203.0.113.5", "40001"},
+		{"udp6:2001:db8::1:1194", "2001:db8::1", "1194"},
+		{"udp6:::ffff:198.51.100.7:5", "::ffff:198.51.100.7", "5"},
+	} {
+		hook := NormalizeAddr(net.JoinHostPort(c.ip, c.port))
+		if snap := NormalizeAddr(c.snapshot); snap != hook {
+			t.Errorf("снимок %q → %q, хук %s:%s → %q", c.snapshot, snap, c.ip, c.port, hook)
 		}
 	}
 }

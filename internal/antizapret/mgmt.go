@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/netip"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -28,14 +29,38 @@ var ErrIncomplete = errors.New("ответ status оборван до END")
 // protoPrefix — протокол перед адресом в Real Address: udp4:, tcp4-server: …
 var protoPrefix = regexp.MustCompile(`^(udp|tcp)[46]?(-server|-client)?:`)
 
-// NormalizeAddr приводит адрес клиента к виду ip:port, как в trusted_ip и
-// trusted_port хука: OpenVPN пишет перед адресом протокол или метку
-// семейства, а IPv4 — в виде ::ffff:a.b.c.d.
+// NormalizeAddr приводит адрес клиента к одному виду — «a.b.c.d:port» или
+// «[v6]:port» — и для Real Address из снимка, и для trusted_ip:trusted_port
+// хука. OpenVPN пишет перед адресом протокол или метку семейства, IPv6 —
+// со скобками или без, IPv4 — иногда в виде ::ffff:a.b.c.d. Неразборчивый
+// адрес возвращается без префиксов как есть.
 func NormalizeAddr(a string) string {
-	a = protoPrefix.ReplaceAllString(a, "")
-	a = strings.TrimPrefix(a, "[AF_INET6]")
-	a = strings.TrimPrefix(a, "[AF_INET]")
-	return strings.TrimPrefix(a, "::ffff:")
+	s := protoPrefix.ReplaceAllString(a, "")
+	s = strings.TrimPrefix(s, "[AF_INET6]")
+	s = strings.TrimPrefix(s, "[AF_INET]")
+	var host, port string
+	if strings.HasPrefix(s, "[") {
+		h, p, err := net.SplitHostPort(s)
+		if err != nil {
+			return s
+		}
+		host, port = h, p
+	} else {
+		i := strings.LastIndexByte(s, ':') // порт — после последнего двоеточия
+		if i < 0 {
+			return s
+		}
+		host, port = s[:i], s[i+1:]
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return s
+	}
+	p, err := strconv.ParseUint(port, 10, 16)
+	if err != nil {
+		return s
+	}
+	return netip.AddrPortFrom(ip.Unmap(), uint16(p)).String()
 }
 
 // ParseStatus3 разбирает ответ управляющего интерфейса на «status 3»
