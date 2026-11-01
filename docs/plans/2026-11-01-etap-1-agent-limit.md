@@ -43,7 +43,7 @@
 | `internal/node/peercred_linux.go`, `peercred_other.go` | проверка собеседника |
 | `internal/node/poller.go` | опрос экземпляров OpenVPN |
 | `internal/node/node.go` | `Run` — служба агента целиком |
-| `internal/hook/hook.go` | логика `azpanel hook connect|disconnect` |
+| `internal/hook/hook.go` | логика `azpanel hook connect` и `disconnect` |
 | `internal/install/install.go` | `azpanel install`, `azpanel uninstall` для узла |
 | `scripts/build.sh` | сборка под linux |
 | `docs/notes/2026-11-01-proba-94.md` | результаты пробы на 94 (задача 1) |
