@@ -60,6 +60,15 @@ func TestAgentDownFailsOpen(t *testing.T) {
 	}
 }
 
+func TestDenyWithErrorIsNotDeny(t *testing.T) {
+	call := func(agentproto.Request) (agentproto.Response, error) {
+		return agentproto.Response{Allow: false, Error: "сбой"}, nil
+	}
+	if code := Run("connect", aliceEnv, call, &bytes.Buffer{}); code != 0 {
+		t.Fatalf("код %d", code)
+	}
+}
+
 func TestDisconnectNeverDenies(t *testing.T) {
 	call := func(r agentproto.Request) (agentproto.Response, error) {
 		if r.Op != agentproto.OpDisconnect {
