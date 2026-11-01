@@ -81,7 +81,7 @@ type dirMode struct {
 func layout() []dirMode {
 	return []dirMode{
 		{paths.Root(), 0o755}, {paths.Bin(), 0o755}, {paths.Etc(), 0o700},
-		{paths.Log(), 0o750}, {paths.Data(), 0o700}, {paths.Backup(), 0o700},
+		{paths.Log(), 0o700}, {paths.Data(), 0o700}, {paths.Backup(), 0o700},
 	}
 }
 
@@ -142,6 +142,11 @@ func Uninstall(o Options) error {
 	unit := filepath.Join(o.UnitDir, nodeUnitName)
 	what := "служба azpanel-node, хук лимита, " + unit
 	if o.Purge {
+		// Корень можно переопределить переменной: не дать ей превратить
+		// --purge в удаление чужого каталога.
+		if root := filepath.Clean(paths.Root()); filepath.Base(root) != "azpanel" || filepath.Dir(root) == root {
+			return fmt.Errorf("--purge: %s не похож на каталог azpanel, удалите его вручную", root)
+		}
 		what += ", " + paths.Root() + " целиком"
 	}
 	fmt.Fprintf(o.Out, "Будет удалено: %s\n", what)

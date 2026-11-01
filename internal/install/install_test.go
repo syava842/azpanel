@@ -65,7 +65,7 @@ func TestInstallNode(t *testing.T) {
 		t.Fatalf("хук не поставлен:\n%s", b)
 	}
 	if runtime.GOOS == "linux" {
-		for dir, mode := range map[string]os.FileMode{paths.Root(): 0o755, paths.Bin(): 0o755, paths.Etc(): 0o700, paths.Log(): 0o750, paths.Data(): 0o700, paths.Backup(): 0o700} {
+		for dir, mode := range map[string]os.FileMode{paths.Root(): 0o755, paths.Bin(): 0o755, paths.Etc(): 0o700, paths.Log(): 0o700, paths.Data(): 0o700, paths.Backup(): 0o700} {
 			st, _ := os.Stat(dir)
 			if st.Mode().Perm() != mode {
 				t.Errorf("%s: %v, ждали %v", dir, st.Mode().Perm(), mode)
@@ -109,6 +109,19 @@ func TestInstallNodeAsksWithoutYes(t *testing.T) {
 	}
 	if _, err := os.Stat(paths.Root()); !os.IsNotExist(err) {
 		t.Fatal("после отказа созданы каталоги")
+	}
+}
+
+func TestPurgeRefusesForeignRoot(t *testing.T) {
+	o, _ := setup(t)
+	foreign := t.TempDir() // имя каталога — не «azpanel»
+	t.Setenv("AZPANEL_ROOT", foreign)
+	o.Purge = true
+	if err := Uninstall(o); err == nil {
+		t.Fatal("--purge чужого каталога: ждали отказ")
+	}
+	if _, err := os.Stat(foreign); err != nil {
+		t.Fatalf("чужой каталог удалён: %v", err)
 	}
 }
 

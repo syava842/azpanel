@@ -66,7 +66,19 @@ func TestStoreRereadsOnChange(t *testing.T) {
 		t.Fatalf("после второй записи n=%d", n)
 	}
 	os.WriteFile(p, []byte("{"), 0o600)
-	if _, err := s.Get("alice"); err == nil {
+	n, err := s.Get("alice")
+	if err == nil {
 		t.Fatal("битый файл: ждали ошибку")
+	}
+	if n != 2 {
+		t.Fatalf("битый файл: действует последний прочитанный лимит, ждали 2, получено %d", n)
+	}
+}
+
+func TestStoreBrokenFromStartIsUnlimited(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "limits.json")
+	os.WriteFile(p, []byte("{"), 0o600)
+	if n, err := NewStore(p).Get("alice"); n != 0 || err == nil {
+		t.Fatalf("n=%d err=%v", n, err)
 	}
 }

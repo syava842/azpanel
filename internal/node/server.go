@@ -3,6 +3,7 @@ package node
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"time"
@@ -10,6 +11,10 @@ import (
 	"github.com/syava842/azpanel/internal/agentproto"
 	"github.com/syava842/azpanel/internal/limits"
 )
+
+// maxRequest — предел запроса хука: имя клиента — до 64 символов, адрес и
+// экземпляр короткие.
+const maxRequest = 4096
 
 // Server отвечает хуку. Любая своя ошибка — «пускать»: из-за сбоя azpanel
 // VPN отключаться не должен.
@@ -34,8 +39,8 @@ func (s *Server) Handle(req agentproto.Request) agentproto.Response {
 	case agentproto.OpConnect:
 		limit, err := s.Limits.Get(req.CN)
 		if err != nil {
-			s.HookLog.Error("лимиты не прочитаны, подключение пропущено без проверки", "cn", req.CN, "err", err)
-			return agentproto.Response{Allow: true, Error: err.Error()}
+			// limit — из последней прочитанной версии; не было её — 0, без ограничения.
+			s.HookLog.Error("limits.json не прочитан, действуют последние прочитанные лимиты", "cn", req.CN, "limit", limit, "err", err)
 		}
 		ok, n := s.Tracker.Admit(k, s.Now(), limit)
 		if !ok {
@@ -62,7 +67,11 @@ func (s *Server) Serve(ln net.Listener) error {
 			if errors.Is(err, net.ErrClosed) {
 				return nil
 			}
-			return err
+			// Временная ошибка (например, кончились дескрипторы) не должна
+			// останавливать агента: без него хук пропускает всех.
+			s.Log.Error("соединение с сокетом агента не принято", "err", err)
+			time.Sleep(100 * time.Millisecond)
+			continue
 		}
 		go s.serveConn(c)
 	}
@@ -78,7 +87,7 @@ func (s *Server) serveConn(c net.Conn) {
 		}
 	}
 	var req agentproto.Request
-	if err := json.NewDecoder(c).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(c, maxRequest)).Decode(&req); err != nil {
 		return
 	}
 	json.NewEncoder(c).Encode(s.Handle(req))

@@ -74,7 +74,9 @@ type Store struct {
 
 func NewStore(path string) *Store { return &Store{path: path, m: map[string]int{}} }
 
-// Get — лимит клиента; 0 — без ограничения.
+// Get — лимит клиента; 0 — без ограничения. Если файл испорчен, вместе с
+// ошибкой возвращается лимит из последней прочитанной версии: одна кривая
+// правка не должна снимать лимиты у всех.
 func (s *Store) Get(name string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -83,11 +85,11 @@ func (s *Store) Get(name string) (int, error) {
 	case errors.Is(err, fs.ErrNotExist):
 		s.m, s.seen = map[string]int{}, false
 	case err != nil:
-		return 0, err
+		return s.m[name], err
 	case !s.seen || !st.ModTime().Equal(s.mod) || st.Size() != s.size:
 		m, err := Load(s.path)
 		if err != nil {
-			return 0, err
+			return s.m[name], err
 		}
 		s.m, s.mod, s.size, s.seen = m, st.ModTime(), st.Size(), true
 	}

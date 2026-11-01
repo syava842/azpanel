@@ -103,12 +103,15 @@ func ParseStatus3(instance string, r io.Reader) ([]Session, error) {
 // интерфейс обслуживает одного собеседника за раз, поэтому соединение
 // держится не дольше timeout.
 func QueryStatus(sockPath string, timeout time.Duration) ([]Session, error) {
-	conn, err := net.DialTimeout("unix", sockPath, timeout)
+	deadline := time.Now().Add(timeout)
+	conn, err := (&net.Dialer{Deadline: deadline}).Dial("unix", sockPath)
 	if err != nil {
 		return nil, err
 	}
 	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(timeout))
+	if err := conn.SetDeadline(deadline); err != nil {
+		return nil, err
+	}
 	if _, err := io.WriteString(conn, "status 3\n"); err != nil {
 		return nil, err
 	}

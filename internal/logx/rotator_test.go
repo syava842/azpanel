@@ -41,6 +41,31 @@ func TestRotatorShiftsAndDropsOldest(t *testing.T) {
 	}
 }
 
+// Ротация не удалась (каталог пропал) — после его возвращения запись оживает.
+func TestRotatorRecoversAfterFailedRotate(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "log")
+	os.MkdirAll(dir, 0o700)
+	p := filepath.Join(dir, "node.log")
+	r, err := Open(p, 10, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	r.Write([]byte("first\n"))
+	r.f.Close() // на Windows открытый файл не даёт удалить каталог
+	os.RemoveAll(dir)
+	if _, err := r.Write([]byte("second\n")); err == nil {
+		t.Fatal("ждали ошибку записи без каталога")
+	}
+	os.MkdirAll(dir, 0o700)
+	if _, err := r.Write([]byte("third\n")); err != nil {
+		t.Fatalf("запись не ожила: %v", err)
+	}
+	if got := read(t, p); got != "third\n" {
+		t.Fatalf("node.log = %q", got)
+	}
+}
+
 func TestRotatorAppendsToExisting(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "node.log")
 	os.WriteFile(p, []byte("old\n"), 0o640)

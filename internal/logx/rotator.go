@@ -29,10 +29,13 @@ func Open(path string, maxBytes int64, keep int) (*Rotator, error) {
 }
 
 func (r *Rotator) open() error {
-	f, err := os.OpenFile(r.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
+	// 600: в журналах имена и адреса клиентов, а nobody на AntiZapret — в
+	// группе root.
+	f, err := os.OpenFile(r.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}
+	f.Chmod(0o600) // файл мог остаться от прежней версии с другими правами
 	st, err := f.Stat()
 	if err != nil {
 		f.Close()
@@ -45,6 +48,11 @@ func (r *Rotator) open() error {
 func (r *Rotator) Write(p []byte) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.f == nil { // прошлая ротация не смогла открыть файл — пробуем снова
+		if err := r.open(); err != nil {
+			return 0, err
+		}
+	}
 	if r.size > 0 && r.size+int64(len(p)) > r.max {
 		if err := r.rotate(); err != nil {
 			return 0, err
@@ -56,9 +64,8 @@ func (r *Rotator) Write(p []byte) (int, error) {
 }
 
 func (r *Rotator) rotate() error {
-	if err := r.f.Close(); err != nil {
-		return err
-	}
+	r.f.Close()
+	r.f = nil
 	os.Remove(fmt.Sprintf("%s.%d", r.path, r.keep))
 	for i := r.keep - 1; i >= 1; i-- {
 		os.Rename(fmt.Sprintf("%s.%d", r.path, i), fmt.Sprintf("%s.%d", r.path, i+1))
@@ -70,6 +77,9 @@ func (r *Rotator) rotate() error {
 func (r *Rotator) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.f == nil {
+		return nil
+	}
 	return r.f.Close()
 }
 

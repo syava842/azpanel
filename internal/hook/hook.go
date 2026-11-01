@@ -41,15 +41,15 @@ func Run(op string, env func(string) string, call Caller, stderr io.Writer) int 
 	}
 	resp, err := call(req)
 	if err != nil {
-		fmt.Fprintf(stderr, "azpanel hook: агент недоступен (%v), лимит для %s не проверен\n", err, cn)
+		fmt.Fprintf(stderr, "azpanel hook: агент недоступен (%v), лимит для %q не проверен\n", err, cn)
 		return 0
 	}
 	if resp.Error != "" {
-		fmt.Fprintf(stderr, "azpanel hook: агент ответил ошибкой (%s), лимит для %s не проверен\n", resp.Error, cn)
+		fmt.Fprintf(stderr, "azpanel hook: агент ответил ошибкой (%q), лимит для %q не проверен\n", resp.Error, cn)
 		return 0
 	}
 	if req.Op == agentproto.OpConnect && !resp.Allow {
-		fmt.Fprintf(stderr, "azpanel hook: отказ %s — подключений %d из %d\n", cn, resp.Count, resp.Limit)
+		fmt.Fprintf(stderr, "azpanel hook: отказ %q — подключений %d из %d\n", cn, resp.Count, resp.Limit)
 		return ExitDeny
 	}
 	return 0

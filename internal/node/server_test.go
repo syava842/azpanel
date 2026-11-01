@@ -96,11 +96,41 @@ func TestHandleBrokenLimitsFailsOpen(t *testing.T) {
 	s, hookLog := newServer(t, nil)
 	s.Limits = limits.NewStore(writeFile(t, "limits.json", "{"))
 	r := s.Handle(connect("alice", "1.1.1.1:1"))
-	if !r.Allow || r.Error == "" {
+	if !r.Allow {
 		t.Fatalf("ответ %+v", r)
 	}
-	if !strings.Contains(hookLog.String(), "без проверки") {
+	if !strings.Contains(hookLog.String(), "не прочитан") {
 		t.Fatalf("hook.log:\n%s", hookLog.String())
+	}
+}
+
+// Файл испортили после того, как лимиты были прочитаны: лимиты продолжают
+// действовать, а не снимаются у всех разом.
+func TestHandleBrokenLimitsKeepsLastGood(t *testing.T) {
+	s, _ := newServer(t, nil)
+	p := writeFile(t, "limits.json", `{"version":1,"limits":{"alice":1}}`)
+	s.Limits = limits.NewStore(p)
+	if r := s.Handle(connect("alice", "1.1.1.1:1")); !r.Allow {
+		t.Fatalf("первое: %+v", r)
+	}
+	os.WriteFile(p, []byte("{"), 0o600)
+	if r := s.Handle(connect("alice", "1.1.1.1:2")); r.Allow || r.Error != "" {
+		t.Fatalf("второе при испорченном файле: %+v", r)
+	}
+}
+
+func TestServeLimitsRequestSize(t *testing.T) {
+	s, _ := newServer(t, nil)
+	sock := filepath.Join(t.TempDir(), "node.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go s.Serve(ln)
+	big := agentproto.Request{Op: agentproto.OpConnect, Instance: "antizapret-udp", CN: strings.Repeat("a", 10000), Addr: "1.1.1.1:1"}
+	if _, err := agentproto.Call(sock, big, time.Second); err == nil {
+		t.Fatal("запрос больше предела получил ответ")
 	}
 }
 
