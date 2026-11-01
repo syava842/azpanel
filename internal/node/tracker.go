@@ -1,0 +1,141 @@
+// Package node — агент узла: учёт сессий OpenVPN и ответы хуку лимита.
+package node
+
+import (
+	"sync"
+	"time"
+
+	"github.com/syava842/azpanel/internal/antizapret"
+)
+
+// Key — одна сессия: экземпляр OpenVPN, имя клиента, адрес ip:port.
+type Key struct {
+	Instance string
+	CN       string
+	Addr     string
+}
+
+type snapshot struct {
+	taken time.Time
+	keys  map[Key]struct{}
+}
+
+// Tracker считает сессии по снимкам управляющих сокетов и событиям хуков
+// между снимками. Экземпляр, к которому идёт подключение, во время
+// client-connect не отвечает, поэтому одних снимков мало.
+type Tracker struct {
+	mu    sync.Mutex
+	snaps map[string]snapshot
+	conns map[Key]time.Time
+	discs map[Key]time.Time
+}
+
+func NewTracker() *Tracker {
+	return &Tracker{snaps: map[string]snapshot{}, conns: map[Key]time.Time{}, discs: map[Key]time.Time{}}
+}
+
+// ApplySnapshot заменяет снимок экземпляра. taken — время начала опроса:
+// события позже него снимок мог не увидеть, поэтому они сохраняются.
+func (t *Tracker) ApplySnapshot(instance string, taken time.Time, sessions []antizapret.Session) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	keys := make(map[Key]struct{}, len(sessions))
+	for _, s := range sessions {
+		keys[Key{Instance: instance, CN: s.CommonName, Addr: s.RealAddr}] = struct{}{}
+	}
+	t.snaps[instance] = snapshot{taken: taken, keys: keys}
+	for k, ev := range t.conns {
+		if k.Instance == instance && !ev.After(taken) {
+			delete(t.conns, k)
+		}
+	}
+	for k, ev := range t.discs {
+		if k.Instance == instance && !ev.After(taken) {
+			delete(t.discs, k)
+		}
+	}
+}
+
+// present: событие новее снимка побеждает снимок; из двух событий — позднее.
+func (t *Tracker) present(k Key) bool {
+	snap := t.snaps[k.Instance]
+	_, inSnap := snap.keys[k]
+	c, hasC := t.conns[k]
+	d, hasD := t.discs[k]
+	cAfter := hasC && c.After(snap.taken)
+	dAfter := hasD && d.After(snap.taken)
+	switch {
+	case cAfter && (!dAfter || c.After(d)):
+		return true
+	case dAfter:
+		return false
+	default:
+		return inSnap
+	}
+}
+
+func (t *Tracker) keysOf(cn string) map[Key]struct{} {
+	out := map[Key]struct{}{}
+	for _, s := range t.snaps {
+		for k := range s.keys {
+			if k.CN == cn && t.present(k) {
+				out[k] = struct{}{}
+			}
+		}
+	}
+	for k := range t.conns {
+		if k.CN == cn && t.present(k) {
+			out[k] = struct{}{}
+		}
+	}
+	return out
+}
+
+func (t *Tracker) Count(cn string) int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.keysOf(cn))
+}
+
+// Admit засчитывает подключение, если у клиента меньше limit сессий.
+// limit 0 — без ограничения. count — сколько сессий будет с этой (или есть
+// сейчас, если отказ).
+func (t *Tracker) Admit(k Key, at time.Time, limit int) (bool, int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	keys := t.keysOf(k.CN)
+	delete(keys, k) // повтор того же подключения не считается вторым
+	if limit > 0 && len(keys) >= limit {
+		return false, len(keys)
+	}
+	t.conns[k] = at
+	return true, len(keys) + 1
+}
+
+func (t *Tracker) Disconnect(k Key, at time.Time) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.discs[k] = at
+}
+
+// Counts — число сессий по каждому клиенту, у которого они есть.
+func (t *Tracker) Counts() map[string]int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	cns := map[string]struct{}{}
+	for _, s := range t.snaps {
+		for k := range s.keys {
+			cns[k.CN] = struct{}{}
+		}
+	}
+	for k := range t.conns {
+		cns[k.CN] = struct{}{}
+	}
+	out := map[string]int{}
+	for cn := range cns {
+		if n := len(t.keysOf(cn)); n > 0 {
+			out[cn] = n
+		}
+	}
+	return out
+}
