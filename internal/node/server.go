@@ -24,6 +24,12 @@ type Server struct {
 
 func (s *Server) Handle(req agentproto.Request) agentproto.Response {
 	k := Key{Instance: req.Instance, CN: req.CN, Addr: req.Addr}
+	if (req.Op == agentproto.OpConnect || req.Op == agentproto.OpDisconnect) && !s.Tracker.Known(req.Instance) {
+		// Нет снимка — событие не вычистит ни один опрос: не засчитываем.
+		// Так же ведёт себя агент до первого ответа экземпляра.
+		s.HookLog.Warn("неизвестный экземпляр, событие не учтено", "op", req.Op, "cn", req.CN, "instance", req.Instance)
+		return agentproto.Response{Allow: true}
+	}
 	switch req.Op {
 	case agentproto.OpConnect:
 		limit, err := s.Limits.Get(req.CN)

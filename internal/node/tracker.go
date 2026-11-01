@@ -2,6 +2,7 @@
 package node
 
 import (
+	"sort"
 	"sync"
 	"time"
 
@@ -110,6 +111,45 @@ func (t *Tracker) Admit(k Key, at time.Time, limit int) (bool, int) {
 	}
 	t.conns[k] = at
 	return true, len(keys) + 1
+}
+
+// Known — у экземпляра есть снимок. События хуков от неизвестных
+// экземпляров агент не засчитывает: иначе их не вычистит ни один снимок.
+func (t *Tracker) Known(instance string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	_, ok := t.snaps[instance]
+	return ok
+}
+
+// Instances — экземпляры, у которых есть снимок, по алфавиту.
+func (t *Tracker) Instances() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]string, 0, len(t.snaps))
+	for inst := range t.snaps {
+		out = append(out, inst)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Forget убирает снимок и события экземпляра: он остановлен или так долго
+// молчит, что его снимок уже ничего не значит.
+func (t *Tracker) Forget(instance string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.snaps, instance)
+	for k := range t.conns {
+		if k.Instance == instance {
+			delete(t.conns, k)
+		}
+	}
+	for k := range t.discs {
+		if k.Instance == instance {
+			delete(t.discs, k)
+		}
+	}
 }
 
 func (t *Tracker) Disconnect(k Key, at time.Time) {

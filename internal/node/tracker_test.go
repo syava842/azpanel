@@ -93,6 +93,23 @@ func TestDisconnectBeatsOlderSnapshot(t *testing.T) {
 	}
 }
 
+func TestForgetDropsInstance(t *testing.T) {
+	tr := NewTracker()
+	tr.ApplySnapshot("vpn-tcp", at(0), []antizapret.Session{sess("alice", "1.1.1.1:1"), sess("alice", "1.1.1.1:2")})
+	tr.ApplySnapshot("vpn-udp", at(0), nil)
+	tr.Admit(Key{"vpn-tcp", "alice", "1.1.1.1:3"}, at(1), 0)
+	tr.Forget("vpn-tcp")
+	if n := tr.Count("alice"); n != 0 {
+		t.Fatalf("после Forget alice = %d", n)
+	}
+	if tr.Known("vpn-tcp") || !tr.Known("vpn-udp") {
+		t.Fatalf("Known: vpn-tcp=%v vpn-udp=%v", tr.Known("vpn-tcp"), tr.Known("vpn-udp"))
+	}
+	if got := tr.Instances(); len(got) != 1 || got[0] != "vpn-udp" {
+		t.Fatalf("Instances = %v", got)
+	}
+}
+
 func TestConnectAfterDisconnectOfSameKey(t *testing.T) {
 	tr := NewTracker()
 	k := Key{"vpn-udp", "alice", "1.1.1.1:1"}

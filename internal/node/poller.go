@@ -13,6 +13,12 @@ import (
 // client-connect.
 const silentWarnAfter = 3
 
+// staleAfter — после стольких молчаливых опросов подряд (минута при опросе
+// раз в 5 с) снимок экземпляра забывается: client-connect так долго не
+// длится, значит экземпляр завис или остановлен, а старый снимок дал бы
+// ложные отказы по лимиту.
+const staleAfter = 12
+
 type Poller struct {
 	Dir     string
 	Timeout time.Duration
@@ -34,14 +40,29 @@ func (p *Poller) PollOnce() {
 	if p.fails == nil {
 		p.fails = map[string]int{}
 	}
+	present := map[string]bool{}
+	for _, sock := range socks {
+		present[antizapret.InstanceFromSocket(sock)] = true
+	}
+	for _, inst := range p.Tracker.Instances() {
+		if !present[inst] {
+			p.Tracker.Forget(inst)
+			delete(p.fails, inst)
+			p.Log.Info("сокет экземпляра OpenVPN пропал, его сессии больше не учитываются", "instance", inst)
+		}
+	}
 	for _, sock := range socks {
 		inst := antizapret.InstanceFromSocket(sock)
 		taken := p.Now()
 		sessions, err := p.Query(sock, p.Timeout)
 		if err != nil {
 			p.fails[inst]++
-			if p.fails[inst] == silentWarnAfter {
+			switch p.fails[inst] {
+			case silentWarnAfter:
 				p.Log.Warn("экземпляр OpenVPN не отвечает", "instance", inst, "polls", p.fails[inst], "err", err)
+			case staleAfter:
+				p.Tracker.Forget(inst)
+				p.Log.Warn("экземпляр OpenVPN молчит слишком долго, его сессии больше не учитываются", "instance", inst, "polls", p.fails[inst])
 			}
 			continue
 		}

@@ -25,8 +25,11 @@ func newServer(t *testing.T, lim map[string]int) (*Server, *bytes.Buffer) {
 		}
 	}
 	var hookLog bytes.Buffer
+	tr := NewTracker()
+	// Агент принимает события только от экземпляров, которые видел в снимках.
+	tr.ApplySnapshot("antizapret-udp", t0.Add(-time.Second), nil)
 	return &Server{
-		Tracker: NewTracker(),
+		Tracker: tr,
 		Limits:  limits.NewStore(p),
 		HookLog: logx.New(&hookLog),
 		Log:     logx.New(io.Discard),
@@ -45,6 +48,25 @@ func writeFile(t *testing.T, name, body string) string {
 		t.Fatal(err)
 	}
 	return p
+}
+
+func TestHandleUnknownInstanceNotCounted(t *testing.T) {
+	s, hookLog := newServer(t, map[string]int{"alice": 1})
+	for i := 0; i < 3; i++ {
+		r := s.Handle(agentproto.Request{Op: agentproto.OpConnect, Instance: "fake", CN: "alice", Addr: "1.1.1.1:" + strconv.Itoa(i)})
+		if !r.Allow {
+			t.Fatalf("неизвестный экземпляр, подключение %d: %+v", i, r)
+		}
+	}
+	if n := s.Tracker.Count("alice"); n != 0 {
+		t.Fatalf("события неизвестного экземпляра засчитаны: %d", n)
+	}
+	if !strings.Contains(hookLog.String(), "неизвестный экземпляр") {
+		t.Fatalf("hook.log:\n%s", hookLog.String())
+	}
+	if r := s.Handle(connect("alice", "1.1.1.1:9")); !r.Allow {
+		t.Fatalf("настоящее подключение после подделок: %+v", r)
+	}
 }
 
 func TestHandleConnectWithinAndOverLimit(t *testing.T) {

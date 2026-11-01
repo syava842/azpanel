@@ -45,4 +45,35 @@ func TestPollOnceKeepsSnapshotOfSilentInstance(t *testing.T) {
 	if c := strings.Count(logBuf.String(), "не отвечает"); c != 1 {
 		t.Fatalf("предупреждений %d, ждали одно:\n%s", c, logBuf.String())
 	}
+	// Молчит дольше staleAfter опросов — снимок больше не считается.
+	for i := 3; i < staleAfter; i++ {
+		p.PollOnce()
+	}
+	if n := tr.Count("alice"); n != 1 {
+		t.Fatalf("снимок молчащего экземпляра не забыт: alice = %d", n)
+	}
+	if tr.Known("vpn-udp") {
+		t.Fatal("vpn-udp всё ещё известен")
+	}
+}
+
+func TestPollOnceForgetsVanishedSocket(t *testing.T) {
+	dir := t.TempDir()
+	for _, n := range []string{"antizapret-udp.sock", "vpn-tcp.sock"} {
+		os.WriteFile(filepath.Join(dir, n), nil, 0o600)
+	}
+	tr := NewTracker()
+	p := &Poller{
+		Dir: dir, Timeout: time.Second, Tracker: tr, Log: logx.New(&bytes.Buffer{}),
+		Now: func() time.Time { return t0 },
+		Query: func(sock string, _ time.Duration) ([]antizapret.Session, error) {
+			return []antizapret.Session{{CommonName: "alice", RealAddr: antizapret.InstanceFromSocket(sock)}}, nil
+		},
+	}
+	p.PollOnce()
+	os.Remove(filepath.Join(dir, "vpn-tcp.sock")) // экземпляр остановлен
+	p.PollOnce()
+	if n := tr.Count("alice"); n != 1 {
+		t.Fatalf("снимок пропавшего экземпляра остался: alice = %d", n)
+	}
 }

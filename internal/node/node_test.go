@@ -61,7 +61,7 @@ func TestRunAnswersHook(t *testing.T) {
 
 	var r agentproto.Response
 	for i := 0; i < 50; i++ {
-		r, err = agentproto.Call(paths.NodeSocket(), agentproto.Request{Op: agentproto.OpConnect, Instance: "vpn-udp", CN: "alice", Addr: "2.2.2.2:1"}, time.Second)
+		r, err = agentproto.Call(paths.NodeSocket(), agentproto.Request{Op: agentproto.OpConnect, Instance: "antizapret-udp", CN: "alice", Addr: "2.2.2.2:1"}, time.Second)
 		if err == nil {
 			break
 		}
