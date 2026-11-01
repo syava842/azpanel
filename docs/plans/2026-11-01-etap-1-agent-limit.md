@@ -3521,13 +3521,13 @@ ovpn b; wait_log b; grep -E "AUTH_FAILED|Initialization Sequence Completed" b.lo
 grep azpanel-test-1 /opt/azpanel/log/hook.log | tail -3'
 ```
 
-Expected: `a` — `1` (подключился); `b` — `AUTH_FAILED`; в `sessions` у `azpanel-test-1` — 1 сессия, лимит 1; в `hook.log` — `подключение … sessions=1 limit=1`, затем `отказ: лимит подключений … sessions=1 limit=1`. Если в `b.log` нет `AUTH_FAILED`, а клиент переподключается по кругу — отказ всё равно состоялся, если в журнале сервера есть `client-connect command failed` и `azpanel hook: отказ`: `journalctl -u "openvpn-server@*" --since "-2min" | grep -E "client-connect|azpanel hook"`; клиента `b` тогда остановить `pkill -f azt-b`.
+Expected: `a` — `1` (подключился); `b` — `AUTH_FAILED`; в `sessions` у `azpanel-test-1` — 1 сессия, лимит 1; в `hook.log` — `подключение … sessions=1 limit=1`, затем `отказ: лимит подключений … sessions=1 limit=1`. Если в `b.log` нет `AUTH_FAILED`, а клиент переподключается по кругу — отказ всё равно состоялся, если в журнале сервера есть `client-connect command failed` и `azpanel hook: отказ`: `journalctl -u "openvpn-server@*" --since "-2min" | grep -E "client-connect|azpanel hook"`; клиента `b` тогда остановить по pid-файлу: `kill "$(cat b.pid)"`. **Не `pkill -f`**: шаблон совпадает с командной строкой самой SSH-сессии, и она убивает себя (на приёмке так и было — код 255).
 
 - [ ] **Step 4: Место освобождается после отключения**
 
 ```bash
 ssh root@192.0.2.94 'cd /root/azpanel-probe
-kill "$(cat a.pid)"; pkill -f "azt-b" ; sleep 2; rm -f b.log
+kill "$(cat a.pid)"; [ -f b.pid ] && kill "$(cat b.pid)" 2>/dev/null; sleep 2; rm -f b.log b.pid
 openvpn --config /root/azpanel-probe/test-udp.ovpn --route-nopull --ifconfig-noexec --route-noexec --disable-dco --log b.log --writepid b.pid --daemon azt-b
 for i in $(seq 1 30); do grep -qE "Initialization Sequence Completed|AUTH_FAILED|Exiting" b.log && break; sleep 1; done
 grep -cE "Initialization Sequence Completed" b.log; kill "$(cat b.pid)"
