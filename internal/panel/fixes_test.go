@@ -236,3 +236,70 @@ func TestAuditPageHugePageAndUTC(t *testing.T) {
 		t.Fatalf("страница: %s", body)
 	}
 }
+
+// N1: срок и трафик активны вместе; ручная разблокировка запоминает обе
+// причины, и ни одна не переблокирует клиента.
+func TestManualUnblockRemembersBothReasons(t *testing.T) {
+	e, c, csrf := storeEnv(t)
+	ctx := context.Background()
+	e.node.ClientsFn = func(context.Context) ([]nodeapi.Client, error) {
+		return []nodeapi.Client{{Name: "bob", OpenVPN: true, Blocked: true}}, nil
+	}
+	e.node.SetBlockedFn = func(context.Context, string, bool) (nodeapi.Result, error) { return nodeapi.Result{}, nil }
+	until := histNow.Add(-time.Hour).Unix()
+	card := store.Card{Node: store.LocalNode, Name: "bob", AccessUntil: &until, TrafficLimit: 1000,
+		TrafficPeriod: store.PeriodMonth, AutoBlock: store.AutoBlockExpired}
+	e.srv.Store.SaveCard(ctx, card)
+	e.srv.Store.AddTraffic(ctx, store.LocalNode, histNow.Add(-time.Hour).Unix(), map[string]store.Bytes{"bob": {Rx: 600, Tx: 500}})
+	if rec := post(e, c, "/clients/bob/block", url.Values{"csrf": {csrf}, "blocked": {"0"}}); rec.Code != 303 {
+		t.Fatalf("%d", rec.Code)
+	}
+	got, _ := e.srv.Store.Card(ctx, store.LocalNode, "bob")
+	want := blockFingerprint(store.AutoBlockExpired, got, histNow) + "|" + blockFingerprint(store.AutoBlockTraffic, got, histNow)
+	if got.AutoBlock != "" || got.AutoSkip != want {
+		t.Fatalf("auto_skip = %q, ждали %q (auto_block=%q)", got.AutoSkip, want, got.AutoBlock)
+	}
+	// сборщик с этой карточкой ничего не блокирует
+	ce := newCollEnv(t)
+	ce.now = histNow
+	ce.clients = []nodeapi.Client{{Name: "bob", OpenVPN: true}}
+	got.Node = store.LocalNode
+	ce.st.SaveCard(ctx, got)
+	ce.st.AddTraffic(ctx, store.LocalNode, histNow.Add(-time.Hour).Unix(), map[string]store.Bytes{"bob": {Rx: 600, Tx: 500}})
+	ce.tick(t)
+	if len(ce.blocks) != 0 {
+		t.Fatalf("клиент заблокирован снова: %v", ce.blocks)
+	}
+}
+
+// N3: первый же тайм-аут агента прерывает проход; остальные — на следующем.
+func TestCollectorAutoBlockStopsOnHungAgent(t *testing.T) {
+	e := newCollEnv(t)
+	ctx := context.Background()
+	past := e.now.Add(-time.Hour).Unix()
+	e.clients = []nodeapi.Client{{Name: "a", OpenVPN: true}, {Name: "b", OpenVPN: true}, {Name: "c", OpenVPN: true}}
+	for _, n := range []string{"a", "b", "c"} {
+		e.st.SaveCard(ctx, store.Card{Node: store.LocalNode, Name: n, AccessUntil: &past})
+	}
+	calls := 0
+	e.node.SetBlockedFn = func(_ context.Context, name string, b bool) (nodeapi.Result, error) {
+		calls++
+		return nodeapi.Result{}, fmt.Errorf("запрос: %w", context.DeadlineExceeded)
+	}
+	if err := e.c.Tick(ctx); err == nil {
+		t.Fatal("ожидалась ошибка")
+	}
+	if calls != 1 {
+		t.Fatalf("вызовов агента = %d, ждали 1", calls)
+	}
+	// ответ агента с кодом 5xx проход не прерывает
+	calls = 0
+	e.node.SetBlockedFn = func(context.Context, string, bool) (nodeapi.Result, error) {
+		calls++
+		return nodeapi.Result{}, &nodeapi.Error{Status: 500, Message: "сбой"}
+	}
+	e.c.Tick(ctx)
+	if calls != 3 {
+		t.Fatalf("после ответа 500 вызовов = %d, ждали 3", calls)
+	}
+}

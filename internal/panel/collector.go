@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -344,7 +346,7 @@ func (c *Collector) autoBlock(ctx context.Context, now time.Time) error {
 		// совпал) не отключает проверку лимита трафика.
 		reason := ""
 		if card.AccessUntil != nil && *card.AccessUntil <= now.Unix() &&
-			card.AutoSkip != blockFingerprint(store.AutoBlockExpired, card, now) {
+			!skipHas(card.AutoSkip, blockFingerprint(store.AutoBlockExpired, card, now)) {
 			reason = store.AutoBlockExpired
 		}
 		if reason == "" && card.TrafficLimit > 0 {
@@ -354,7 +356,7 @@ func (c *Collector) autoBlock(ctx context.Context, now time.Time) error {
 				continue
 			}
 			if b := t[cl.Name]; b.Rx+b.Tx >= card.TrafficLimit &&
-				card.AutoSkip != blockFingerprint(store.AutoBlockTraffic, card, now) {
+				!skipHas(card.AutoSkip, blockFingerprint(store.AutoBlockTraffic, card, now)) {
 				reason = store.AutoBlockTraffic
 			}
 		}
@@ -370,9 +372,63 @@ func (c *Collector) autoBlock(ctx context.Context, now time.Time) error {
 		if err != nil {
 			c.log().Warn("сборщик: автоблокировка клиента не удалась", "client", cl.Name, "err", err)
 			errs = append(errs, fmt.Errorf("%s: %w", cl.Name, err))
+			if agentUnreachable(err) {
+				// агент завис или недоступен: остальные ждали бы по тайм-ауту
+				// каждый; их очередь — на следующем проходе
+				errs = append(errs, errors.New("проход прерван: агент не отвечает"))
+				break
+			}
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// agentUnreachable: ошибка — тайм-аут или сбой сети, а не ответ агента
+// (ответ с кодом 4xx/5xx значит, что агент жив).
+func agentUnreachable(err error) bool {
+	var ne *nodeapi.Error
+	if errors.As(err, &ne) {
+		return false
+	}
+	var netErr net.Error
+	return errors.Is(err, context.DeadlineExceeded) || errors.As(err, &netErr)
+}
+
+// skipSep разделяет отпечатки в auto_skip: при двух активных причинах ручная
+// разблокировка запоминает обе.
+const skipSep = "|"
+
+// skipHas: отпечаток есть среди запомненных в auto_skip.
+func skipHas(skip, fp string) bool {
+	if skip == "" {
+		return false
+	}
+	for _, x := range strings.Split(skip, skipSep) {
+		if x == fp {
+			return true
+		}
+	}
+	return false
+}
+
+// activeFingerprints — отпечатки всех причин блокировки, действующих сейчас
+// (срок и трафик); основная причина reason попадает в список всегда.
+func activeFingerprints(ctx context.Context, st *store.Store, node int64, name, reason string, card store.Card, now time.Time) []string {
+	var out []string
+	if reason == store.AutoBlockExpired || (card.AccessUntil != nil && *card.AccessUntil <= now.Unix()) {
+		out = append(out, blockFingerprint(store.AutoBlockExpired, card, now))
+	}
+	traffic := reason == store.AutoBlockTraffic
+	if !traffic && card.TrafficLimit > 0 {
+		if t, err := st.TrafficTotals(ctx, node, periodStart(card.TrafficPeriod, now).Unix(), now.Unix()+1); err == nil {
+			b := t[name]
+			traffic = b.Rx+b.Tx >= card.TrafficLimit
+		}
+	}
+	if traffic {
+		out = append(out, blockFingerprint(store.AutoBlockTraffic, card, now))
+	}
+	return out
 }
 
 // noteWGSkip пишет в журнал, что WG-клиент пропущен, не чаще раза в сутки.

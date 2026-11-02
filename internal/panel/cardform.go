@@ -177,7 +177,7 @@ func (s *Server) forgetAutoBlock(r *http.Request, c nodeapi.Client) {
 	if err != nil || card.AutoBlock == "" {
 		return
 	}
-	fp := blockFingerprint(card.AutoBlock, card, s.now())
+	fp := strings.Join(activeFingerprints(r.Context(), s.Store, s.NodeID, c.Name, card.AutoBlock, card, s.now()), skipSep)
 	if err := s.Store.SetAutoBlock(r.Context(), s.NodeID, c.Name, "", fp); err != nil {
 		s.Log.Warn("отметка автоблокировки не снята", "client", c.Name, "err", err)
 	}
