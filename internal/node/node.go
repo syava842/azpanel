@@ -30,6 +30,9 @@ const hookCheckEvery = time.Minute
 // Run — режим «azpanel node». ensureHook ставит хук в скрипты OpenVPN и
 // сообщает, было ли изменение.
 func Run(ctx context.Context, cfg config.Config, version string, ensureHook func() (bool, error)) error {
+	// Отмена изнутри — перезапуск по POST /v1/system/restart; остановка та же, что по SIGTERM.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	maxBytes := int64(cfg.Log.MaxSizeMB) << 20
 	nodeW, err := logx.Open(filepath.Join(paths.Log(), "node.log"), maxBytes, cfg.Log.Keep)
 	if err != nil {
@@ -90,7 +93,7 @@ func Run(ctx context.Context, cfg config.Config, version string, ensureHook func
 	}
 	go p.Run(ctx, time.Duration(cfg.Node.PollSeconds)*time.Second)
 	if cfg.Node.APIListen != "" {
-		stop, err := startAPI(ctx, cfg, version, tr, denials, log, ensureHook)
+		stop, err := startAPI(ctx, cancel, cfg, version, tr, denials, log, ensureHook)
 		if err != nil {
 			log.Error("API агента не запущен — панель узел не увидит, хук работает", "err", err)
 		} else {
@@ -119,7 +122,7 @@ func Run(ctx context.Context, cfg config.Config, version string, ensureHook func
 // startAPI запускает HTTP API для панели. Его сбой не трогает хук: лимиты
 // и блокировки работают и без API. При остановке службы systemd гасит и
 // дочерние процессы — client.sh, запущенный в эту секунду, оборвётся.
-func startAPI(ctx context.Context, cfg config.Config, version string, tr *Tracker, denials *Denials, log *slog.Logger, ensureHook func() (bool, error)) (func(), error) {
+func startAPI(ctx context.Context, exit func(), cfg config.Config, version string, tr *Tracker, denials *Denials, log *slog.Logger, ensureHook func() (bool, error)) (func(), error) {
 	sec, err := secrets.Load(paths.SecretsFile())
 	if err != nil {
 		return nil, err
@@ -176,6 +179,7 @@ func startAPI(ctx context.Context, cfg config.Config, version string, tr *Tracke
 		Kill:          antizapret.KillClient,
 		WGCmd:         ExecWGCmd,
 		Log:           log,
+		Exit:          exit,
 		Now:           time.Now,
 	}
 	// telemt и WARP: чтение — агентом, изменения — задачами `azpanel internal …`

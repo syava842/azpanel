@@ -536,3 +536,9 @@ func (c *HTTPClient) Backup(ctx context.Context, name string) (io.ReadCloser, er
 	}
 	return resp.Body, nil
 }
+
+// RestartNode просит агента перезапуститься: он отвечает 202 и завершает
+// процесс через секунду, systemd поднимает его заново.
+func (c *HTTPClient) RestartNode(ctx context.Context) error {
+	return c.do(ctx, http.MethodPost, "/v1/system/restart", nil, nil)
+}

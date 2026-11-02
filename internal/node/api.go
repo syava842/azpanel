@@ -57,6 +57,10 @@ type API struct {
 	WGCmd         func(ctx context.Context, name string, args ...string) ([]byte, error) // wg, wg-quick; nil — сторож WireGuard выключен
 	Log           *slog.Logger
 	Now           func() time.Time
+	// Exit завершает агента (отмена контекста Run, как при SIGTERM); nil —
+	// перезапуск по API недоступен. RestartDelay — пауза после ответа, 0 — restartDelay.
+	Exit         func()
+	RestartDelay time.Duration
 
 	// ops сериализует операции над клиентами: поиск + client.sh + уборка
 	// лимитов, а также правки лимита и блокировки. Порядок захвата всегда
@@ -92,6 +96,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/routing/backups/{name}", a.routingBackups)
 	mux.HandleFunc("POST /v1/routing/backups/{name}/{stamp}/restore", a.routingRestore)
 	mux.HandleFunc("POST /v1/system/reboot", a.rebootServer)
+	mux.HandleFunc("POST /v1/system/restart", a.restartNode)
 	mux.HandleFunc("POST /v1/backups", a.createBackup)
 	mux.HandleFunc("GET /v1/backups", a.listBackups)
 	mux.HandleFunc("GET /v1/backups/{name}", a.getBackup)

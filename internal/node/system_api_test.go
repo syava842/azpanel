@@ -169,3 +169,34 @@ func TestAPIBackupSwapToSymlinkRefused(t *testing.T) {
 	}
 	f.Close()
 }
+
+func TestAPIRestartAnswersThenExits(t *testing.T) {
+	e := newAPI(t)
+	exited := make(chan time.Time, 1)
+	e.api.Exit = func() { exited <- time.Now() }
+	e.api.RestartDelay = 80 * time.Millisecond
+	if err := e.client.RestartNode(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	answered := time.Now()
+	select {
+	case at := <-exited:
+		if at.Sub(answered) < 50*time.Millisecond {
+			t.Fatalf("выход раньше паузы после ответа: %v", at.Sub(answered))
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("агент не завершился")
+	}
+	if restartDelay != time.Second {
+		t.Fatalf("пауза по умолчанию: %v", restartDelay)
+	}
+}
+
+func TestAPIRestartNotConfigured(t *testing.T) {
+	e := newAPI(t)
+	e.api.Exit = nil
+	err := e.client.RestartNode(context.Background())
+	if err == nil {
+		t.Fatal("без Exit перезапуск должен отклоняться")
+	}
+}

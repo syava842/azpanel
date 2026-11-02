@@ -142,3 +142,25 @@ func openRegular(path string) (*os.File, error) {
 	}
 	return f, nil
 }
+
+// restartDelay — пауза между ответом на POST /v1/system/restart и выходом:
+// ответ должен дойти до панели.
+const restartDelay = time.Second
+
+// restartNode отвечает 202 и завершает агента не раньше чем через restartDelay
+// после ответа. Поднимает его systemd (Restart=always).
+func (a *API) restartNode(w http.ResponseWriter, r *http.Request) {
+	if a.Exit == nil {
+		writeErr(w, http.StatusServiceUnavailable, "перезапуск агента не настроен")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "restarting"})
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+	delay := a.RestartDelay
+	if delay <= 0 {
+		delay = restartDelay
+	}
+	time.AfterFunc(delay, a.Exit)
+}
