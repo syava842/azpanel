@@ -117,6 +117,7 @@ var routes = map[string]access{
 	"GET /antizapret/update":          accAdmin,
 	"POST /antizapret/update":         accAdmin,
 	"POST /antizapret/update/restore": accAdmin,
+	"POST /antizapret/update/retry":   accAdmin,
 
 	"GET /telemt":                      accAdmin,
 	"POST /telemt/users":               accAdmin,

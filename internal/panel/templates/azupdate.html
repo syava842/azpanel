@@ -22,6 +22,24 @@
   {{if .Extras}}<p class="muted">Сопутствующие службы: {{range $i, $s := .Extras}}{{if $i}}, {{end}}{{$s}}{{end}}</p>{{end}}
   {{if .Notes}}<details><summary class="muted">Как собрано окружение setup.sh</summary><ul>{{range .Notes}}<li>{{.}}</li>{{end}}</ul></details>{{end}}
   {{if .TaskHref}}<p><a href="{{url .TaskHref}}">Журнал задачи</a></p>{{end}}
+  {{if .Late}}
+  <p class="bad"><b>VPN не работает: установка прервалась на середине.</b> Службы остановлены, пока установка не будет доведена до конца или конфигурация не вернётся из бэкапа.</p>
+  {{if .CanRetry}}
+  <form method="post" action="{{url "/antizapret/update/retry"}}">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <label><input type="checkbox" name="confirm" value="1"> установка пойдёт заново с тем же бэкапом, сервер перезагрузится</label>
+    <button type="submit">Повторить установку с сохранённым бэкапом</button>
+  </form>
+  {{end}}
+  {{if .CanRestore}}
+  <form method="post" action="{{url "/antizapret/update/restore"}}">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <input type="hidden" name="backup" value="{{.Backup}}">
+    <label><input type="checkbox" name="confirm" value="1"> сервер перезагрузится, клиенты и настройки заменятся бэкапом</label>
+    <button type="submit">Восстановить из бэкапа</button>
+  </form>
+  {{end}}
+  {{end}}
 </div>
 {{end}}
 

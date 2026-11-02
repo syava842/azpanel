@@ -335,6 +335,7 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "GET /antizapret/update", s.azUpdatePage)
 	s.route(mux, "POST /antizapret/update", s.azStart)
 	s.route(mux, "POST /antizapret/update/restore", s.azRestore)
+	s.route(mux, "POST /antizapret/update/retry", s.azRetry)
 
 	// Российские VPS-прокси: адрес дописывается в allow-ips.txt.
 	s.route(mux, "GET /proxy", s.proxyPage)

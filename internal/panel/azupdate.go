@@ -64,7 +64,11 @@ type azStateView struct {
 	Extras               []string
 	TaskHref             string
 	CanRestore           bool
-	Backup               string
+	// Late — итог failed_late: установка прервалась на середине, VPN не
+	// работает. CanRetry/CanRestore приходят от агента и включают кнопки.
+	Late     bool
+	CanRetry bool
+	Backup   string
 }
 
 var azPhaseTexts = map[string]string{
@@ -75,7 +79,7 @@ var azPhaseTexts = map[string]string{
 
 func azStateRow(st nodeapi.AZUpdateState) azStateView {
 	v := azStateView{Title: "Обновление", From: shortSHA(st.From), Commit: shortSHA(st.Commit), Backup: st.Backup,
-		Reasons: st.Reasons, Warnings: st.Warnings, Notes: st.Notes, CanRestore: st.CanRestore}
+		Reasons: st.Reasons, Warnings: st.Warnings, Notes: st.Notes}
 	if st.Action == nodeapi.AZActionRestore {
 		v.Title = "Восстановление из бэкапа"
 	}
@@ -87,6 +91,11 @@ func azStateRow(st nodeapi.AZUpdateState) azStateView {
 		v.OK, v.Status = true, "успешно"
 	case nodeapi.AZStatusFailed:
 		v.Failed, v.Status = true, "не удалось"
+	case nodeapi.AZStatusFailedLate:
+		// Кнопки только у failed_late и только по полям агента: обычный
+		// failed (ранний отказ или откат) их не получает.
+		v.Failed, v.Late, v.Status = true, true, "VPN не работает, установка прервалась"
+		v.CanRetry, v.CanRestore = st.CanRetry, st.CanRestore && st.Backup != ""
 	}
 	if !st.Started.IsZero() {
 		t := st.Started
@@ -276,6 +285,41 @@ func (s *Server) azStart(w http.ResponseWriter, r *http.Request) {
 	s.Log.Info("действие", "user", s.user(r), "op", "az_update", "commit", commit, "task", st.TaskID)
 	s.audit(r, "az_update", target, "", strings.TrimSpace("запущено; "+strings.Join(changes, "; ")+" задача "+st.TaskID))
 	s.redirectMsg(w, r, "/antizapret/update", "az_started")
+}
+
+// azRetry повторяет прерванную установку (итог failed_late) с бэкапом,
+// сохранённым при первом запуске. Состояние перечитывается у агента: кнопка на
+// старой странице не должна запускать установку, когда повторять уже нечего.
+func (s *Server) azRetry(w http.ResponseWriter, r *http.Request) {
+	n, ok := s.svc(w, r)
+	if !ok {
+		return
+	}
+	if !formConfirmed(r) {
+		s.azView(w, r, http.StatusBadRequest, "Отметьте подтверждение: установка пойдёт заново, сервер будет перезагружен.", nil)
+		return
+	}
+	cur, err := n.AZUpdateState(r.Context())
+	if err != nil {
+		s.serviceRefused(w, r, "az_retry", "", err)
+		return
+	}
+	if cur.Status != nodeapi.AZStatusFailedLate || !cur.CanRetry {
+		s.azView(w, r, http.StatusConflict, "Повторять нечего: прерванной установки с сохранённым бэкапом нет.", nil)
+		return
+	}
+	st, err := n.AZRetry(r.Context())
+	if err != nil {
+		s.Log.Warn("действие", "user", s.user(r), "op", "az_retry", "backup", cur.Backup, "err", err)
+		status, tx := s.svcErr(err)
+		s.auditRefused(r, "az_retry", cur.Backup, status, tx)
+		s.azView(w, r, status, tx, nil)
+		return
+	}
+	s.az.set(st.Status, st.Phase)
+	s.Log.Info("действие", "user", s.user(r), "op", "az_retry", "backup", cur.Backup, "task", st.TaskID)
+	s.audit(r, "az_retry", cur.Backup, "", "запущено; задача "+st.TaskID)
+	s.redirectMsg(w, r, "/antizapret/update", "az_retry_started")
 }
 
 // azRestore запускает восстановление из бэкапа, выбранного из списка агента.

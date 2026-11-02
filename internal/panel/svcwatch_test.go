@@ -134,3 +134,26 @@ func TestWatcherSelfResult(t *testing.T) {
 		t.Fatalf("%v %v", kinds, texts)
 	}
 }
+
+func TestWatcherAZResultFailedLate(t *testing.T) {
+	w, n, e := watchEnv(t)
+	fin := w.Now().Add(-time.Hour)
+	st := nodeapi.AZUpdateState{Action: "update", Status: nodeapi.AZStatusFailedLate, Started: fin.Add(-20 * time.Minute), Finished: &fin,
+		Reasons: []string{"setup.sh завершился с кодом 1"}, CanRetry: true, CanRestore: true}
+	n.AZUpdateStateFn = func(context.Context) (nodeapi.AZUpdateState, error) { return st, nil }
+	n.AZVersionFn = func(context.Context) (nodeapi.AZVersion, error) {
+		return nodeapi.AZVersion{UpToDate: true, Current: azOld}, nil
+	}
+	n.UpdateResultFn = func(context.Context) (*update.Result, error) { return nil, nil }
+	w.Tick(context.Background())
+	w.Tick(context.Background())
+	kinds, texts := outboxTexts(t, e)
+	if len(kinds) != 1 || kinds[0] != "update_result" {
+		t.Fatalf("%v %v", kinds, texts)
+	}
+	for _, want := range []string{"VPN на сервере не работает", "setup.sh завершился с кодом 1", "повторить установку с сохранённым бэкапом", "восстановить из бэкапа"} {
+		if !strings.Contains(texts[0], want) {
+			t.Errorf("в уведомлении нет %q: %s", want, texts[0])
+		}
+	}
+}

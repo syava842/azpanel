@@ -91,7 +91,7 @@ func (w *Watcher) Tick(ctx context.Context) {
 // на запуск.
 func (w *Watcher) azResult(ctx context.Context) error {
 	st, err := w.Node.AZUpdateState(ctx)
-	if err != nil || st.Finished == nil || (st.Status != nodeapi.AZStatusOK && st.Status != nodeapi.AZStatusFailed) {
+	if err != nil || st.Finished == nil || (st.Status != nodeapi.AZStatusOK && st.Status != nodeapi.AZStatusFailed && st.Status != nodeapi.AZStatusFailedLate) {
 		return nil
 	}
 	now := w.now()
@@ -116,6 +116,19 @@ func (w *Watcher) azResult(ctx context.Context) error {
 		}
 		if len(st.Warnings) > 0 {
 			text += " Замечания: " + strings.Join(st.Warnings, "; ") + "."
+		}
+	} else if st.Status == nodeapi.AZStatusFailedLate {
+		text = what + " прервалось: VPN на сервере не работает."
+		if len(st.Reasons) > 0 {
+			text += " " + strings.Join(st.Reasons, "; ") + "."
+		}
+		switch {
+		case st.CanRetry && st.CanRestore:
+			text += " В панели можно повторить установку с сохранённым бэкапом или восстановить из бэкапа."
+		case st.CanRetry:
+			text += " В панели можно повторить установку с сохранённым бэкапом."
+		case st.CanRestore:
+			text += " В панели можно восстановить из бэкапа."
 		}
 	} else {
 		text = what + " не удалось: " + strings.Join(st.Reasons, "; ") + "."

@@ -20,6 +20,7 @@ type ServiceNode interface {
 	AZPreflight(ctx context.Context) (nodeapi.AZPreflight, error)
 	AZUpdate(ctx context.Context, req nodeapi.AZUpdateRequest) (nodeapi.AZUpdateState, error)
 	AZRestore(ctx context.Context, backup string) (nodeapi.AZUpdateState, error)
+	AZRetry(ctx context.Context) (nodeapi.AZUpdateState, error)
 
 	// telemt.
 	TelemtStatus(ctx context.Context) (nodeapi.TelemtStatus, error)

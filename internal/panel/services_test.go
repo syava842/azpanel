@@ -24,6 +24,7 @@ type svcNode struct {
 	AZPreflightFn      func(ctx context.Context) (nodeapi.AZPreflight, error)
 	AZUpdateFn         func(ctx context.Context, req nodeapi.AZUpdateRequest) (nodeapi.AZUpdateState, error)
 	AZRestoreFn        func(ctx context.Context, backup string) (nodeapi.AZUpdateState, error)
+	AZRetryFn          func(ctx context.Context) (nodeapi.AZUpdateState, error)
 	TelemtStatusFn     func(ctx context.Context) (nodeapi.TelemtStatus, error)
 	TelemtReleaseFn    func(ctx context.Context) (nodeapi.TelemtRelease, error)
 	TelemtPreflightFn  func(ctx context.Context, port int) (nodeapi.TelemtPreflight, error)
@@ -84,6 +85,14 @@ func (f *svcNode) AZRestore(ctx context.Context, backup string) (nodeapi.AZUpdat
 		return z, errNotSet
 	}
 	return f.AZRestoreFn(ctx, backup)
+}
+func (f *svcNode) AZRetry(ctx context.Context) (nodeapi.AZUpdateState, error) {
+	f.Calls = append(f.Calls, "AZRetry")
+	if f.AZRetryFn == nil {
+		var z nodeapi.AZUpdateState
+		return z, errNotSet
+	}
+	return f.AZRetryFn(ctx)
 }
 func (f *svcNode) TelemtStatus(ctx context.Context) (nodeapi.TelemtStatus, error) {
 	f.Calls = append(f.Calls, "TelemtStatus")

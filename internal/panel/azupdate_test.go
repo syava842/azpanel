@@ -186,3 +186,114 @@ func TestAZRoutesAdminOnly(t *testing.T) {
 	}
 	_ = e
 }
+
+// failedLateState — установка прервалась: VPN не работает.
+func failedLateState(retry, restore bool) nodeapi.AZUpdateState {
+	fin := time.Now()
+	return nodeapi.AZUpdateState{Action: "update", Status: nodeapi.AZStatusFailedLate, Commit: azNew, Started: time.Now(), Finished: &fin,
+		Reasons: []string{"setup.sh завершился с кодом 1"}, CanRetry: retry, CanRestore: restore, Backup: "backup-azpanel-1.tar.gz",
+		Backups: []nodeapi.AZBackup{{Name: "backup-azpanel-1.tar.gz", Bytes: 2048, Time: time.Now()}}}
+}
+
+func TestAZPageFailedLateShowsButtonsByFlags(t *testing.T) {
+	const (
+		retryBtn   = "Повторить установку с сохранённым бэкапом"
+		restoreBtn = `name="backup" value="backup-azpanel-1.tar.gz"`
+	)
+	for _, tc := range []struct {
+		name            string
+		retry, restore  bool
+		wantRetry, want bool
+	}{
+		{"оба", true, true, true, true},
+		{"только повтор", true, false, true, false},
+		{"только восстановление", false, true, false, true},
+		{"ни одной", false, false, false, false},
+	} {
+		e, n, c, _ := svcEnv(t)
+		azBehindNode(n)
+		st := failedLateState(tc.retry, tc.restore)
+		n.AZUpdateStateFn = func(context.Context) (nodeapi.AZUpdateState, error) { return st, nil }
+		b := get(e, c, "/antizapret/update").Body.String()
+		if !strings.Contains(b, "VPN не работает, установка прервалась") {
+			t.Errorf("%s: нет заголовка failed_late", tc.name)
+		}
+		if got := strings.Contains(b, retryBtn); got != tc.wantRetry {
+			t.Errorf("%s: кнопка повтора = %v", tc.name, got)
+		}
+		// форма восстановления в карточке состояния (до списка бэкапов)
+		card := b[:strings.Index(b, "Бэкапы на узле")]
+		if got := strings.Contains(card, restoreBtn); got != tc.want {
+			t.Errorf("%s: кнопка восстановления в карточке = %v", tc.name, got)
+		}
+	}
+}
+
+// Обычный failed — без кнопок повтора и восстановления в карточке состояния.
+func TestAZPageFailedPlainHasNoStateButtons(t *testing.T) {
+	e, n, c, _ := svcEnv(t)
+	azBehindNode(n)
+	st := failedLateState(true, true)
+	st.Status = nodeapi.AZStatusFailed
+	n.AZUpdateStateFn = func(context.Context) (nodeapi.AZUpdateState, error) { return st, nil }
+	b := get(e, c, "/antizapret/update").Body.String()
+	if strings.Contains(b, "Повторить установку") || strings.Contains(b, "VPN не работает") {
+		t.Fatal("у обычного failed показаны кнопки или заголовок failed_late")
+	}
+	card := b[:strings.Index(b, "Бэкапы на узле")]
+	if strings.Contains(card, `name="backup"`) {
+		t.Fatal("в карточке failed есть форма восстановления")
+	}
+}
+
+func TestAZRetryNeedsConfirmAndFreshState(t *testing.T) {
+	e, n, c, csrf := svcEnv(t)
+	azBehindNode(n)
+	retried := 0
+	n.AZRetryFn = func(context.Context) (nodeapi.AZUpdateState, error) {
+		retried++
+		return nodeapi.AZUpdateState{Status: nodeapi.AZStatusRunning, Action: "update", Phase: nodeapi.AZPhasePrepare, TaskID: "0123456789ab"}, nil
+	}
+	late := failedLateState(true, true)
+	n.AZUpdateStateFn = func(context.Context) (nodeapi.AZUpdateState, error) { return late, nil }
+	f := url.Values{"csrf": {csrf}}
+	if rec := post(e, c, "/antizapret/update/retry", f); rec.Code != 400 || retried != 0 {
+		t.Fatalf("без подтверждения: %d", rec.Code)
+	}
+	f.Set("confirm", "1")
+	// страница устарела: повторять уже нечего
+	stale := failedLateState(false, true)
+	n.AZUpdateStateFn = func(context.Context) (nodeapi.AZUpdateState, error) { return stale, nil }
+	if rec := post(e, c, "/antizapret/update/retry", f); rec.Code != 409 || retried != 0 {
+		t.Fatalf("нечего повторять: %d", rec.Code)
+	}
+	plain := failedLateState(true, true)
+	plain.Status = nodeapi.AZStatusFailed
+	n.AZUpdateStateFn = func(context.Context) (nodeapi.AZUpdateState, error) { return plain, nil }
+	if rec := post(e, c, "/antizapret/update/retry", f); rec.Code != 409 || retried != 0 {
+		t.Fatalf("обычный failed: %d", rec.Code)
+	}
+	n.AZUpdateStateFn = func(context.Context) (nodeapi.AZUpdateState, error) { return late, nil }
+	rec := post(e, c, "/antizapret/update/retry", f)
+	if rec.Code != 303 || retried != 1 || !strings.Contains(rec.Header().Get("Location"), "msg=az_retry_started") {
+		t.Fatalf("%d %q retried=%d", rec.Code, rec.Header().Get("Location"), retried)
+	}
+	list, _, _ := e.st.AuditList(context.Background(), 10, 0, "az_retry")
+	if len(list) != 1 || list[0].Target != "backup-azpanel-1.tar.gz" {
+		t.Fatalf("журнал: %+v", list)
+	}
+}
+
+func TestAZRetryAgentRefusalShown(t *testing.T) {
+	e, n, c, csrf := svcEnv(t)
+	azBehindNode(n)
+	late := failedLateState(true, true)
+	n.AZUpdateStateFn = func(context.Context) (nodeapi.AZUpdateState, error) { return late, nil }
+	n.AZRetryFn = func(context.Context) (nodeapi.AZUpdateState, error) {
+		return nodeapi.AZUpdateState{}, &nodeapi.Error{Status: 409, Message: "идёт другая задача"}
+	}
+	rec := post(e, c, "/antizapret/update/retry", url.Values{"csrf": {csrf}, "confirm": {"1"}})
+	if rec.Code == 303 || !strings.Contains(rec.Body.String(), "идёт другая задача") {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+}
