@@ -53,6 +53,10 @@ type Collector struct {
 	Alerts *config.Telegram
 	sys    nodeapi.System // ресурсы последнего прохода (под tickMu)
 	sysOK  bool           // агент ответил на последнем проходе
+	// snap — копия последнего удачного снимка для бота (свой замок: бот не ждёт проход).
+	snapMu sync.Mutex
+	snap   nodeapi.System
+	snapOK bool
 	alert  alertState
 
 	// goneOwned — клиенты с владельцем, которых не оказалось у агента на
@@ -105,6 +109,15 @@ func (c *Collector) Run(ctx context.Context) {
 		case <-time.After(every):
 		}
 	}
+}
+
+// LastSystem — последний удачный снимок ресурсов узла; false — сборщик ещё
+// не получил ни одного. Бот берёт ресурсы отсюда и сам агента не спрашивает:
+// доля ЦП у агента считается от прошлого вызова, и лишний вызов сбил бы замер.
+func (c *Collector) LastSystem() (nodeapi.System, bool) {
+	c.snapMu.Lock()
+	defer c.snapMu.Unlock()
+	return c.snap, c.snapOK
 }
 
 // Flapping — имена WG-клиентов, чей адрес часто меняется.
@@ -214,6 +227,9 @@ func (c *Collector) collectResources(ctx context.Context, now time.Time) error {
 	if err != nil {
 		return err
 	}
+	c.snapMu.Lock()
+	c.snap, c.snapOK = sys, true
+	c.snapMu.Unlock()
 	r := sys.Resources
 	used := int64(0)
 	if r.Memory.TotalBytes > r.Memory.AvailableBytes {

@@ -19,8 +19,9 @@ var tgLinkRe = regexp.MustCompile(`https://t\.me/testbot\?start=([A-Za-z0-9_-]{2
 func TestAccountTelegramLinkShownOnceAndRedeemable(t *testing.T) {
 	e, _, user, csrf, bob := userEnv(t)
 	e.srv.BotName = func() string { return "testbot" }
+	e.srv.CheckPassword = func(_, _, _, pw string) bool { return pw == testPassword }
 
-	rec := post(e, user, "/account/telegram", url.Values{"csrf": {csrf}})
+	rec := post(e, user, "/account/telegram", url.Values{"csrf": {csrf}, "password": {testPassword}})
 	if rec.Code != 303 || rec.Header().Get("Location") != "/account/once" {
 		t.Fatalf("выпуск: %d %s", rec.Code, rec.Header().Get("Location"))
 	}

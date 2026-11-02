@@ -57,9 +57,15 @@
     <button type="submit" class="danger">Отвязать</button>
   </form>
   {{else if .CanTG}}
-  <p>Не привязан. Ссылка действует 10 минут и показывается один раз.</p>
+  <p>Не привязан. Ссылка действует 10 минут и показывается один раз. Привязка даёт вход в бота, поэтому нужен текущий пароль{{if .Has2FA}} и код двухфакторной проверки{{end}}. При смене пароля и при выходе со всех устройств привязка снимается.</p>
   <form method="post" action="{{url "/account/telegram"}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label>Пароль
+      <input type="password" name="password" autocomplete="current-password" required>
+    </label>
+    {{if .Has2FA}}<label>Код из приложения или резервный код
+      <input type="text" name="code" autocomplete="one-time-code" required>
+    </label>{{end}}
     <button type="submit">Привязать Telegram</button>
   </form>
   {{else}}

@@ -248,6 +248,7 @@ func (s *Server) accountPassword(w http.ResponseWriter, r *http.Request) {
 	if err := s.Store.DeleteUserSessions(r.Context(), u.ID, sess.IDHash); err != nil {
 		s.Log.Warn("прочие сессии не завершены", "err", err)
 	}
+	s.dropTelegram(r, u, "отвязан при смене пароля")
 	s.audit(r, "password_change", u.Login, "", "пароль изменён, прочие сессии завершены")
 	s.redirectMsg(w, r, "/account", "password_changed")
 }
@@ -518,6 +519,7 @@ func (s *Server) accountLogoutAll(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, "сессии не завершены", err)
 		return
 	}
+	s.dropTelegram(r, u, "отвязан при выходе со всех устройств")
 	s.audit(r, "logout_all", u.Login, "", "завершены все сессии")
 	s.clearSessionCookie(w, r)
 	s.redirect(w, r, "/login", http.StatusSeeOther)

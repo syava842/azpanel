@@ -69,6 +69,13 @@ func TestAlertNodeDownAfterThreeAndBack(t *testing.T) {
 		t.Fatalf("после трёх проходов: %v", got)
 	}
 	down = false
+	for i := 0; i < nodeUpAfter-1; i++ {
+		e.advance(time.Minute)
+		e.tick(t)
+	}
+	if got := e.outbox(t)[kindNodeDown]; len(got) != 1 {
+		t.Fatalf("«снова доступен» раньше времени: %v", got)
+	}
 	e.advance(time.Minute)
 	e.tick(t)
 	got := e.outbox(t)[kindNodeDown]
@@ -211,5 +218,97 @@ func TestAlertsRespectDisabledKindAndOff(t *testing.T) {
 	e.tick(t)
 	if len(e.outbox(t)) != 0 {
 		t.Fatalf("без настроек что-то положено: %v", e.outbox(t))
+	}
+}
+
+func TestAlertFlappingNodeDoesNotSpam(t *testing.T) {
+	e := alertEnv(t)
+	var down bool
+	e.node.SystemFn = func(context.Context) (nodeapi.System, error) {
+		if down {
+			return nodeapi.System{}, errors.New("connection refused")
+		}
+		return nodeapi.System{}, nil
+	}
+	e.tick(t)
+	for round := 0; round < 4; round++ {
+		down = true
+		for i := 0; i < 3; i++ {
+			e.advance(time.Minute)
+			e.tickAny()
+		}
+		down = false
+		e.advance(time.Minute)
+		e.tick(t) // один проход с ответом между тремя без
+	}
+	if got := e.outbox(t)[kindNodeDown]; len(got) != 1 {
+		t.Fatalf("мигающий узел: ожидалось одно сообщение, получено %v", got)
+	}
+}
+
+func TestAlertStateSurvivesRestart(t *testing.T) {
+	e := alertEnv(t)
+	var down bool
+	cpu := 95.0
+	e.node.SystemFn = func(context.Context) (nodeapi.System, error) {
+		if down {
+			return nodeapi.System{}, errors.New("connection refused")
+		}
+		return nodeapi.System{Resources: sysinfo.Snapshot{CPUPercent: cpu, UptimeSec: 1000}}, nil
+	}
+	for i := 0; i < 6; i++ { // нагрузка выше порога дольше пяти минут
+		e.tick(t)
+		e.advance(time.Minute)
+	}
+	down = true
+	for i := 0; i < 3; i++ {
+		e.advance(time.Minute)
+		e.tickAny()
+	}
+	before := e.outbox(t)
+	if len(before["load_high"]) != 1 || len(before[kindNodeDown]) != 1 {
+		t.Fatalf("до перезапуска: %v", before)
+	}
+	// перезапуск панели: сборщик новый, база та же
+	e.c.alert = alertState{}
+	down = false
+	cpu = 95
+	for i := 0; i < 10; i++ {
+		e.advance(time.Minute)
+		e.tickAny()
+	}
+	got := e.outbox(t)
+	if len(got["load_high"]) != 1 {
+		t.Fatalf("нагрузка отправлена повторно после перезапуска: %v", got["load_high"])
+	}
+	if len(got[kindNodeDown]) != 2 || !strings.Contains(got[kindNodeDown][1], "снова доступен") {
+		t.Fatalf("возврат узла после перезапуска: %v", got[kindNodeDown])
+	}
+}
+
+func TestAlertCertSummaryAndCleanup(t *testing.T) {
+	e := alertEnv(t)
+	a, b, c := e.now.Add(2*24*time.Hour), e.now.Add(3*24*time.Hour), e.now.Add(4*24*time.Hour)
+	e.clients = []nodeapi.Client{
+		{Name: "a", OpenVPN: true, CertExpires: &a},
+		{Name: "b", OpenVPN: true, CertExpires: &b},
+		{Name: "c", OpenVPN: true, CertExpires: &c},
+	}
+	e.tick(t)
+	got := e.outbox(t)["cert_expiring"]
+	if len(got) != 1 || !strings.Contains(got[0], "(3)") || !strings.Contains(got[0], "a —") || !strings.Contains(got[0], "c —") {
+		t.Fatalf("одна сводка на троих: %v", got)
+	}
+	// клиент b продлён (срок далеко), c удалён: их записи в meta уходят
+	far := e.now.Add(90 * 24 * time.Hour)
+	e.clients = []nodeapi.Client{
+		{Name: "a", OpenVPN: true, CertExpires: &a},
+		{Name: "b", OpenVPN: true, CertExpires: &far},
+	}
+	e.advance(2 * time.Hour)
+	e.tick(t)
+	left, _ := e.st.MetaPrefix(context.Background(), certWarnKey)
+	if len(left) != 1 || left[certWarnKey+"a"] == "" {
+		t.Fatalf("записи meta не убраны: %v", left)
 	}
 }

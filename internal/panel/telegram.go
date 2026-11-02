@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -26,8 +27,45 @@ func (s *Server) botName() string {
 	return s.BotName()
 }
 
+// reauth требует текущий пароль и, если у пользователя включена 2FA, код:
+// действие с последствиями входа (привязка Telegram) не должно выполняться
+// только по украденной сессии. false — ответ уже отправлен.
+func (s *Server) reauth(w http.ResponseWriter, r *http.Request, u store.User) bool {
+	good, throttled := s.verifyPassword(u, r.PostForm.Get("password"))
+	if throttled {
+		s.accountView(w, r, http.StatusTooManyRequests, "слишком много попыток, подождите 15 минут")
+		return false
+	}
+	if !good {
+		s.auditAs(r, u.Login, "tg_link_denied", u.Login, "", "неверный пароль при привязке Telegram")
+		s.accountView(w, r, http.StatusUnauthorized, "пароль неверен")
+		return false
+	}
+	if len(u.TOTPSecret) == 0 {
+		return true
+	}
+	mkey := mfaKey(u.ID)
+	if !s.Limiter.Begin(mkey) {
+		s.accountView(w, r, http.StatusTooManyRequests, "слишком много попыток, подождите 15 минут")
+		return false
+	}
+	code, err := s.secondFactorOK(r, u.ID)
+	if err != nil {
+		s.internalError(w, r, "второй фактор не проверен", err)
+		return false
+	}
+	if !code {
+		s.Sleep(loginDelay)
+		s.accountView(w, r, http.StatusUnauthorized, "неверный код")
+		return false
+	}
+	s.Limiter.Reset(mkey)
+	return true
+}
+
 // accountTelegram выпускает ссылку привязки Telegram: одноразовый код на 10
-// минут, адрес показывается один раз.
+// минут, адрес показывается один раз. Привязка даёт вход в бота, поэтому нужны
+// текущий пароль и (при 2FA) код.
 func (s *Server) accountTelegram(w http.ResponseWriter, r *http.Request) {
 	u, _, ok := s.currentUser(w, r)
 	if !ok {
@@ -42,6 +80,9 @@ func (s *Server) accountTelegram(w http.ResponseWriter, r *http.Request) {
 		s.accountView(w, r, http.StatusBadRequest, "Telegram уже привязан: сначала отвяжите")
 		return
 	}
+	if !s.reauth(w, r, u) {
+		return
+	}
 	code, err := s.Store.CreateLinkCode(r.Context(), u.ID, s.now().Unix())
 	if err != nil {
 		s.internalError(w, r, "код привязки не выпущен", err)
@@ -51,6 +92,19 @@ func (s *Server) accountTelegram(w http.ResponseWriter, r *http.Request) {
 	s.showOnce(w, r, "Привязка Telegram",
 		"Откройте ссылку в Telegram и нажмите Start. Ссылка действует 10 минут и срабатывает один раз.",
 		"/account", "К аккаунту", []string{"https://t.me/" + name + "?start=" + code})
+}
+
+// dropTelegram снимает привязку Telegram: смена пароля, сброс пароля и «выйти
+// везде» означают потерю доверия к входам, а привязка — отдельный вход в бота.
+func (s *Server) dropTelegram(r *http.Request, u store.User, why string) {
+	if u.TelegramID == nil {
+		return
+	}
+	if err := s.Store.ClearTelegramID(r.Context(), u.ID); err != nil {
+		s.Log.Warn("привязка Telegram не снята", "user", u.Login, "err", err)
+		return
+	}
+	s.audit(r, "tg_unlink", u.Login, tgText(u), why)
 }
 
 // accountTelegramUnlink отвязывает Telegram от своего аккаунта.
@@ -145,6 +199,130 @@ func (s *Server) setKinds(w http.ResponseWriter, r *http.Request) {
 	s.done(w, r, c, "client_kinds", before, after, "kinds_saved")
 }
 
+// --- страница «Telegram-бот» (администратор) ---
+
+type tgChatRow struct {
+	ID      int64
+	Checked bool
+	Note    string
+}
+
+type tgReqRow struct {
+	ID            int64
+	Name, Created string
+}
+
+type tgBanRow struct {
+	ID      int64
+	Created string
+}
+
+// telegramPage показывает получателей бэкапа, заявки и блокировки.
+func (s *Server) telegramPage(w http.ResponseWriter, r *http.Request) {
+	s.telegramView(w, r, http.StatusOK, "")
+}
+
+func (s *Server) telegramView(w http.ResponseWriter, r *http.Request, status int, errText string) {
+	ctx := r.Context()
+	confirmed := []int64{}
+	if v, found, err := s.Store.Meta(ctx, bot.BackupGroupsKey); err != nil {
+		s.internalError(w, r, "подтверждённые группы не прочитаны", err)
+		return
+	} else if found {
+		confirmed = bot.ParseChatList(v)
+	}
+	admins := map[int64]bool{}
+	if us, err := s.Store.Users(ctx); err == nil {
+		for _, u := range us {
+			if u.Role == store.RoleAdmin && !u.Disabled && u.TelegramID != nil {
+				admins[*u.TelegramID] = true
+			}
+		}
+	}
+	var groups, personal []tgChatRow
+	for _, c := range s.Telegram.BackupChats {
+		if c < 0 {
+			groups = append(groups, tgChatRow{ID: c, Checked: slices.Contains(confirmed, c)})
+			continue
+		}
+		note := "получит бэкап: привязанный администратор"
+		if !admins[c] {
+			note = "не получит: это не привязанный действующий администратор"
+		}
+		personal = append(personal, tgChatRow{ID: c, Note: note})
+	}
+	reqs, err := s.Store.TelegramRequests(ctx)
+	if err != nil {
+		s.internalError(w, r, "заявки не прочитаны", err)
+		return
+	}
+	bans, err := s.Store.TelegramBans(ctx)
+	if err != nil {
+		s.internalError(w, r, "блокировки не прочитаны", err)
+		return
+	}
+	rr := []tgReqRow{}
+	for _, q := range reqs {
+		name := q.Name
+		if q.Username != "" {
+			name += " (@" + q.Username + ")"
+		}
+		rr = append(rr, tgReqRow{ID: q.ID, Name: name, Created: unixText(q.Created)})
+	}
+	bb := []tgBanRow{}
+	for _, x := range bans {
+		bb = append(bb, tgBanRow{x.ID, unixText(x.Created)})
+	}
+	data := map[string]any{"Groups": groups, "Personal": personal, "Requests": rr, "Bans": bb, "BotOn": s.botName() != ""}
+	if errText != "" {
+		data["Error"] = errText
+	}
+	s.render(w, r, status, "telegram", data)
+}
+
+// telegramBackupGroups сохраняет, каким группам из backup_chats разрешено
+// получать бэкап. Бэкап содержит ключи всех клиентов: группа без явного
+// подтверждения его не получает.
+func (s *Server) telegramBackupGroups(w http.ResponseWriter, r *http.Request) {
+	var keep []int64
+	for _, v := range r.PostForm["group"] {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err == nil && n < 0 && slices.Contains(s.Telegram.BackupChats, n) && !slices.Contains(keep, n) {
+			keep = append(keep, n) // только группы, названные в backup_chats
+		}
+	}
+	slices.Sort(keep)
+	before := "—"
+	if v, found, err := s.Store.Meta(r.Context(), bot.BackupGroupsKey); err == nil && found && v != "" {
+		before = v
+	}
+	if err := s.Store.SetMeta(r.Context(), bot.BackupGroupsKey, bot.FormatChatList(keep)); err != nil {
+		s.internalError(w, r, "группы не сохранены", err)
+		return
+	}
+	after := bot.FormatChatList(keep)
+	if after == "" {
+		after = "—"
+	}
+	s.audit(r, "tg_backup_groups", "backup_chats", before, after)
+	s.redirectMsg(w, r, "/users/telegram", "tg_saved")
+}
+
+// telegramUnban снимает блокировку Telegram ID.
+func (s *Server) telegramUnban(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PostForm.Get("id"), 10, 64)
+	if err != nil || id == 0 {
+		s.telegramView(w, r, http.StatusBadRequest, "неверный Telegram ID")
+		return
+	}
+	if err := s.Store.UnbanTelegram(r.Context(), id); err != nil {
+		s.internalError(w, r, "блокировка не снята", err)
+		return
+	}
+	s.audit(r, "tg_unban", strconv.FormatInt(id, 10), "заблокирован", "разблокирован")
+	s.redirectMsg(w, r, "/users/telegram", "tg_saved")
+}
+
 // --- действия для бота ---
 
 // BotBackend — действия панели, которые использует бот.
@@ -209,6 +387,21 @@ func (b botBackend) NewUser(ctx context.Context, login string) (store.User, erro
 
 func (b botBackend) QR(data []byte) ([]byte, bool) { return profileQRPNG(data) }
 
+// Попытки ввода кода в боте — тот же счётчик, что у веба и портала: ключ по
+// пользователю панели, пять неверных за час закрывают ввод на час.
+func (b botBackend) OpenAttempt(ctx context.Context, userID int64) (bot.AttemptTicket, time.Duration, error) {
+	t, retry, err := b.s.openAttempt(ctx, fmt.Sprintf("code:user:%d", userID), b.s.now())
+	return bot.AttemptTicket{Key: t.key, TS: t.ts}, retry, err
+}
+
+func (b botBackend) RefundAttempt(ctx context.Context, t bot.AttemptTicket) {
+	b.s.refundAttempt(ctx, attemptTicket{key: t.Key, ts: t.TS})
+}
+
+func (b botBackend) FailAttempt(ctx context.Context, t bot.AttemptTicket) int {
+	return b.s.failAttempt(ctx, attemptTicket{key: t.Key, ts: t.TS}, b.s.now())
+}
+
 // telegramBaseURL — адрес Bot API; пусто — api.telegram.org. Подменяется в тестах.
 var telegramBaseURL = ""
 
@@ -223,9 +416,13 @@ var (
 // getMe — предупреждение в журнале и повтор позже; панель работает без бота.
 // Токен в журнал не попадает: клиент Bot API вырезает его из всех ошибок.
 func (s *Server) startBot(ctx context.Context, wg *sync.WaitGroup, cfg config.Config, token string, node bot.Node, log *slog.Logger) {
+	s.Telegram = cfg.Telegram
 	b := &bot.Bot{
 		TG: telegram.New(token, telegramBaseURL), Node: node, Store: s.Store, Back: s.BotBackend(),
 		Cfg: cfg.Telegram, NodeID: s.NodeID, Log: log, BackupDir: paths.Backup(),
+	}
+	if s.Collector != nil {
+		b.LastSystem = s.Collector.LastSystem
 	}
 	s.BotName = b.Username
 	wg.Add(1)

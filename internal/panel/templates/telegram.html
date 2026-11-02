@@ -1,0 +1,65 @@
+{{define "content"}}
+<h1>Telegram-бот</h1>
+<p><a href="{{url "/users"}}">К пользователям</a></p>
+{{if .Error}}<p class="bad">{{.Error}}</p>{{end}}
+{{if not .BotOn}}<p class="muted">Бот не запущен.</p>{{end}}
+
+<h2>Получатели бэкапа</h2>
+<p class="muted">Бэкап содержит ключи всех клиентов. Личный чат из backup_chats получает его, только если это привязанный действующий администратор (проверяется при каждой отправке). Группа получает бэкап только после подтверждения здесь.</p>
+{{if .Personal}}
+<ul>
+  {{range .Personal}}<li>Личный чат {{.ID}}: {{.Note}}</li>{{end}}
+</ul>
+{{end}}
+{{if .Groups}}
+<form method="post" action="{{url "/users/telegram/backup-groups"}}" class="card narrow">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  {{range .Groups}}
+  <label><input type="checkbox" name="group" value="{{.ID}}"{{if .Checked}} checked{{end}}> Группа {{.ID}}: разрешить получать бэкап</label>
+  {{end}}
+  <button type="submit">Сохранить</button>
+</form>
+{{else}}
+<p class="muted">Групп в backup_chats нет.</p>
+{{end}}
+
+<h2>Заявки на доступ</h2>
+{{if .Requests}}
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Telegram ID</th><th>Имя</th><th>Подана</th></tr></thead>
+  <tbody>
+  {{range .Requests}}<tr><td>{{.ID}}</td><td>{{.Name}}</td><td>{{.Created}}</td></tr>{{end}}
+  </tbody>
+</table>
+</div>
+<p class="muted">Заявки одобряет или отклоняет администратор в самом боте.</p>
+{{else}}
+<p class="muted">Заявок нет.</p>
+{{end}}
+
+<h2>Заблокированные ID</h2>
+{{if .Bans}}
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Telegram ID</th><th>Заблокирован</th><th></th></tr></thead>
+  <tbody>
+  {{range .Bans}}
+  <tr>
+    <td>{{.ID}}</td><td>{{.Created}}</td>
+    <td>
+      <form method="post" action="{{url "/users/telegram/unban"}}">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+        <input type="hidden" name="id" value="{{.ID}}">
+        <button type="submit">Разблокировать</button>
+      </form>
+    </td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{else}}
+<p class="muted">Заблокированных нет.</p>
+{{end}}
+{{end}}

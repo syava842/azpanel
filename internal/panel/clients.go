@@ -296,6 +296,9 @@ func (s *Server) dropStaleHistory(ctx context.Context, name string) {
 	if err := s.Store.DeleteDownloadLinks(ctx, s.NodeID, name); err != nil {
 		s.Log.Warn("старые одноразовые ссылки не удалены", "client", name, "err", err)
 	}
+	if err := s.Store.DeleteClientKinds(ctx, s.NodeID, name); err != nil {
+		s.Log.Warn("старое ограничение профилей бота не удалено", "client", name, "err", err)
+	}
 }
 
 func (s *Server) user(r *http.Request) string {
@@ -330,6 +333,7 @@ var msgTexts = map[string]string{
 
 	"tg_unlinked": "Telegram отвязан",
 	"kinds_saved": "типы профилей для бота сохранены",
+	"tg_saved":    "настройки Telegram сохранены",
 
 	"access_extended":   "доступ продлён на %d дн.",
 	"user_access_saved": "срок доступа пользователя сохранён",
@@ -617,6 +621,10 @@ func (s *Server) dropDeletedRecords(ctx context.Context, c nodeapi.Client, kind 
 	// одноразовые ссылки ищут профиль по имени: пересозданный клиент отдал бы новые ключи
 	if err := s.Store.DeleteDownloadLinks(ctx, s.NodeID, c.Name); err != nil {
 		s.Log.Warn("одноразовые ссылки клиента не удалены", "client", c.Name, "err", err)
+	}
+	// ограничение типов профилей для бота относится к имени: новый клиент не должен его унаследовать
+	if err := s.Store.DeleteClientKinds(ctx, s.NodeID, c.Name); err != nil {
+		s.Log.Warn("ограничение профилей бота не снято", "client", c.Name, "err", err)
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/syava842/azpanel/internal/config"
 	"github.com/syava842/azpanel/internal/nodeapi"
 	"github.com/syava842/azpanel/internal/store"
 )
@@ -129,6 +130,9 @@ type Server struct {
 	// RestartNode просит агента узла перезапуститься (POST /v1/system/restart);
 	// nil — не умеем, оператор перезапускает вручную.
 	RestartNode func(ctx context.Context) error
+	// Telegram — настройки бота (backup_chats для страницы «Telegram-бот»);
+	// заполняется при запуске бота.
+	Telegram config.Telegram
 	// BotName — имя бота для ссылки привязки Telegram; nil или пустая
 	// строка — бот не запущен, привязка в панели скрыта.
 	BotName func() string
@@ -204,6 +208,9 @@ func (s *Server) Handler() http.Handler {
 
 	s.route(mux, "GET /users", s.usersPage)
 	s.route(mux, "POST /users/{id}/telegram/unlink", s.userTelegramUnlink)
+	s.route(mux, "GET /users/telegram", s.telegramPage)
+	s.route(mux, "POST /users/telegram/backup-groups", s.telegramBackupGroups)
+	s.route(mux, "POST /users/telegram/unban", s.telegramUnban)
 	s.route(mux, "POST /users", s.userCreate)
 	s.route(mux, "GET /users/{id}", s.userPage)
 	s.route(mux, "POST /users/{id}/role", s.userRole)

@@ -281,6 +281,7 @@ func (s *Server) userResetPassword(w http.ResponseWriter, r *http.Request) {
 		if err := s.Store.SetPassword(r.Context(), u.ID, hash, true); err != nil {
 			return u, err
 		}
+		s.dropTelegram(r, u, "отвязан при сбросе пароля администратором")
 		return u, s.Store.DeleteUserSessions(r.Context(), u.ID, "")
 	})
 	if !ok {
