@@ -71,6 +71,10 @@ type Wizard struct {
 	TLS        *TLS
 	// Установка с --yes: подтверждение не спрашивается.
 	AssumeYes bool
+	// Experimental — спрашивать про отложенные возможности (Telegram-бота,
+	// п. 9); пока выключено, вопрос не задаётся, а ответы о Telegram
+	// игнорируются.
+	Experimental bool
 
 	AntiZapretDir string
 	ScriptsDir    string
@@ -116,6 +120,9 @@ func (w *Wizard) Run() error {
 		if err := w.askMode(&a); err != nil {
 			return err
 		}
+	}
+	if !w.Experimental {
+		a.Telegram, a.TelegramToken, a.TelegramChat = false, "", 0 // бот отложен: ответы о нём не берутся
 	}
 	if a.Mode != ModePanelNode {
 		return fmt.Errorf("%w: «%s». Ничего не изменено", ErrNotYet, modeTitle(a.Mode))
@@ -609,21 +616,23 @@ func (w *Wizard) askAdmin(a *Answers, p *plan) error {
 }
 
 func (w *Wizard) askExtras(a *Answers) error {
-	w.printf("9. Telegram (необязательно; потом меняется в «Настройках»)\n")
 	var err error
-	if a.Telegram, err = w.yesno("Включить бота", a.Telegram); err != nil {
-		return err
-	}
-	if a.Telegram {
-		for a.TelegramToken == "" {
-			t, err := w.secret("Токен бота")
-			if err != nil {
+	if w.Experimental {
+		w.printf("9. Telegram (необязательно; потом меняется в «Настройках»)\n")
+		if a.Telegram, err = w.yesno("Включить бота", a.Telegram); err != nil {
+			return err
+		}
+		if a.Telegram {
+			for a.TelegramToken == "" {
+				t, err := w.secret("Токен бота")
+				if err != nil {
+					return err
+				}
+				a.TelegramToken = t
+			}
+			if err := w.askKey(a, KeyTgChat, "ID чата для уведомлений", chatDef(a.TelegramChat)); err != nil {
 				return err
 			}
-			a.TelegramToken = t
-		}
-		if err := w.askKey(a, KeyTgChat, "ID чата для уведомлений", chatDef(a.TelegramChat)); err != nil {
-			return err
 		}
 	}
 	w.printf("10. Бэкапы\n")

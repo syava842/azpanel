@@ -18,7 +18,7 @@
 </table>
 </div>
 
-<p><a href="{{url "/users/telegram"}}">Telegram-бот: получатели бэкапа, заявки, блокировки</a></p>
+{{if .Experimental}}<p><a href="{{url "/users/telegram"}}">Telegram-бот: получатели бэкапа, заявки, блокировки</a></p>{{end}}
 
 <h2>Новый пользователь</h2>
 <form method="post" action="{{url "/users"}}" class="card narrow">

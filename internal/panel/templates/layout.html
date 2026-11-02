@@ -10,21 +10,21 @@
 <body>
 <header class="top">
   <span class="brand">azpanel <small>{{.Version}}</small></span>
-  {{if .UpdateAvail}}<a href="{{url "/update"}}" class="update-badge">есть обновление {{.UpdateAvail}}</a>{{end}}
+  {{if and .Experimental .UpdateAvail}}<a href="{{url "/update"}}" class="update-badge">есть обновление {{.UpdateAvail}}</a>{{end}}
   {{if .User}}
   <nav>
     <a href="{{url "/"}}">Клиенты</a>
     {{if .IsAdmin}}
     <a href="{{url "/monitor"}}">Сейчас</a>
-    <a href="{{url "/nodes"}}">Узлы</a>
-    <a href="{{url "/groups"}}">Группы</a>
+    {{if .Experimental}}<a href="{{url "/nodes"}}">Узлы</a>
+    <a href="{{url "/groups"}}">Группы</a>{{end}}
     <a href="{{url "/proxy"}}">Прокси</a>
     <a href="{{url "/routing"}}">Маршрутизация</a>
     <a href="{{url "/settings/antizapret"}}">AntiZapret</a>
     <a href="{{url "/antizapret/update"}}">Обновление AZ</a>
     <a href="{{url "/telemt"}}">telemt</a>
     <a href="{{url "/warp"}}">WARP</a>
-    <a href="{{url "/update"}}">Обновление</a>
+    {{if .Experimental}}<a href="{{url "/update"}}">Обновление</a>{{end}}
     <a href="{{url "/tasks"}}">Задачи</a>
     <a href="{{url "/audit"}}">Журнал</a>
     <a href="{{url "/users"}}">Пользователи</a>

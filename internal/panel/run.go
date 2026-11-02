@@ -75,10 +75,13 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		Log:         log,
 	}
 	tgToken := sec[secrets.TelegramBotToken]
-	botOn := cfg.Telegram.Enabled && tgToken != ""
+	// Отложенное (бот, уведомления, проверка обновлений azpanel, сверка групп)
+	// работает только при panel.experimental.
+	exp := cfg.Panel.Experimental
+	botOn := exp && cfg.Telegram.Enabled && tgToken != ""
 	if botOn {
 		col.Alerts = &cfg.Telegram
-	} else if cfg.Telegram.Enabled {
+	} else if exp && cfg.Telegram.Enabled {
 		log.Warn("telegram.enabled включён, но в secrets.env нет TELEGRAM_BOT_TOKEN — бот не запущен")
 	}
 	// Проверка обновлений azpanel раз в 6 часов. Токен GitHub читается из
@@ -100,7 +103,6 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		}
 	}
 	s = &Server{
-		Updates:   checker,
 		Node:      node,
 		Svc:       node,
 		Store:     st,
@@ -119,6 +121,7 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		BasePath:        cfg.Panel.BasePath,
 		SecretsFile:     paths.SecretsFile(),
 		Exit:            stop,
+		Experimental:    exp,
 		RestartNode: func(ctx context.Context) error {
 			return restartNodeHTTP(ctx, cfg.Panel.NodeURL, token, sec[NodeFingerprintKey])
 		},
@@ -131,6 +134,9 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		return fmt.Errorf("panel.trusted_proxies: %w", err)
 	}
 	s.TrustedProxies = proxies
+	if exp {
+		s.Updates = checker
+	}
 	if err := s.SeedAllow(cfg.Panel.AllowIPs); err != nil {
 		return fmt.Errorf("panel.allow_ips: %w", err)
 	}
@@ -160,16 +166,18 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		colDone.Add(1)
 		go func() { defer colDone.Done(); wt.Run(cctx) }()
 	}
-	// Сверка групп синхронизации (после запуска бота: уведомления берут его настройки).
-	colDone.Add(1)
-	go func() { defer colDone.Done(); s.RunGroupWatch(cctx) }()
-	if update.IsDev(version) {
-		log.Info("проверка обновлений выключена: сборка без версии (dev)")
-	} else if s.UpdateToken() == "" {
-		log.Info("проверка обновлений выключена: нет " + update.TokenKey + " в secrets.env")
+	if exp {
+		// Сверка групп синхронизации (после запуска бота: уведомления берут его настройки).
+		colDone.Add(1)
+		go func() { defer colDone.Done(); s.RunGroupWatch(cctx) }()
+		if update.IsDev(version) {
+			log.Info("проверка обновлений выключена: сборка без версии (dev)")
+		} else if s.UpdateToken() == "" {
+			log.Info("проверка обновлений выключена: нет " + update.TokenKey + " в secrets.env")
+		}
+		colDone.Add(1)
+		go func() { defer colDone.Done(); checker.Run(cctx) }()
 	}
-	colDone.Add(1)
-	go func() { defer colDone.Done(); checker.Run(cctx) }()
 	defer func() { stopCollector(); colDone.Wait() }()
 	srv := &http.Server{
 		Handler:           s.Handler(),

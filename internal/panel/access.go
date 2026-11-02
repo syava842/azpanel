@@ -3,6 +3,7 @@ package panel
 import (
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 // access — кому открыт маршрут.
@@ -166,12 +167,37 @@ var routes = map[string]access{
 	"/dl/":                                                  accPortal,
 }
 
+// experimentalRoutes — маршруты отложенных возможностей (узлы, группы
+// синхронизации, Telegram-бот, самообновление azpanel): регистрируются, только
+// когда включён panel.experimental. Они остаются и в таблице прав.
+var experimentalRoutes = func() map[string]bool {
+	m := map[string]bool{}
+	for p := range routes {
+		_, path, ok := strings.Cut(p, " ")
+		if !ok {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(path, "/nodes"), strings.HasPrefix(path, "/groups"),
+			strings.HasPrefix(path, "/users/telegram"), strings.HasPrefix(path, "/account/telegram"),
+			path == "/users/{id}/telegram/unlink", path == "/clients/{name}/kinds",
+			path == "/update", strings.HasPrefix(path, "/update/"):
+			m[p] = true
+		}
+	}
+	return m
+}()
+
 // route регистрирует маршрут по таблице прав; маршрута нет в таблице — паника
-// при сборке, а не открытая дверь.
+// при сборке, а не открытая дверь. Отложенный маршрут при выключенном
+// panel.experimental не регистрируется вовсе.
 func (s *Server) route(mux *http.ServeMux, pattern string, h http.HandlerFunc) {
 	a, ok := routes[pattern]
 	if !ok {
 		panic(fmt.Sprintf("panel: маршрут %q не внесён в таблицу прав", pattern))
+	}
+	if experimentalRoutes[pattern] && !s.Experimental {
+		return
 	}
 	s.registered = append(s.registered, pattern)
 	mux.Handle(pattern, s.require(a, s.scoped(pattern, s.propagating(pattern, h))))

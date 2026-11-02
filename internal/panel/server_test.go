@@ -263,9 +263,12 @@ func newEnv(t *testing.T, hash string) *testEnv {
 		NodeID:     store.LocalNode,
 		Version:    "test",
 		SessionTTL: time.Hour,
-		Limiter:    NewLimiter(),
-		Log:        slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Sleep:      func(d time.Duration) { e.sleeps = append(e.sleeps, d) },
+		// Отложенное включено, чтобы прежние тесты узлов, групп и бота
+		// продолжали работать; выключенный режим проверяется отдельно.
+		Experimental: true,
+		Limiter:      NewLimiter(),
+		Log:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Sleep:        func(d time.Duration) { e.sleeps = append(e.sleeps, d) },
 	}
 	e.h = e.srv.Handler()
 	return e

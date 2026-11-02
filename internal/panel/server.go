@@ -150,6 +150,10 @@ type Server struct {
 	// строка — бот не запущен, привязка в панели скрыта.
 	BotName func() string
 
+	// Experimental — panel.experimental: отложенные возможности (узлы, группы,
+	// Telegram-бот, самообновление azpanel) показаны и работают.
+	Experimental bool
+
 	pages      map[string]*template.Template
 	registered []string   // шаблоны маршрутов Handler(): сверяются с таблицей прав
 	usersMu    sync.Mutex // действия над пользователями — по одному (защита последнего администратора)
@@ -412,7 +416,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, page
 	}
 	if sess, ok := session(r); ok {
 		d["CSRF"], d["Role"], d["IsAdmin"] = sess.CSRF, sess.Role, sess.IsAdmin()
-		if sess.IsAdmin() {
+		if sess.IsAdmin() && s.Experimental {
 			d["UpdateAvail"] = s.updateAvailable()
 		}
 		if !sess.MFAPending { // до ввода кода меню и «Выйти» не показываются
@@ -420,6 +424,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, page
 		}
 	}
 	d["Version"] = s.Version
+	d["Experimental"] = s.Experimental
 	s.switchData(r, d)
 	d["Msg"] = flashText(r)
 	var buf bytes.Buffer

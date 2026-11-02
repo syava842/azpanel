@@ -58,18 +58,27 @@ func send(e *testEnv, c *http.Cookie, csrf, method, path string) int {
 	return post(e, c, path, url.Values{"csrf": {csrf}}).Code
 }
 
-// Сторож: каждый маршрут Handler() есть в таблице прав, и наоборот.
+// Сторож: каждый маршрут Handler() есть в таблице прав, и наоборот. Проверяется
+// то, что фактически зарегистрировано, и при включённом panel.experimental, и
+// при выключенном (тогда из таблицы выпадают отложенные маршруты).
 func TestRoutesTableMatchesHandler(t *testing.T) {
-	e, _, _, _, _ := userEnv(t)
-	got := append([]string(nil), e.srv.registered...)
-	var want []string
-	for p := range routes {
-		want = append(want, p)
-	}
-	sort.Strings(got)
-	sort.Strings(want)
-	if strings.Join(got, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("маршруты Handler() и таблица прав расходятся:\nHandler: %q\nтаблица: %q", got, want)
+	for _, exp := range []bool{true, false} {
+		e, _, _, _, _ := userEnv(t)
+		e.srv.Experimental = exp
+		e.srv.Handler()
+		got := append([]string(nil), e.srv.registered...)
+		var want []string
+		for p := range routes {
+			if experimentalRoutes[p] && !exp {
+				continue
+			}
+			want = append(want, p)
+		}
+		sort.Strings(got)
+		sort.Strings(want)
+		if strings.Join(got, "\n") != strings.Join(want, "\n") {
+			t.Fatalf("experimental=%v: маршруты Handler() и таблица прав расходятся:\nHandler: %q\nтаблица: %q", exp, got, want)
+		}
 	}
 }
 

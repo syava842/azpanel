@@ -163,9 +163,12 @@ var settingsApplyTexts = map[config.Apply]string{
 
 // buildSections строит поля формы по описаниям. raw — введённый текст (при
 // ошибке показывается он, а не сохранённое значение), errs — ошибки по путям.
-func buildSections(cfg config.Config, raw, errs map[string]string) []sectionView {
+func buildSections(cfg config.Config, raw, errs map[string]string, experimental bool) []sectionView {
 	var out []sectionView
 	for _, sec := range config.Sections {
+		if !experimental && sec.Key == "telegram" {
+			continue // бот отложен: настроек в форме нет
+		}
 		sv := sectionView{Title: sec.Title}
 		for _, f := range config.Fields() {
 			if f.Section != sec.Key || f.Kind == config.KindReadonly {
@@ -239,13 +242,16 @@ func (s *Server) secretViews() ([]secretView, error) {
 	var out []secretView
 	seen := map[string]bool{}
 	for _, k := range knownSecrets {
+		if s.secretHidden(k.Key) {
+			continue
+		}
 		k.Mask, k.Set = maskSecret(cur[k.Key]), cur[k.Key] != ""
 		out = append(out, k)
 		seen[k.Key] = true
 	}
 	var extra []string
 	for k := range cur {
-		if !seen[k] {
+		if !seen[k] && !s.secretHidden(k) {
 			extra = append(extra, k)
 		}
 	}
@@ -265,7 +271,7 @@ type settingsPending struct {
 func (s *Server) renderSettings(w http.ResponseWriter, r *http.Request, status int, cfg config.Config, data map[string]any) {
 	raw, _ := data["Raw"].(map[string]string)
 	errs, _ := data["Errs"].(map[string]string)
-	d := map[string]any{"Sections": buildSections(cfg, raw, errs)}
+	d := map[string]any{"Sections": buildSections(cfg, raw, errs, s.Experimental)}
 	if sv, err := s.secretViews(); err != nil {
 		d["Error"] = "secrets.env не прочитан: " + err.Error()
 	} else {
@@ -321,6 +327,9 @@ func (s *Server) settingsSave(w http.ResponseWriter, r *http.Request) {
 	for _, f := range config.Fields() {
 		if f.Kind == config.KindReadonly || f.Page != "" {
 			continue
+		}
+		if !s.Experimental && f.Section == "telegram" {
+			continue // полей в форме нет: «снятый» флажок не должен выключить бота
 		}
 		name := "f:" + f.Path
 		var text string
@@ -668,4 +677,10 @@ func (s *Server) auditSecrets(r *http.Request, action string, kv map[string]stri
 	for _, k := range keys {
 		s.audit(r, action, k, "", "значение скрыто")
 	}
+}
+
+// secretHidden: секреты отложенных возможностей не показываются и не
+// меняются, пока panel.experimental выключен.
+func (s *Server) secretHidden(key string) bool {
+	return !s.Experimental && (key == update.TokenKey || key == secrets.TelegramBotToken)
 }

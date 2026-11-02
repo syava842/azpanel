@@ -120,7 +120,7 @@ func (s *Server) settingsSecrets(w http.ResponseWriter, r *http.Request) {
 	key, action := r.PostForm.Get("key"), r.PostForm.Get("action")
 	var sv *secretView
 	for i := range knownSecrets {
-		if knownSecrets[i].Key == key {
+		if knownSecrets[i].Key == key && !s.secretHidden(key) {
 			sv = &knownSecrets[i]
 		}
 	}

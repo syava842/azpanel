@@ -139,6 +139,7 @@ func TestRunStartsBotWithGetMe(t *testing.T) {
 	botSecrets(t, true)
 	api := startFakeBotAPI(t, `{"ok":true,"result":{"id":1,"is_bot":true,"username":"runbot"}}`)
 	cfg := config.Default()
+	cfg.Panel.Experimental = true
 	cfg.Telegram.Enabled = true
 	_, stop := runPanel(t, cfg)
 	waitFor(t, "getMe и getUpdates", func() bool { return api.count("getMe") >= 1 && api.count("getUpdates") >= 1 })
@@ -163,6 +164,7 @@ func TestRunBotGetMeFailureLeavesPanelRunning(t *testing.T) {
 	botRetryBase = 20 * time.Millisecond
 	t.Cleanup(func() { botRetryBase = oldBase })
 	cfg := config.Default()
+	cfg.Panel.Experimental = true
 	cfg.Telegram.Enabled = true
 	addr, stop := runPanel(t, cfg)
 	waitFor(t, "повтор getMe", func() bool { return api.count("getMe") >= 2 })
@@ -191,6 +193,7 @@ func TestRunBotOffWithoutTokenOrFlag(t *testing.T) {
 	botSecrets(t, false)
 	api := startFakeBotAPI(t, `{"ok":true,"result":{"id":1,"username":"runbot"}}`)
 	cfg := config.Default()
+	cfg.Panel.Experimental = true
 	cfg.Telegram.Enabled = true // флаг есть, токена нет
 	_, stop := runPanel(t, cfg)
 	if err := stop(); err != nil {
@@ -212,5 +215,23 @@ func TestRunBotOffWithoutTokenOrFlag(t *testing.T) {
 	}
 	if api.count("getMe") != 0 {
 		t.Fatal("бот запущен при telegram.enabled = false")
+	}
+}
+
+// panel.experimental выключен: бот не запускается, хотя токен и флаг есть.
+func TestRunBotNotStartedWhileExperimentalOff(t *testing.T) {
+	runEnv(t)
+	botSecrets(t, true)
+	api := startFakeBotAPI(t, `{"ok":true,"result":{"id":1,"username":"runbot"}}`)
+	cfg := config.Default()
+	cfg.Telegram.Enabled = true
+	addr, stop := runPanel(t, cfg)
+	_ = addr
+	time.Sleep(300 * time.Millisecond)
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	if api.count("getMe") != 0 || api.count("getUpdates") != 0 {
+		t.Fatal("бот запущен при panel.experimental = false")
 	}
 }

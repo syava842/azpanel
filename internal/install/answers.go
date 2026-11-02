@@ -264,12 +264,15 @@ func (a Answers) Values(withSecrets bool) map[string]string {
 	m := map[string]string{
 		KeyMode: a.Mode, KeyAddress: a.Address, KeyDomain: a.Domain, KeyAccess: a.Access,
 		KeyNginxFile: a.NginxFile, KeyTLS: a.TLS, KeyCert: a.CertPath, KeyKey: a.KeyPath, KeyEmail: a.Email,
-		KeyAdmin: a.Admin, KeyMustChg: yn(a.MustChange), KeyTelegram: yn(a.Telegram),
+		KeyAdmin: a.Admin, KeyMustChg: yn(a.MustChange),
 		KeyBackupDir: a.BackupDir, KeyBackupDay: strconv.Itoa(a.BackupEveryDays),
 		KeyBackupKp: strconv.Itoa(a.BackupKeep), KeyFirewall: yn(a.Firewall),
 	}
 	if a.Port != 0 {
 		m[KeyPort] = strconv.Itoa(a.Port)
+	}
+	if a.Telegram {
+		m[KeyTelegram] = "y"
 	}
 	if a.TelegramChat != 0 {
 		m[KeyTgChat] = strconv.FormatInt(a.TelegramChat, 10)

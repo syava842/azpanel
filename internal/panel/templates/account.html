@@ -48,6 +48,7 @@
   {{end}}
 </div>
 
+{{if .Experimental}}
 <h2>Telegram</h2>
 <div class="card">
   {{if .TGLinked}}
@@ -72,6 +73,7 @@
   <p class="muted">Бот не запущен: привязать Telegram нельзя.</p>
   {{end}}
 </div>
+{{end}}
 
 <h2>Сессии</h2>
 <div class="table-wrap">

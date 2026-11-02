@@ -107,8 +107,8 @@ func newWizEnv(t *testing.T, input string, interactive bool, env map[string]stri
 	return e
 }
 
-// Ответы по умолчанию: 12 Enter и подтверждение.
-const defaultScript = "\n\n\n\n\n\n\n\n\n\n\n"
+// Ответы по умолчанию: 11 Enter (вопрос про Telegram не задаётся) и подтверждение.
+const defaultScript = "\n\n\n\n\n\n\n\n\n\n"
 
 func TestWizardDefaultsNothingBeforeConfirm(t *testing.T) {
 	e := newWizEnv(t, defaultScript+"n\n", true, nil)
@@ -162,7 +162,7 @@ func TestWizardDefaultsApplyOrder(t *testing.T) {
 func TestWizardOwnPasswordRules(t *testing.T) {
 	// Слабый пароль, затем несовпадающее повторение, затем верный.
 	in := "\n\n\n\n" + "admin\n" + "short1\n" + "GoodPass12345\nOther12345\n" + "GoodPass12345\nGoodPass12345\n" +
-		"\n" + "\n\n\n\n" + "y\n"
+		"\n" + "\n\n\n" + "y\n"
 	e := newWizEnv(t, in, true, nil)
 	if err := e.w.Run(); err != nil {
 		t.Fatalf("%v\n%s", err, e.out)
@@ -374,6 +374,7 @@ func TestWizardTelegram(t *testing.T) {
 		"AZPANEL_MODE": "panel+node", "AZPANEL_ACCESS": "local", "AZPANEL_TELEGRAM": "y",
 		"AZPANEL_TELEGRAM_TOKEN": "123:abc", "AZPANEL_TELEGRAM_CHAT": "555",
 	})
+	e.w.Experimental = true
 	if err := e.w.Run(); err != nil {
 		t.Fatalf("%v\n%s", err, e.out)
 	}
@@ -386,6 +387,7 @@ func TestWizardTelegram(t *testing.T) {
 	e = newWizEnv(t, "", false, map[string]string{
 		"AZPANEL_MODE": "panel+node", "AZPANEL_ACCESS": "local", "AZPANEL_TELEGRAM": "y",
 	})
+	e.w.Experimental = true
 	if err := e.w.Run(); err == nil || len(e.mut) != 0 {
 		t.Fatalf("Telegram без токена: %v %v", err, e.mut)
 	}
@@ -492,7 +494,7 @@ func TestGeneratePassword(t *testing.T) {
 func TestWizardInteractiveDefaultsToFoundNginx(t *testing.T) {
 	// mode, адрес, домен, доступ (Enter = путь), server-блок 1, логин, пароль,
 	// смена, telegram, три вопроса бэкапов, подтверждение.
-	in := "\n\nvpn.test\n\n1\n\n\n\n\n\n\n\ny\n"
+	in := "\n\nvpn.test\n\n1\n\n\n\n\n\n\ny\n"
 	e := newWizEnv(t, in, true, nil)
 	e.useRealNginx()
 	if err := e.w.Run(); err != nil {
@@ -627,7 +629,7 @@ func TestWizardBakFilesWarnedNotMovedNonInteractive(t *testing.T) {
 
 func TestWizardBakFilesMovedOnAnswerYes(t *testing.T) {
 	// Ответы: 1 тип, адрес, домен, доступ, затем вопрос о копиях (Enter = да).
-	e, bak := bakEnv(t, "1\n\n\n\n\n\n\n\n\n\n\n\ny\n", true)
+	e, bak := bakEnv(t, "1\n\n\n\n\n\n\n\n\n\n\ny\n", true)
 	// Кандидат один и сертификат существующий: диалог проходит на умолчаниях.
 	err := e.w.Run()
 	if err != nil {
@@ -652,5 +654,23 @@ func TestWizardBakFilesKeptOnAnswerNo(t *testing.T) {
 	}
 	if _, ok := e.fs.files[bak]; !ok {
 		t.Fatal("копия перенесена вопреки ответу")
+	}
+}
+
+// Пока отложенное выключено, вопрос про Telegram не задаётся, а ответы о нём
+// (даже из окружения) игнорируются и в install.env не пишутся.
+func TestWizardNoTelegramWhileExperimentalOff(t *testing.T) {
+	e := newWizEnv(t, "", false, map[string]string{
+		"AZPANEL_MODE": "panel+node", "AZPANEL_ACCESS": "local", "AZPANEL_TELEGRAM": "y",
+		"AZPANEL_TELEGRAM_TOKEN": "123:abc", "AZPANEL_TELEGRAM_CHAT": "555",
+	})
+	if err := e.w.Run(); err != nil {
+		t.Fatalf("%v\n%s", err, e.out)
+	}
+	if e.written.Telegram.Enabled || e.secrets["TELEGRAM_BOT_TOKEN"] != "" {
+		t.Fatalf("telegram записан: %+v %v", e.written.Telegram, e.secrets)
+	}
+	if strings.Contains(string(e.envFile), "TELEGRAM") || strings.Contains(e.out.String(), "9. Telegram") {
+		t.Fatalf("Telegram виден: %s\n%s", e.envFile, e.out)
 	}
 }

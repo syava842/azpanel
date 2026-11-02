@@ -73,6 +73,10 @@ type Panel struct {
 	// TrustedProxies — адреса прокси (IP или CIDR), чьим X-Forwarded-For и
 	// X-Forwarded-Proto панель верит.
 	TrustedProxies []string `toml:"trusted_proxies"`
+	// Experimental — показывать отложенное: узлы, группы синхронизации,
+	// Telegram-бота, самообновление azpanel. Выключено: код остаётся, но
+	// маршруты не регистрируются, а фоновые задачи не запускаются.
+	Experimental bool `toml:"experimental"`
 }
 
 type Log struct {

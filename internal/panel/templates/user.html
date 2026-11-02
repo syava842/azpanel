@@ -54,6 +54,7 @@
   <button type="submit">{{if .PortalCreated}}Перевыпустить{{else}}Создать{{end}}</button>
 </form>
 
+{{if .Experimental}}
 <h2>Telegram</h2>
 <div class="card">
   {{if .TGLinked}}
@@ -64,6 +65,7 @@
   </form>
   {{else}}<p class="muted">Не привязан. Пользователь привязывает его сам на странице «Аккаунт».</p>{{end}}
 </div>
+{{end}}
 
 <h2>Клиенты</h2>
 <ul>

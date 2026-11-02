@@ -109,7 +109,7 @@
 </div>
 {{end}}
 
-{{if and .CanManage .KindOptions}}
+{{if and .Experimental .CanManage .KindOptions}}
 <h2>Профили в Telegram</h2>
 <div class="card">
   <form method="post" action="{{url .Href "/kinds"}}">
