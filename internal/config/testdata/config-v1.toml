@@ -1,0 +1,12 @@
+# Конфиг версии 1: до API агента, путей AntiZapret и раздела [panel].
+config_version = 1
+
+[node]
+openvpn_socket_dir = "/run/openvpn-server"
+openvpn_scripts_dir = "/etc/openvpn/server/scripts"
+poll_seconds = 7
+query_timeout_ms = 1500
+
+[log]
+max_size_mb = 20
+keep = 3

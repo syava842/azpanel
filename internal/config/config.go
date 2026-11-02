@@ -132,17 +132,20 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Default(), err
 	}
-	if _, err := toml.Decode(string(data), &c); err != nil {
+	return loadMigrated(data, path)
+}
+
+// loadMigrated поднимает файл до текущей версии (в памяти, файл не
+// переписывается) и читает его поверх умолчаний. Вопросы миграции без
+// ответов возвращаются как *QuestionsError.
+func loadMigrated(data []byte, path string) (Config, error) {
+	c := Default()
+	data, _, err := Migrate(data, nil)
+	if err != nil {
 		return Default(), fmt.Errorf("%s: %w", path, err)
 	}
-	if c.ConfigVersion > CurrentVersion {
-		return Default(), fmt.Errorf("%s: config_version %d новее, чем знает эта версия azpanel (%d)", path, c.ConfigVersion, CurrentVersion)
-	}
-	// Версия 2 только добавила ключи, умолчания для них уже подставлены
-	// разбором поверх Default. Миграции с переименованием ключей появятся
-	// вместе с самообновлением (план 2в).
-	if c.ConfigVersion < CurrentVersion {
-		c.ConfigVersion = CurrentVersion
+	if _, err := toml.Decode(string(data), &c); err != nil {
+		return Default(), fmt.Errorf("%s: %w", path, err)
 	}
 	if err := c.Validate(); err != nil {
 		return Default(), fmt.Errorf("%s: %w", path, err)
