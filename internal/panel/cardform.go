@@ -162,7 +162,7 @@ func (s *Server) saveCard(w http.ResponseWriter, r *http.Request) {
 	if before != "" || after != "" {
 		s.audit(r, "card", c.Name, before, after)
 	}
-	redirectMsg(w, r, clientHref(c.Name), "card_saved")
+	s.redirectMsg(w, r, clientHref(c.Name), "card_saved")
 }
 
 // forgetAutoBlock: ручная разблокировка клиента, которого заблокировала

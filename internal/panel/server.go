@@ -8,8 +8,8 @@ import (
 	"html/template"
 	"io/fs"
 	"log/slog"
-	"net"
 	"net/http"
+	"net/netip"
 	"path"
 	"strings"
 	"sync"
@@ -111,6 +111,12 @@ type Server struct {
 	// PublicURL — внешний адрес панели (panel.public_url) для ссылок портала
 	// и одноразовых ссылок; пусто — ссылки относительные.
 	PublicURL string
+	// BasePath — префикс пути (panel.base_path): пусто или «/x/». Панель
+	// снимает его с запроса сама; запрос без префикса — 404.
+	BasePath string
+	// TrustedProxies — прокси, чьим X-Forwarded-For и X-Forwarded-Proto
+	// верим (panel.trusted_proxies); пусто — не верим никому.
+	TrustedProxies []netip.Prefix
 	// BotName — имя бота для ссылки привязки Telegram; nil или пустая
 	// строка — бот не запущен, привязка в панели скрыта.
 	BotName func() string
@@ -148,7 +154,7 @@ func (s *Server) Handler() http.Handler {
 	}
 	s.loginSem = make(chan struct{}, maxParallelBcrypt)
 	s.blockedLogged = map[string]time.Time{}
-	s.pages = parsePages()
+	s.pages = s.parsePages()
 	s.initAccess()
 
 	mux := http.NewServeMux()
@@ -256,11 +262,11 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "/", func(w http.ResponseWriter, r *http.Request) {
 		s.errorPage(w, r, http.StatusNotFound, "страница не найдена")
 	})
-	return s.headers(s.allowGate(mux))
+	return s.stripBase(s.headers(s.allowGate(mux)))
 }
 
 // parsePages: каждая страница — свой набор layout.html + страница.
-func parsePages() map[string]*template.Template {
+func (s *Server) parsePages() map[string]*template.Template {
 	entries, err := fs.ReadDir(templatesFS, "templates")
 	if err != nil {
 		panic(err)
@@ -271,7 +277,7 @@ func parsePages() map[string]*template.Template {
 		if name == "layout.html" {
 			continue
 		}
-		t := template.Must(template.ParseFS(templatesFS, "templates/layout.html", path.Join("templates", name)))
+		t := template.Must(template.New(name).Funcs(template.FuncMap{"url": s.url}).ParseFS(templatesFS, "templates/layout.html", path.Join("templates", name)))
 		pages[strings.TrimSuffix(name, ".html")] = t
 	}
 	return pages
@@ -294,18 +300,6 @@ func (s *Server) headers(next http.Handler) http.Handler {
 		h.Set("Cache-Control", "no-store")
 		next.ServeHTTP(w, r)
 	})
-}
-
-func isHTTPS(r *http.Request) bool {
-	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
-}
-
-func remoteHost(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }
 
 // render показывает страницу; в data добавляются CSRF, User, Version, Msg.

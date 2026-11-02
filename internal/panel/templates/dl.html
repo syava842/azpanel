@@ -1,6 +1,6 @@
 {{define "content"}}
 <h1>Скачать файл подключения</h1>
-<form method="post" action="{{.Action}}" class="card narrow">
+<form method="post" action="{{url .Action}}" class="card narrow">
   <p>Файл: {{.File}}</p>
   <p>Ссылка действует до {{.Expires}} и только для одного скачивания.</p>
   {{if .HasPIN}}

@@ -13,7 +13,7 @@
 {{end}}
 {{if .HasStore}}
 <h2>Трафик</h2>
-<p class="ranges">{{range .Ranges}}{{if .Current}}<b>{{.Name}}</b>{{else}}<a href="{{.Href}}">{{.Name}}</a>{{end}} {{end}}</p>
+<p class="ranges">{{range .Ranges}}{{if .Current}}<b>{{.Name}}</b>{{else}}<a href="{{url .Href}}">{{.Name}}</a>{{end}} {{end}}</p>
 {{if .HistoryErr}}<div class="error">{{.HistoryErr}}</div>{{else}}
 <div class="card">
   {{.TrafficChart}}
@@ -29,7 +29,7 @@
 </div>
 {{else}}
 <div class="card">
-  <form method="post" action="{{.Href}}/card">
+  <form method="post" action="{{url .Href "/card"}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <label>Заметка (до 500 символов)
       <input type="text" name="note" maxlength="500" value="{{.CardForm.Note}}">
@@ -55,7 +55,7 @@
 {{if .HasStore}}
 <h2>Продлить кодом</h2>
 <div class="card">
-  <form method="post" action="{{.Href}}/redeem">
+  <form method="post" action="{{url .Href "/redeem"}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <label>Код продления
       <input type="text" name="code" autocomplete="off" placeholder="XXXX-XXXX-XXXX-XXXX" required>
@@ -69,7 +69,7 @@
 <div class="card">
   <p>{{if .PortalCreated}}Создана {{.PortalCreated}}. Адрес показывается один раз при выпуске; «Перевыпустить» выпускает новую ссылку, прежняя перестаёт работать.{{else}}Ссылка ещё не создана.{{end}}</p>
   {{if not .PublicURLSet}}<p class="muted">Адрес панели не задан: укажите panel.public_url в настройках (config.toml), иначе ссылка будет относительной.</p>{{end}}
-  <form method="post" action="{{.Href}}/portal">
+  <form method="post" action="{{url .Href "/portal"}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <button type="submit">{{if .PortalCreated}}Перевыпустить{{else}}Создать{{end}}</button>
   </form>
@@ -77,7 +77,7 @@
 <h2>Одноразовая ссылка на профиль</h2>
 <div class="card">
   {{if .Profiles}}
-  <form method="post" action="{{.Href}}/dl">
+  <form method="post" action="{{url .Href "/dl"}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <label>Профиль
       <select name="profile">
@@ -96,7 +96,7 @@
 {{if and .CanManage .Owners}}
 <h2>Владелец</h2>
 <div class="card">
-  <form method="post" action="{{.Href}}/owner">
+  <form method="post" action="{{url .Href "/owner"}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <label>Владелец клиента (видит его карточку, профили и трафик)
       <select name="owner">
@@ -112,7 +112,7 @@
 {{if and .CanManage .KindOptions}}
 <h2>Профили в Telegram</h2>
 <div class="card">
-  <form method="post" action="{{.Href}}/kinds">
+  <form method="post" action="{{url .Href "/kinds"}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <p>Какие профили бот выдаёт владельцу. Администратору бот выдаёт все. Ничего не отмечено — разрешено всё.</p>
     {{range .KindOptions}}<label><input type="checkbox" name="kinds" value="{{.Name}}"{{if .Checked}} checked{{end}}> {{.Name}}</label> {{end}}
@@ -140,7 +140,7 @@
 {{if .ProfilesErr}}<div class="error">{{.ProfilesErr}}</div>{{end}}
 <ul>
   {{range .Profiles}}
-  <li>{{.Kind}} / {{.Variant}}: <a href="{{.Href}}">{{.File}}</a>{{if .QRHref}} · <a href="{{.QRHref}}">QR</a>{{end}}</li>
+  <li>{{.Kind}} / {{.Variant}}: <a href="{{url .Href}}">{{.File}}</a>{{if .QRHref}} · <a href="{{url .QRHref}}">QR</a>{{end}}</li>
   {{else}}
   <li class="muted">Профилей нет.</li>
   {{end}}
@@ -150,7 +150,7 @@
 <h2>Действия</h2>
 <div class="card actions">
   {{if .Client.OpenVPN}}
-  <form method="post" action="{{.Href}}/renew">
+  <form method="post" action="{{url .Href "/renew"}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <label>Продлить сертификат на, дней
       <input type="number" name="days" min="1" max="3650" value="365" required>
@@ -159,7 +159,7 @@
   </form>
   {{end}}
 
-  <form method="post" action="{{.Href}}/limit">
+  <form method="post" action="{{url .Href "/limit"}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <label>Лимит одновременных подключений (0 — снять)
       <input type="number" name="limit" min="0" max="1000" value="{{.Client.Limit}}" required>
@@ -167,14 +167,14 @@
     <button type="submit">Сохранить лимит</button>
   </form>
 
-  <form method="post" action="{{.Href}}/block">
+  <form method="post" action="{{url .Href "/block"}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <input type="hidden" name="blocked" value="{{if .Client.Blocked}}0{{else}}1{{end}}">
     <button type="submit">{{if .Client.Blocked}}Разблокировать{{else}}Заблокировать{{end}}</button>
   </form>
 
   {{if .Client.OpenVPN}}
-  <form method="post" action="{{.Href}}/delete">
+  <form method="post" action="{{url .Href "/delete"}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <input type="hidden" name="kind" value="openvpn">
     <label>Чтобы удалить OpenVPN, впишите имя клиента
@@ -184,7 +184,7 @@
   </form>
   {{end}}
   {{if .Client.WireGuard}}
-  <form method="post" action="{{.Href}}/delete">
+  <form method="post" action="{{url .Href "/delete"}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <input type="hidden" name="kind" value="wireguard">
     <label>Чтобы удалить WireGuard, впишите имя клиента

@@ -6,7 +6,7 @@
 </div>
 
 <h2>Пароль</h2>
-<form method="post" action="/account/password" class="card narrow">
+<form method="post" action="{{url "/account/password"}}" class="card narrow">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
   <label>Текущий пароль
     <input type="password" name="old" autocomplete="current-password" required>
@@ -25,14 +25,14 @@
 <div class="card">
   {{if .Has2FA}}
   <p class="ok">Включена.</p>
-  <form method="post" action="/account/2fa/codes">
+  <form method="post" action="{{url "/account/2fa/codes"}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <label>Пароль
       <input type="password" name="password" autocomplete="current-password" required>
     </label>
     <button type="submit">Выпустить новые резервные коды</button>
   </form>
-  <form method="post" action="/account/2fa/disable">
+  <form method="post" action="{{url "/account/2fa/disable"}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <label>Пароль
       <input type="password" name="password" autocomplete="current-password" required>
@@ -44,7 +44,7 @@
   </form>
   {{else}}
   <p>Выключена.</p>
-  {{if .Can2FA}}<a class="button" href="/account/2fa">Включить</a>{{else}}<p class="muted">Недоступна: в секретах панели нет PANEL_DATA_KEY.</p>{{end}}
+  {{if .Can2FA}}<a class="button" href="{{url "/account/2fa"}}">Включить</a>{{else}}<p class="muted">Недоступна: в секретах панели нет PANEL_DATA_KEY.</p>{{end}}
   {{end}}
 </div>
 
@@ -52,13 +52,13 @@
 <div class="card">
   {{if .TGLinked}}
   <p class="ok">Привязан (ID {{.TGID}}).</p>
-  <form method="post" action="/account/telegram/unlink">
+  <form method="post" action="{{url "/account/telegram/unlink"}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <button type="submit" class="danger">Отвязать</button>
   </form>
   {{else if .CanTG}}
   <p>Не привязан. Ссылка действует 10 минут и показывается один раз.</p>
-  <form method="post" action="/account/telegram">
+  <form method="post" action="{{url "/account/telegram"}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <button type="submit">Привязать Telegram</button>
   </form>
@@ -76,7 +76,7 @@
   <tr>
     <td>{{.IP}}</td><td>{{.Agent}}</td><td>{{.Created}}</td><td>{{.Seen}}</td>
     <td>{{if .Current}}<span class="muted">текущая</span>{{else}}
-      <form method="post" action="/account/sessions/revoke" class="inline">
+      <form method="post" action="{{url "/account/sessions/revoke"}}" class="inline">
         <input type="hidden" name="csrf" value="{{$.CSRF}}">
         <input type="hidden" name="session" value="{{.ID}}">
         <button type="submit" class="link">Отозвать</button>
@@ -86,7 +86,7 @@
   </tbody>
 </table>
 </div>
-<form method="post" action="/account/sessions/all">
+<form method="post" action="{{url "/account/sessions/all"}}">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
   <button type="submit">Выйти везде</button>
 </form>

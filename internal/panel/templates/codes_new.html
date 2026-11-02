@@ -1,7 +1,7 @@
 {{define "content"}}
 <h1>Выпуск кодов продления</h1>
-<p><a href="/codes">К списку кодов</a></p>
-<form method="post" action="/codes" class="card narrow">
+<p><a href="{{url "/codes"}}">К списку кодов</a></p>
+<form method="post" action="{{url "/codes"}}" class="card narrow">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
   <label>Сколько кодов (1–{{.MaxCount}})
     <input type="number" name="count" min="1" max="{{.MaxCount}}" value="{{.Form.Count}}" required>

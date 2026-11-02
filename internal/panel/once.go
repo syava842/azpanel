@@ -66,7 +66,7 @@ func (s *Server) showOnce(w http.ResponseWriter, r *http.Request, title, note, b
 func (s *Server) showOnceFile(w http.ResponseWriter, r *http.Request, title, note, back, backText string, items []string, batch string) {
 	sess, _ := session(r)
 	s.once.put(sess.IDHash, onceEntry{title: title, note: note, back: back, backText: backText, items: items, batch: batch}, s.now())
-	http.Redirect(w, r, pathAccountOnce, http.StatusSeeOther)
+	s.redirect(w, r, pathAccountOnce, http.StatusSeeOther)
 }
 
 // oncePage показывает отложенный секрет и стирает его; записи нет (уже
@@ -75,7 +75,7 @@ func (s *Server) oncePage(w http.ResponseWriter, r *http.Request) {
 	sess, _ := session(r)
 	e, ok := s.once.take(sess.IDHash, s.now())
 	if !ok {
-		http.Redirect(w, r, "/account", http.StatusSeeOther)
+		s.redirect(w, r, "/account", http.StatusSeeOther)
 		return
 	}
 	s.render(w, r, http.StatusOK, "once", map[string]any{"Title": e.title, "Note": e.note, "Items": e.items,

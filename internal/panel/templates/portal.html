@@ -1,6 +1,6 @@
 {{define "content"}}
 <h1>Ваш доступ к VPN</h1>
-<p><a href="{{.Base}}/help">Как подключиться: инструкция для Android, iOS, Windows и macOS</a></p>
+<p><a href="{{url .Base "/help"}}">Как подключиться: инструкция для Android, iOS, Windows и macOS</a></p>
 {{if .SessErr}}<div class="error">{{.SessErr}}</div>{{end}}
 {{range .Clients}}
 <h2>{{.Name}}</h2>
@@ -32,14 +32,14 @@
 {{if .ProfilesErr}}<div class="error">{{.ProfilesErr}}</div>{{end}}
 <ul>
   {{range .Profiles}}
-  <li>{{.Kind}} / {{.Variant}}: <a href="{{.Href}}">{{.File}}</a>{{if .QRHref}} · <a href="{{.QRHref}}">QR-код</a>{{end}}</li>
+  <li>{{.Kind}} / {{.Variant}}: <a href="{{url .Href}}">{{.File}}</a>{{if .QRHref}} · <a href="{{url .QRHref}}">QR-код</a>{{end}}</li>
   {{else}}
   <li class="muted">Файлов нет.</li>
   {{end}}
 </ul>
 
 <h3>Продлить кодом</h3>
-<form method="post" action="{{$.Base}}/unlock" class="card narrow">
+<form method="post" action="{{url $.Base "/unlock"}}" class="card narrow">
   {{if $.IsUser}}<input type="hidden" name="client" value="{{.Name}}">{{end}}
   <label>Код продления
     <input type="text" name="code" autocomplete="off" placeholder="XXXX-XXXX-XXXX-XXXX" required>

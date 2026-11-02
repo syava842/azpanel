@@ -1,6 +1,6 @@
 {{define "content"}}
 <h1>Коды продления</h1>
-<p><a href="/codes/new">Выпустить пачку</a>. Времена — UTC. Открытые значения кодов в панели не хранятся.</p>
+<p><a href="{{url "/codes/new"}}">Выпустить пачку</a>. Времена — UTC. Открытые значения кодов в панели не хранятся.</p>
 
 <h2>Пачки</h2>
 <div class="table-wrap">
@@ -9,9 +9,9 @@
   <tbody>
   {{range .Batches}}
   <tr>
-    <td><a href="/codes?batch={{.ID}}">{{.ID}}</a></td><td>{{.Created}}</td><td>{{.By}}</td><td>{{.Who}}</td><td>{{.Days}}</td>
+    <td><a href="{{url "/codes"}}?batch={{.ID}}">{{.ID}}</a></td><td>{{.Created}}</td><td>{{.By}}</td><td>{{.Who}}</td><td>{{.Days}}</td>
     <td>{{.Total}}</td><td>{{.Active}}</td><td>{{.Used}}</td><td>{{.Expired}}</td><td>{{.Revoked}}</td>
-    <td>{{if .CanRevoke}}<form method="post" action="/codes/batch/{{.ID}}/revoke" class="inline">
+    <td>{{if .CanRevoke}}<form method="post" action="{{url "/codes/batch/" .ID "/revoke"}}" class="inline">
       <input type="hidden" name="csrf" value="{{$.CSRF}}">
       <button type="submit" class="link">Отозвать пачку</button>
     </form>{{end}}</td>
@@ -25,7 +25,7 @@
 {{if .BatchesCut}}<p class="muted">Показаны последние 100 пачек.</p>{{end}}
 
 <h2>Коды</h2>
-<form method="get" action="/codes" class="inline">
+<form method="get" action="{{url "/codes"}}" class="inline">
   <label>Пачка <input type="text" name="batch" value="{{.Batch}}" maxlength="12"></label>
   <label>Состояние
     <select name="state">
@@ -42,7 +42,7 @@
   {{range .Codes}}
   <tr>
     <td>{{.ID}}</td><td>{{.Batch}}</td><td>{{.StateText}}</td><td>{{.Days}}</td><td>{{.ValidUntil}}</td><td>{{.Who}}</td><td>{{.UsedBy}}</td>
-    <td>{{if .CanRevoke}}<form method="post" action="/codes/{{.ID}}/revoke" class="inline">
+    <td>{{if .CanRevoke}}<form method="post" action="{{url "/codes/" .ID "/revoke"}}" class="inline">
       <input type="hidden" name="csrf" value="{{$.CSRF}}">
       <input type="hidden" name="batch" value="{{$.Batch}}">
       <button type="submit" class="link">Отозвать</button>
@@ -55,6 +55,6 @@
 </table>
 </div>
 {{if or .PrevHref .NextHref}}<p class="muted">Страница {{.Page}}, по {{.PerPage}} кодов.
-  {{if .PrevHref}}<a href="{{.PrevHref}}">← Назад</a>{{end}}
-  {{if .NextHref}}<a href="{{.NextHref}}">Вперёд →</a>{{end}}</p>{{end}}
+  {{if .PrevHref}}<a href="{{url .PrevHref}}">← Назад</a>{{end}}
+  {{if .NextHref}}<a href="{{url .NextHref}}">Вперёд →</a>{{end}}</p>{{end}}
 {{end}}

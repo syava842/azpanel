@@ -1,8 +1,8 @@
 {{define "content"}}
 <h1>{{if .File.Title}}{{.File.Title}}{{else}}{{.Name}}{{end}}</h1>
-<p class="muted"><a href="/routing">← Все списки</a> · файл {{.Name}} · {{.File.Lines}} строк · {{.Size}}{{if .KindTitle}} · {{.KindTitle}}{{end}}</p>
+<p class="muted"><a href="{{url "/routing"}}">← Все списки</a> · файл {{.Name}} · {{.File.Lines}} строк · {{.Size}}{{if .KindTitle}} · {{.KindTitle}}{{end}}</p>
 {{if .Changed}}
-<form method="post" action="/tasks/start" class="card">
+<form method="post" action="{{url "/tasks/start"}}" class="card">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
   <input type="hidden" name="kind" value="doall">
   <p>Изменения вступят в силу после применения.</p>
@@ -16,12 +16,12 @@
 {{end}}
 {{if .Editable}}
 <p class="ranges">
-  {{if .Full}}<a href="{{.Href}}">Записи</a> <b>Целиком</b>{{else}}<b>Записи</b>{{if .CanFull}} <a href="{{.Href}}?tab=full">Целиком</a>{{end}}{{end}}
+  {{if .Full}}<a href="{{url .Href}}">Записи</a> <b>Целиком</b>{{else}}<b>Записи</b>{{if .CanFull}} <a href="{{url .Href}}?tab=full">Целиком</a>{{end}}{{end}}
   {{if not .CanFull}}<span class="muted">(файл больше 1 МБ: заменить целиком нельзя)</span>{{end}}
 </p>
 {{end}}
 {{if .Full}}
-<form method="post" action="{{.Href}}/replace" class="card">
+<form method="post" action="{{url .Href "/replace"}}" class="card">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
   <input type="hidden" name="base_sha256" value="{{.BaseSHA}}">
   <label>Полное содержимое списка (как в файле, с комментариями)
@@ -32,14 +32,14 @@
 </form>
 {{else}}
 <div class="toolbar">
-  <form method="get" action="{{.Href}}">
+  <form method="get" action="{{url .Href}}">
     <input type="search" name="q" value="{{.Q}}" placeholder="Поиск по записям">
     <button type="submit">Найти</button>
   </form>
   <span class="muted">найдено: {{.Total}}</span>
 </div>
 {{if .Editable}}
-<form method="post" action="{{.Href}}/remove">
+<form method="post" action="{{url .Href "/remove"}}">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
 {{end}}
 <div class="table-wrap">
@@ -59,11 +59,11 @@
 </form>
 {{end}}
 <p class="pager">
-  {{if .Prev}}<a href="{{.Prev}}">← Назад</a>{{end}}
-  {{if .Next}}<a href="{{.Next}}">Дальше →</a>{{end}}
+  {{if .Prev}}<a href="{{url .Prev}}">← Назад</a>{{end}}
+  {{if .Next}}<a href="{{url .Next}}">Дальше →</a>{{end}}
 </p>
 {{if .Editable}}
-<form method="post" action="{{.Href}}/add" class="card">
+<form method="post" action="{{url .Href "/add"}}" class="card">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
   <label>Добавить записи (по одной в строке)
     <textarea name="lines" rows="6" cols="60" spellcheck="false">{{.AddText}}</textarea>
@@ -81,7 +81,7 @@
   <tbody>
   {{range .Backups}}
   <tr><td>{{.Time}}</td><td>{{.Size}}</td><td>
-    <form method="post" action="{{$.Href}}/restore" class="inline">
+    <form method="post" action="{{url $.Href "/restore"}}" class="inline">
       <input type="hidden" name="csrf" value="{{$.CSRF}}">
       <input type="hidden" name="stamp" value="{{.Stamp}}">
       <button type="submit" class="link">Вернуть</button>

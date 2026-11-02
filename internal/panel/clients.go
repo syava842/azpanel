@@ -259,7 +259,7 @@ func (s *Server) createClient(w http.ResponseWriter, r *http.Request) {
 	if known && !existed {
 		s.dropStaleHistory(r.Context(), name)
 	}
-	redirectMsg(w, r, clientHref(name), "created")
+	s.redirectMsg(w, r, clientHref(name), "created")
 }
 
 // clientExists: есть ли клиент с таким именем у агента; второе значение —
@@ -343,12 +343,12 @@ var msgTexts = map[string]string{
 
 // redirectMsg ведёт на страницу с уведомлением по коду; n — число для
 // кодов с %d.
-func redirectMsg(w http.ResponseWriter, r *http.Request, to, code string, n ...int) {
+func (s *Server) redirectMsg(w http.ResponseWriter, r *http.Request, to, code string, n ...int) {
 	q := "?msg=" + url.QueryEscape(code)
 	if len(n) > 0 {
 		q += "&n=" + strconv.Itoa(n[0])
 	}
-	http.Redirect(w, r, to+q, http.StatusSeeOther)
+	s.redirect(w, r, to+q, http.StatusSeeOther)
 }
 
 // flashText: текст уведомления по ?msg= и ?n=; неизвестный код или
@@ -488,7 +488,7 @@ func (s *Server) profileQR(w http.ResponseWriter, r *http.Request) {
 func (s *Server) done(w http.ResponseWriter, r *http.Request, c nodeapi.Client, op, before, detail, code string, n ...int) {
 	s.Log.Info("действие", "user", s.user(r), "op", op, "client", c.Name, "detail", detail)
 	s.audit(r, op, c.Name, before, detail)
-	redirectMsg(w, r, clientHref(c.Name), code, n...)
+	s.redirectMsg(w, r, clientHref(c.Name), code, n...)
 }
 
 // failed — ошибка агента: в журнал и на карточку с текстом агента.
@@ -598,7 +598,7 @@ func (s *Server) deleteClient(w http.ResponseWriter, r *http.Request) {
 	s.Log.Info("действие", "user", s.user(r), "op", "delete", "client", c.Name, "detail", kind)
 	s.audit(r, "delete", c.Name, kind, "удалён")
 	s.dropDeletedRecords(r.Context(), c, kind)
-	redirectMsg(w, r, "/", "deleted")
+	s.redirectMsg(w, r, "/", "deleted")
 }
 
 // dropDeletedRecords: карточка, ссылка портала и одноразовые ссылки уходят вместе с клиентом;

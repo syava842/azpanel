@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>azpanel</title>
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="{{url "/static/style.css"}}">
 {{block "head" .}}{{end}}
 </head>
 <body>
@@ -12,20 +12,20 @@
   <span class="brand">azpanel <small>{{.Version}}</small></span>
   {{if .User}}
   <nav>
-    <a href="/">Клиенты</a>
+    <a href="{{url "/"}}">Клиенты</a>
     {{if .IsAdmin}}
-    <a href="/monitor">Сейчас</a>
-    <a href="/routing">Маршрутизация</a>
-    <a href="/settings/antizapret">AntiZapret</a>
-    <a href="/tasks">Задачи</a>
-    <a href="/audit">Журнал</a>
-    <a href="/users">Пользователи</a>
-    <a href="/codes">Коды</a>
-    <a href="/settings/access">Доступ</a>
+    <a href="{{url "/monitor"}}">Сейчас</a>
+    <a href="{{url "/routing"}}">Маршрутизация</a>
+    <a href="{{url "/settings/antizapret"}}">AntiZapret</a>
+    <a href="{{url "/tasks"}}">Задачи</a>
+    <a href="{{url "/audit"}}">Журнал</a>
+    <a href="{{url "/users"}}">Пользователи</a>
+    <a href="{{url "/codes"}}">Коды</a>
+    <a href="{{url "/settings/access"}}">Доступ</a>
     {{end}}
-    <a href="/account">Аккаунт ({{.User}})</a>
+    <a href="{{url "/account"}}">Аккаунт ({{.User}})</a>
   </nav>
-  <form method="post" action="/logout" class="inline">
+  <form method="post" action="{{url "/logout"}}" class="inline">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <button type="submit" class="link">Выйти</button>
   </form>

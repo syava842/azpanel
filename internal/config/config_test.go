@@ -272,3 +272,32 @@ func TestTelegramSaveLoadRoundTrip(t *testing.T) {
 		t.Fatalf("получено %+v, %v", got, err)
 	}
 }
+
+func TestBasePathValidation(t *testing.T) {
+	for v, ok := range map[string]bool{
+		"": true, "/azpanel/": true, "/a/b/": true, "/x-1._~/": true,
+		"/": false, "azpanel/": false, "/azpanel": false, "//": false, "/a//b/": false,
+		"/a b/": false, "/a?b/": false, "/../": false, "/путь/": false,
+	} {
+		c := Default()
+		c.Panel.BasePath = v
+		if err := c.Validate(); (err == nil) != ok {
+			t.Errorf("base_path %q: ok=%v, ошибка %v", v, ok, err)
+		}
+	}
+}
+
+func TestTrustedProxiesDefaultAndValidation(t *testing.T) {
+	c := Default()
+	if got := strings.Join(c.Panel.TrustedProxies, ","); got != "127.0.0.1/32,::1/128" {
+		t.Fatalf("умолчание: %s", got)
+	}
+	c.Panel.TrustedProxies = []string{"10.0.0.0/8", "192.0.2.1"}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	c.Panel.TrustedProxies = []string{"не-адрес"}
+	if err := c.Validate(); err == nil {
+		t.Fatal("мусор принят")
+	}
+}

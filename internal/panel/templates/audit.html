@@ -1,7 +1,7 @@
 {{define "content"}}
 <h1>Журнал действий</h1>
 <div class="toolbar">
-  <form method="get" action="/audit" class="inline">
+  <form method="get" action="{{url "/audit"}}" class="inline">
     <input type="search" name="q" value="{{.Q}}" placeholder="Пользователь, действие или объект">
     <button type="submit">Найти</button>
   </form>
@@ -20,7 +20,7 @@
 </table>
 </div>
 <p class="pager">
-  {{if .Prev}}<a href="{{.Prev}}">← Новее</a>{{end}}
-  {{if .Next}}<a href="{{.Next}}">Старее →</a>{{end}}
+  {{if .Prev}}<a href="{{url .Prev}}">← Новее</a>{{end}}
+  {{if .Next}}<a href="{{url .Next}}">Старее →</a>{{end}}
 </p>
 {{end}}

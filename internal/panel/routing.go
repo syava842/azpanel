@@ -250,7 +250,7 @@ func (s *Server) routingAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if noChange(res) {
-		redirectMsg(w, r, routingHref(name), "routing_nochange", res.Skipped)
+		s.redirectMsg(w, r, routingHref(name), "routing_nochange", res.Skipped)
 		return
 	}
 	if !res.Applied { // агент отвечает 200, но файл не менялся
@@ -259,7 +259,7 @@ func (s *Server) routingAdd(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Log.Info("действие", "user", s.user(r), "op", "routing_add", "file", name, "added", res.Added)
 	s.audit(r, "routing_add", name, "", fmt.Sprintf("добавлено %d, пропущено %d", res.Added, res.Skipped))
-	redirectRouting(w, r, name)
+	s.redirectRouting(w, r, name)
 }
 
 func (s *Server) routingRemove(w http.ResponseWriter, r *http.Request) {
@@ -282,7 +282,7 @@ func (s *Server) routingRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if noChange(res) {
-		redirectMsg(w, r, routingHref(name), "routing_nochange", res.Skipped)
+		s.redirectMsg(w, r, routingHref(name), "routing_nochange", res.Skipped)
 		return
 	}
 	if !res.Applied {
@@ -291,7 +291,7 @@ func (s *Server) routingRemove(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Log.Info("действие", "user", s.user(r), "op", "routing_remove", "file", name, "removed", res.Removed)
 	s.audit(r, "routing_remove", name, fmt.Sprintf("выбрано %d", len(sel)), fmt.Sprintf("удалено %d", res.Removed))
-	redirectRouting(w, r, name)
+	s.redirectRouting(w, r, name)
 }
 
 func (s *Server) routingReplace(w http.ResponseWriter, r *http.Request) {
@@ -322,7 +322,7 @@ func (s *Server) routingReplace(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Log.Info("действие", "user", s.user(r), "op", "routing_replace", "file", name, "lines", res.Lines)
 	s.audit(r, "routing_replace", name, "", fmt.Sprintf("записей: %d", res.Lines))
-	redirectRouting(w, r, name)
+	s.redirectRouting(w, r, name)
 }
 
 func (s *Server) routingRestore(w http.ResponseWriter, r *http.Request) {
@@ -345,7 +345,7 @@ func (s *Server) routingRestore(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Log.Info("действие", "user", s.user(r), "op", "routing_restore", "file", name, "stamp", stamp)
 	s.audit(r, "routing_restore", name, "", stamp)
-	redirectRouting(w, r, name)
+	s.redirectRouting(w, r, name)
 }
 
 // noChange: агент ответил 200, ошибок строк нет, а правка ничего не изменила
@@ -367,6 +367,6 @@ func errorsOrDefault(e []string) []string {
 }
 
 // redirectRouting ведёт на страницу списка с плашкой «вступят в силу после применения».
-func redirectRouting(w http.ResponseWriter, r *http.Request, name string) {
-	redirectMsg(w, r, routingHref(name), "routing_changed")
+func (s *Server) redirectRouting(w http.ResponseWriter, r *http.Request, name string) {
+	s.redirectMsg(w, r, routingHref(name), "routing_changed")
 }

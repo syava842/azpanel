@@ -1,7 +1,7 @@
 {{define "head"}}{{if .Running}}<meta http-equiv="refresh" content="3">{{end}}{{end}}
 {{define "content"}}
 <h1>{{.Task.Kind}}</h1>
-<p class="muted"><a href="/tasks">← Все задачи</a> · {{.Task.ID}}</p>
+<p class="muted"><a href="{{url "/tasks"}}">← Все задачи</a> · {{.Task.ID}}</p>
 <p>Начата: {{.Task.Started}}<br>
 Окончена: {{.Task.Ended}}<br>
 Итог: {{if .Task.Failure}}<span class="bad">{{.Task.Status}}</span>{{else if .Task.Running}}<span class="warn">{{.Task.Status}}</span> <span class="muted">(страница обновляется каждые 3 секунды)</span>{{else}}<span class="ok">{{.Task.Status}}</span>{{end}}</p>

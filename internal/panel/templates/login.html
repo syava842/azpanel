@@ -1,6 +1,6 @@
 {{define "content"}}
 <h1>Вход</h1>
-<form method="post" action="/login" class="card narrow">
+<form method="post" action="{{url "/login"}}" class="card narrow">
   <label>Имя
     <input type="text" name="user" value="{{.FormUser}}" autocomplete="username" autofocus required>
   </label>

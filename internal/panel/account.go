@@ -249,7 +249,7 @@ func (s *Server) accountPassword(w http.ResponseWriter, r *http.Request) {
 		s.Log.Warn("прочие сессии не завершены", "err", err)
 	}
 	s.audit(r, "password_change", u.Login, "", "пароль изменён, прочие сессии завершены")
-	redirectMsg(w, r, "/account", "password_changed")
+	s.redirectMsg(w, r, "/account", "password_changed")
 }
 
 // qrDataURI — PNG с QR-кодом как data-адрес для <img>.
@@ -302,7 +302,7 @@ func (s *Server) account2FAForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(u.TOTPSecret) > 0 {
-		http.Redirect(w, r, "/account", http.StatusSeeOther)
+		s.redirect(w, r, "/account", http.StatusSeeOther)
 		return
 	}
 	secret, err := NewTOTPSecret()
@@ -430,7 +430,7 @@ func (s *Server) account2FADisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "2fa_off", u.Login, "включена", "выключена")
-	redirectMsg(w, r, "/account", "2fa_off")
+	s.redirectMsg(w, r, "/account", "2fa_off")
 }
 
 // secondFactorOK сверяет введённый код 2FA (или резервный) текущего пользователя.
@@ -489,7 +489,7 @@ func (s *Server) accountRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "session_revoke", u.Login, "", "отозвана своя сессия")
-	redirectMsg(w, r, "/account", "session_revoked")
+	s.redirectMsg(w, r, "/account", "session_revoked")
 }
 
 // ownsSession: сессия id принадлежит пользователю; иначе ответ 404 уже дан.
@@ -519,6 +519,6 @@ func (s *Server) accountLogoutAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "logout_all", u.Login, "", "завершены все сессии")
-	clearSessionCookie(w, r)
-	http.Redirect(w, r, "/login", http.StatusSeeOther)
+	s.clearSessionCookie(w, r)
+	s.redirect(w, r, "/login", http.StatusSeeOther)
 }

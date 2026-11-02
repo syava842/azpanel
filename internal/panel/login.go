@@ -163,7 +163,7 @@ func (s *Server) guard(h http.HandlerFunc, mode guardMode) http.Handler {
 		safe := r.Method == http.MethodGet || r.Method == http.MethodHead
 		if !ok {
 			if safe {
-				http.Redirect(w, r, "/login", http.StatusSeeOther)
+				s.redirect(w, r, "/login", http.StatusSeeOther)
 				return
 			}
 			s.errorPage(w, r, http.StatusForbidden, "нужен вход")
@@ -171,7 +171,7 @@ func (s *Server) guard(h http.HandlerFunc, mode guardMode) http.Handler {
 		}
 		if target, msg := s.gate(sess, r, mode); target != "" {
 			if safe {
-				http.Redirect(w, r, target, http.StatusSeeOther)
+				s.redirect(w, r, target, http.StatusSeeOther)
 				return
 			}
 			s.errorPage(w, r, http.StatusForbidden, msg)
@@ -212,7 +212,7 @@ func (s *Server) renderLogin(w http.ResponseWriter, r *http.Request, status int,
 // issueSession выдаёт cookie с новой сессией; прежняя сессия этого браузера
 // не должна жить дальше.
 func (s *Server) issueSession(w http.ResponseWriter, r *http.Request, u store.User, pending bool) error {
-	id, sess, err := s.createSession(r.Context(), u, remoteHost(r), r.UserAgent(), pending)
+	id, sess, err := s.createSession(r.Context(), u, s.remoteHost(r), r.UserAgent(), pending)
 	if err != nil {
 		return err
 	}
@@ -222,8 +222,8 @@ func (s *Server) issueSession(w http.ResponseWriter, r *http.Request, u store.Us
 		}
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name: cookieName, Value: id, Path: "/", Expires: sess.Expires,
-		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: isHTTPS(r),
+		Name: cookieName, Value: id, Path: s.cookiePath(), Expires: sess.Expires,
+		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: s.isHTTPS(r),
 	})
 	return nil
 }
@@ -238,7 +238,7 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 		s.renderLogin(w, r, http.StatusServiceUnavailable, "", "")
 		return
 	}
-	host := remoteHost(r)
+	host := s.remoteHost(r)
 	user, pw := r.PostForm.Get("user"), r.PostForm.Get("password")
 	// Попытка засчитывается до bcrypt и атомарно с проверкой лимита.
 	if !s.Limiter.Begin(host) {
@@ -288,13 +288,13 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	if pending {
 		// Счётчики не сбрасываются: верный пароль не должен обнулять
 		// перебор кода. Сброс — только верным кодом в mfaSubmit.
-		http.Redirect(w, r, pathLoginMFA, http.StatusSeeOther)
+		s.redirect(w, r, pathLoginMFA, http.StatusSeeOther)
 		return
 	}
 	s.Limiter.Reset(host)
 	s.Log.Info("вход", "user", truncateRunes(u.Login, maxLoggedName), "remote", host)
 	s.auditAs(r, truncateRunes(u.Login, maxLoggedName), "login", "", "", "")
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	s.redirect(w, r, "/", http.StatusSeeOther)
 }
 
 // mfaKey — ключ счётчика неверных кодов пользователя: общий для всех адресов
@@ -359,7 +359,7 @@ func (s *Server) checkSecondFactor(r *http.Request, userID int64, code string) (
 
 func (s *Server) mfaSubmit(w http.ResponseWriter, r *http.Request) {
 	sess, _ := session(r)
-	host := remoteHost(r)
+	host := s.remoteHost(r)
 	mkey := mfaKey(sess.UserID)
 	if !s.Limiter.Begin(host) || !s.Limiter.Begin(mkey) {
 		if s.shouldLogBlocked(host) {
@@ -399,13 +399,13 @@ func (s *Server) mfaSubmit(w http.ResponseWriter, r *http.Request) {
 	if backup {
 		s.auditAs(r, name, "login_backup_code", "", "", "")
 	}
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	s.redirect(w, r, "/", http.StatusSeeOther)
 }
 
-func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
+func (s *Server) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
-		Name: cookieName, Value: "", Path: "/", MaxAge: -1,
-		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: isHTTPS(r),
+		Name: cookieName, Value: "", Path: s.cookiePath(), MaxAge: -1,
+		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: s.isHTTPS(r),
 	})
 }
 
@@ -418,8 +418,8 @@ func (s *Server) logoutRoute(w http.ResponseWriter, r *http.Request) {
 		s.guard(s.logout, guardAny).ServeHTTP(w, r)
 		return
 	}
-	clearSessionCookie(w, r)
-	http.Redirect(w, r, "/login", http.StatusSeeOther)
+	s.clearSessionCookie(w, r)
+	s.redirect(w, r, "/login", http.StatusSeeOther)
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
@@ -427,8 +427,8 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	if err := s.Store.DeleteSession(r.Context(), sess.IDHash); err != nil {
 		s.Log.Warn("сессия не удалена", "err", err)
 	}
-	clearSessionCookie(w, r)
-	s.Log.Info("выход", "user", truncateRunes(sess.User, maxLoggedName), "remote", remoteHost(r))
+	s.clearSessionCookie(w, r)
+	s.Log.Info("выход", "user", truncateRunes(sess.User, maxLoggedName), "remote", s.remoteHost(r))
 	s.auditAs(r, truncateRunes(sess.User, maxLoggedName), "logout", "", "", "")
-	http.Redirect(w, r, "/login", http.StatusSeeOther)
+	s.redirect(w, r, "/login", http.StatusSeeOther)
 }

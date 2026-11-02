@@ -1,6 +1,6 @@
 {{define "content"}}
 <h1>{{.U.Login}}</h1>
-<p><a href="/users">К списку пользователей</a></p>
+<p><a href="{{url "/users"}}">К списку пользователей</a></p>
 <div class="card">
   <p>Роль: {{.RoleText}}; 2FA: {{if .Has2FA}}включена{{else}}выключена{{end}};
   состояние: {{if .U.Disabled}}<span class="bad">отключён</span>{{else}}активен{{end}}{{if .U.MustChange}}; ждёт смены пароля{{end}}</p>
@@ -8,7 +8,7 @@
 
 <h2>Роль и доступ</h2>
 <div class="card actions">
-  <form method="post" action="{{.Href}}/role">
+  <form method="post" action="{{url .Href "/role"}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <label>Роль
       <select name="role">
@@ -18,18 +18,18 @@
     </label>
     <button type="submit">Сохранить роль</button>
   </form>
-  <form method="post" action="{{.Href}}/disabled">
+  <form method="post" action="{{url .Href "/disabled"}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <input type="hidden" name="disabled" value="{{if .U.Disabled}}0{{else}}1{{end}}">
     <button type="submit">{{if .U.Disabled}}Включить{{else}}Отключить{{end}}</button>
   </form>
-  <form method="post" action="{{.Href}}/password">
+  <form method="post" action="{{url .Href "/password"}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <button type="submit">Сбросить пароль</button>
     <p class="muted">Новый пароль показывается один раз; все сессии пользователя завершаются.</p>
   </form>
   {{if .Has2FA}}
-  <form method="post" action="{{.Href}}/2fa/reset">
+  <form method="post" action="{{url .Href "/2fa/reset"}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <button type="submit">Сбросить 2FA</button>
   </form>
@@ -37,7 +37,7 @@
 </div>
 
 <h2>Доступ до</h2>
-<form method="post" action="{{.Href}}/access" class="card narrow">
+<form method="post" action="{{url .Href "/access"}}" class="card narrow">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
   <p>Сейчас: {{.UntilStamp}}. Срок распространяется на все клиенты пользователя: у клиента действует меньший из его срока и срока пользователя.</p>
   <label>Доступ до (ГГГГ-ММ-ДД, конец дня по UTC; пусто — без срока)
@@ -47,7 +47,7 @@
 </form>
 
 <h2>Ссылка портала</h2>
-<form method="post" action="{{.Href}}/portal" class="card narrow">
+<form method="post" action="{{url .Href "/portal"}}" class="card narrow">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
   <p>{{if .PortalCreated}}Создана {{.PortalCreated}}.{{else}}Ссылки нет.{{end}} В портале пользователь видит все свои клиенты; адрес показывается один раз, «Перевыпустить» отключает прежний.</p>
   {{if not .PublicURLSet}}<p class="muted">Адрес панели не задан: укажите panel.public_url в настройках (config.toml).</p>{{end}}
@@ -58,7 +58,7 @@
 <div class="card">
   {{if .TGLinked}}
   <p>Привязан, ID {{.TGID}}.</p>
-  <form method="post" action="{{.Href}}/telegram/unlink">
+  <form method="post" action="{{url .Href "/telegram/unlink"}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <button type="submit">Отвязать</button>
   </form>
@@ -67,7 +67,7 @@
 
 <h2>Клиенты</h2>
 <ul>
-  {{range .Clients}}<li><a href="{{.Href}}">{{.Name}}</a></li>
+  {{range .Clients}}<li><a href="{{url .Href}}">{{.Name}}</a></li>
   {{else}}<li class="muted">Клиентов нет. Владельца назначают на карточке клиента.</li>{{end}}
 </ul>
 
@@ -79,7 +79,7 @@
   {{range .Sessions}}
   <tr>
     <td>{{.IP}}</td><td>{{.Agent}}</td><td>{{.Created}}</td><td>{{.Seen}}</td>
-    <td><form method="post" action="{{$.Href}}/sessions/revoke" class="inline">
+    <td><form method="post" action="{{url $.Href "/sessions/revoke"}}" class="inline">
       <input type="hidden" name="csrf" value="{{$.CSRF}}">
       <input type="hidden" name="session" value="{{.ID}}">
       <button type="submit" class="link">Отозвать</button>
@@ -93,7 +93,7 @@
 </div>
 
 <h2>Удаление</h2>
-<form method="post" action="{{.Href}}/delete" class="card narrow">
+<form method="post" action="{{url .Href "/delete"}}" class="card narrow">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
   <label>Чтобы удалить пользователя, впишите его логин
     <input type="text" name="confirm" autocomplete="off" required>

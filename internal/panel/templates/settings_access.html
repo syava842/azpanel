@@ -2,13 +2,13 @@
 <h1>Доступ</h1>
 {{if .Notice}}<div class="flash">{{.Notice}}</div>{{end}}
 {{if .Pending}}
-<form method="post" action="/settings/access/confirm" class="card">
+<form method="post" action="{{url "/settings/access/confirm"}}" class="card">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
   <p>Новый список ({{.Pending.New}}) применён и вернётся к прежнему в {{.Pending.Deadline}} (осталось около {{.Pending.Left}} с), если его не подтвердить.</p>
   <button type="submit">Подтвердить</button>
 </form>
 {{end}}
-<form method="post" action="/settings/access" class="card">
+<form method="post" action="{{url "/settings/access"}}" class="card">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
   {{if .Warn}}<input type="hidden" name="lockout" value="1">{{end}}
   <label>Белый список адресов панели (IP или сеть CIDR, по одному в строке; пусто — без ограничения)

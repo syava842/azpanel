@@ -90,7 +90,13 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		RequireAdmin2FA: cfg.Panel.RequireAdmin2FA,
 		ConfigFile:      paths.ConfigFile(),
 		PublicURL:       cfg.Panel.PublicURL,
+		BasePath:        cfg.Panel.BasePath,
 	}
+	proxies, err := config.ParseTrustedProxies(cfg.Panel.TrustedProxies)
+	if err != nil {
+		return fmt.Errorf("panel.trusted_proxies: %w", err)
+	}
+	s.TrustedProxies = proxies
 	if err := s.SeedAllow(cfg.Panel.AllowIPs); err != nil {
 		return fmt.Errorf("panel.allow_ips: %w", err)
 	}

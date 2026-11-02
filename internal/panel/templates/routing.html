@@ -1,13 +1,13 @@
 {{define "content"}}
 <h1>Маршрутизация</h1>
 <div class="card actions">
-  <form method="post" action="/tasks/start" class="inline">
+  <form method="post" action="{{url "/tasks/start"}}" class="inline">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <input type="hidden" name="kind" value="doall">
     <button type="submit">Применить (doall.sh)</button>
     <span class="muted">пересобирает маршруты из списков; идёт фоновой задачей</span>
   </form>
-  <form method="post" action="/tasks/start" class="inline">
+  <form method="post" action="{{url "/tasks/start"}}" class="inline">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <input type="hidden" name="kind" value="doall">
     <button type="submit">Обновить списки сейчас</button>
@@ -19,7 +19,7 @@
   <thead><tr><th>Список</th><th>Файл</th><th>Вид</th><th>Строк</th><th>Размер</th></tr></thead>
   <tbody>
   {{range .Rows}}
-  <tr><td><a href="{{.Href}}">{{if .Title}}{{.Title}}{{else}}{{.Name}}{{end}}</a></td><td>{{.Name}}</td><td>{{if .Kind}}{{.Kind}}{{else}}только чтение{{end}}</td><td>{{.Lines}}</td><td>{{.Size}}</td></tr>
+  <tr><td><a href="{{url .Href}}">{{if .Title}}{{.Title}}{{else}}{{.Name}}{{end}}</a></td><td>{{.Name}}</td><td>{{if .Kind}}{{.Kind}}{{else}}только чтение{{end}}</td><td>{{.Lines}}</td><td>{{.Size}}</td></tr>
   {{else}}
   <tr><td colspan="5" class="muted">Списков нет.</td></tr>
   {{end}}

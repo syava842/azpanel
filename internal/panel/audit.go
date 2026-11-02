@@ -27,7 +27,7 @@ func (s *Server) auditAs(r *http.Request, user, action, target, before, after st
 		return
 	}
 	err := s.Store.Audit(r.Context(), store.AuditEntry{
-		TS: s.now().Unix(), User: user, IP: remoteHost(r),
+		TS: s.now().Unix(), User: user, IP: s.remoteHost(r),
 		Action: action, Target: target, Before: before, After: after,
 	})
 	if err != nil {

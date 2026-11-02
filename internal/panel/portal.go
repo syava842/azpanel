@@ -38,9 +38,9 @@ func isPortalPath(p string) bool {
 // publicLink строит ссылку: с panel.public_url — полную, без него — относительную.
 func (s *Server) publicLink(path string) string {
 	if s.PublicURL == "" {
-		return path
+		return s.url(path)
 	}
-	return strings.TrimRight(s.PublicURL, "/") + path
+	return strings.TrimRight(s.PublicURL, "/") + s.url(path)
 }
 
 // publicURLNote — подсказка к ссылкам, если адрес панели не задан.
@@ -496,7 +496,7 @@ func (s *Server) portalUnlock(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Log.Info("действие", "user", "портал", "op", "redeem", "client", name, "detail", detail)
 	s.auditAs(r, "портал", "redeem", name, "до "+untilStamp(&res.Before), detail)
-	redirectMsg(w, r, portalHref(tokenPath), "access_extended", int(res.Days))
+	s.redirectMsg(w, r, portalHref(tokenPath), "access_extended", int(res.Days))
 }
 
 // dlGone — ссылка недействительна: уже скачана, просрочена, закрыта PIN.

@@ -58,6 +58,12 @@ type Panel struct {
 	// PublicURL — внешний адрес панели для ссылок портала и одноразовых
 	// ссылок (https://vpn.example.org); пусто — ссылки относительные.
 	PublicURL string `toml:"public_url"`
+	// BasePath — префикс пути, под которым панель стоит за nginx: пусто или
+	// «/x/» (с обеими косыми). Панель снимает его с запроса сама.
+	BasePath string `toml:"base_path"`
+	// TrustedProxies — адреса прокси (IP или CIDR), чьим X-Forwarded-For и
+	// X-Forwarded-Proto панель верит.
+	TrustedProxies []string `toml:"trusted_proxies"`
 }
 
 type Log struct {
@@ -112,6 +118,7 @@ func Default() Config {
 			CollectSeconds: 60,
 			HistoryDays:    30,
 			SessionHours:   168,
+			TrustedProxies: []string{"127.0.0.1/32", "::1/128"},
 		},
 		Log:   Log{MaxSizeMB: 10, Keep: 5},
 		Proxy: defaultProxy(),
@@ -190,6 +197,10 @@ func (c Config) Validate() error {
 		return fmt.Errorf("panel.allow_ips: %w", allowErr(p.AllowIPs))
 	case publicURLErr(p.PublicURL) != nil:
 		return fmt.Errorf("panel.public_url: %w", publicURLErr(p.PublicURL))
+	case basePathErr(p.BasePath) != nil:
+		return fmt.Errorf("panel.base_path: %w", basePathErr(p.BasePath))
+	case trustedErr(p.TrustedProxies) != nil:
+		return fmt.Errorf("panel.trusted_proxies: %w", trustedErr(p.TrustedProxies))
 	case c.Log.MaxSizeMB < 1 || c.Log.MaxSizeMB > 1000:
 		return fmt.Errorf("log.max_size_mb = %d, нужно 1..1000", c.Log.MaxSizeMB)
 	case c.Log.Keep < 1 || c.Log.Keep > 100:
@@ -319,6 +330,37 @@ func publicURLErr(v string) error {
 		return fmt.Errorf("%q: не указан хост", v)
 	case u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.Contains(v, "?") || strings.Contains(v, "#"):
 		return fmt.Errorf("%q: без учётных данных, запроса и фрагмента", v)
+	}
+	return nil
+}
+
+func trustedErr(list []string) error {
+	_, err := ParseAllowIPs(list)
+	return err
+}
+
+// ParseTrustedProxies разбирает panel.trusted_proxies (как белый список).
+func ParseTrustedProxies(list []string) ([]netip.Prefix, error) { return ParseAllowIPs(list) }
+
+// basePathErr проверяет panel.base_path: пусто либо «/x/», «/a/b/»: начинается
+// и кончается косой чертой, сегменты из латиницы, цифр и «._~-».
+func basePathErr(v string) error {
+	if v == "" {
+		return nil
+	}
+	if len(v) < 3 || v[0] != '/' || v[len(v)-1] != '/' {
+		return fmt.Errorf("%q: нужен вид /имя/ (с косой чертой в начале и в конце) или пусто", v)
+	}
+	for _, seg := range strings.Split(v[1:len(v)-1], "/") {
+		if seg == "" || seg == "." || seg == ".." {
+			return fmt.Errorf("%q: пустой или недопустимый сегмент пути", v)
+		}
+		for _, r := range seg {
+			ok := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("._~-", r)
+			if !ok {
+				return fmt.Errorf("%q: допустимы латиница, цифры и . _ ~ -", v)
+			}
+		}
 	}
 	return nil
 }

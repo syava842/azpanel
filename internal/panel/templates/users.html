@@ -6,7 +6,7 @@
   <tbody>
   {{range .Rows}}
   <tr>
-    <td><a href="/users/{{.ID}}">{{.Login}}</a></td>
+    <td><a href="{{url "/users/" .ID}}">{{.Login}}</a></td>
     <td>{{.Role}}</td>
     <td>{{if .Has2FA}}да{{else}}нет{{end}}</td>
     <td>{{if .Disabled}}<span class="bad">отключён</span>{{else}}активен{{end}}</td>
@@ -19,7 +19,7 @@
 </div>
 
 <h2>Новый пользователь</h2>
-<form method="post" action="/users" class="card narrow">
+<form method="post" action="{{url "/users"}}" class="card narrow">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
   <label>Логин (строчные латинские буквы, цифры, _ . -; 3-32 знака)
     <input type="text" name="login" value="{{.FormLogin}}" autocomplete="off" required>

@@ -258,5 +258,5 @@ func (s *Server) redeemCode(w http.ResponseWriter, r *http.Request) {
 		s.card(w, r, c, http.StatusBadGateway, "доступ продлён до "+untilStamp(&res.After)+", но сертификат не перевыпущен: "+tx)
 		return
 	}
-	redirectMsg(w, r, clientHref(c.Name), "access_extended", int(res.Days))
+	s.redirectMsg(w, r, clientHref(c.Name), "access_extended", int(res.Days))
 }

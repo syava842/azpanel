@@ -282,7 +282,7 @@ func (s *Server) codeRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "code_revoke", strconv.FormatInt(id, 10), "", "отозван")
-	redirectMsg(w, r, backToCodes(r), "code_revoked")
+	s.redirectMsg(w, r, backToCodes(r), "code_revoked")
 }
 
 func (s *Server) codeBatchRevoke(w http.ResponseWriter, r *http.Request) {
@@ -297,7 +297,7 @@ func (s *Server) codeBatchRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "code_revoke", batch, "", fmt.Sprintf("отозвана пачка, кодов: %d", n))
-	redirectMsg(w, r, "/codes", "codes_revoked", int(n))
+	s.redirectMsg(w, r, "/codes", "codes_revoked", int(n))
 }
 
 // backToCodes — куда вернуться после отзыва: на список (с фильтром пачки, если

@@ -4,7 +4,7 @@
 <div class="card actions">
   <p>Чтобы изменения вступили в силу, запустите:</p>
   {{range .Next}}
-  <form method="post" action="/tasks/start">
+  <form method="post" action="{{url "/tasks/start"}}">
     <input type="hidden" name="csrf" value="{{$.CSRF}}">
     <input type="hidden" name="kind" value="{{.Kind}}">
     <button type="submit">{{.Button}}</button>
@@ -13,7 +13,7 @@
   {{end}}
 </div>
 {{end}}
-<form method="post" action="/settings/antizapret">
+<form method="post" action="{{url "/settings/antizapret"}}">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
   {{range .Groups}}
   <h2>{{.Title}}{{if .Note}} <small class="muted">({{.Note}})</small>{{end}}</h2>

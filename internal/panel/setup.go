@@ -210,7 +210,7 @@ func (s *Server) setupSave(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(changed) == 0 {
-		redirectMsg(w, r, "/settings/antizapret", "setup_nochange")
+		s.redirectMsg(w, r, "/settings/antizapret", "setup_nochange")
 		return
 	}
 	sort.Strings(keys)
@@ -238,5 +238,5 @@ func (s *Server) setupSave(w http.ResponseWriter, r *http.Request) {
 	if len(res.Apply) > 0 {
 		q.Set("apply", strings.Join(res.Apply, ","))
 	}
-	http.Redirect(w, r, to+"?"+q.Encode(), http.StatusSeeOther)
+	s.redirect(w, r, to+"?"+q.Encode(), http.StatusSeeOther)
 }

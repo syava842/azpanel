@@ -1,6 +1,6 @@
 {{define "content"}}
 <h1>Новый клиент</h1>
-<form method="post" action="/clients" class="card narrow">
+<form method="post" action="{{url "/clients"}}" class="card narrow">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
   <label>Имя
     <input type="text" name="name" value="{{.Name}}" autocomplete="off" autofocus required>

@@ -102,7 +102,7 @@ func (s *Server) userCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r, "user_create", u.Login, "", roleText(u.Role))
 	if !generated {
-		redirectMsg(w, r, "/users/"+strconv.FormatInt(u.ID, 10), "user_created")
+		s.redirectMsg(w, r, "/users/"+strconv.FormatInt(u.ID, 10), "user_created")
 		return
 	}
 	s.showOnce(w, r, "Пользователь "+u.Login+" создан",
@@ -229,7 +229,7 @@ func (s *Server) userRole(w http.ResponseWriter, r *http.Request) {
 	})
 	if ok {
 		s.audit(r, "user_role", u.Login, roleText(old), roleText(role))
-		redirectMsg(w, r, userHref(u), "role_set")
+		s.redirectMsg(w, r, userHref(u), "role_set")
 	}
 }
 
@@ -250,11 +250,11 @@ func (s *Server) userDisabled(w http.ResponseWriter, r *http.Request) {
 	}
 	if disable {
 		s.audit(r, "user_disable", u.Login, "включён", "отключён")
-		redirectMsg(w, r, userHref(u), "user_disabled")
+		s.redirectMsg(w, r, userHref(u), "user_disabled")
 		return
 	}
 	s.audit(r, "user_enable", u.Login, "отключён", "включён")
-	redirectMsg(w, r, userHref(u), "user_enabled")
+	s.redirectMsg(w, r, userHref(u), "user_enabled")
 }
 
 // userResetPassword: новый случайный пароль показывается один раз,
@@ -310,7 +310,7 @@ func (s *Server) userReset2FA(w http.ResponseWriter, r *http.Request) {
 	})
 	if ok {
 		s.audit(r, "user_2fa_reset", u.Login, "", "2FA сброшена, сессии завершены")
-		redirectMsg(w, r, userHref(u), "2fa_reset")
+		s.redirectMsg(w, r, userHref(u), "2fa_reset")
 	}
 }
 
@@ -324,7 +324,7 @@ func (s *Server) userRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "session_revoke", u.Login, "", "сессия отозвана администратором")
-	redirectMsg(w, r, userHref(u), "session_revoked")
+	s.redirectMsg(w, r, userHref(u), "session_revoked")
 }
 
 func (s *Server) userDelete(w http.ResponseWriter, r *http.Request) {
@@ -337,7 +337,7 @@ func (s *Server) userDelete(w http.ResponseWriter, r *http.Request) {
 	})
 	if ok {
 		s.audit(r, "user_delete", u.Login, roleText(u.Role), "удалён")
-		redirectMsg(w, r, "/users", "user_deleted")
+		s.redirectMsg(w, r, "/users", "user_deleted")
 	}
 }
 
@@ -362,5 +362,5 @@ func (s *Server) userAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "user_access", u.Login, "доступ до: "+untilText(u.AccessUntil), "доступ до: "+untilText(until))
-	redirectMsg(w, r, userHref(u), "user_access_saved")
+	s.redirectMsg(w, r, userHref(u), "user_access_saved")
 }

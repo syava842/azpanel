@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -362,7 +363,8 @@ func TestLoginOK(t *testing.T) {
 	if _, ok := e.lookup(c.Value); !ok {
 		t.Fatal("сессия не создана")
 	}
-	// За прокси с TLS — Secure.
+	// За доверенным прокси с TLS — Secure.
+	e.srv.TrustedProxies = []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
 	r := postForm("/login", url.Values{"user": {"admin"}, "password": {testPassword}})
 	r.Header.Set("X-Forwarded-Proto", "https")
 	rec = e.do(r)

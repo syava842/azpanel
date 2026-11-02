@@ -167,7 +167,7 @@ type accessPending struct {
 }
 
 func (s *Server) renderAccess(w http.ResponseWriter, r *http.Request, status int, data map[string]any) {
-	d := map[string]any{"Remote": remoteHost(r), "Ips": strings.Join(s.access.list, "\n")}
+	d := map[string]any{"Remote": s.remoteHost(r), "Ips": strings.Join(s.access.list, "\n")}
 	if s.Pending != nil {
 		if x, ok, err := s.Pending.Get(r.Context(), pendingAllowIPs); err == nil && ok {
 			left := int(x.Deadline - s.now().Unix())
@@ -223,10 +223,10 @@ func (s *Server) accessSave(w http.ResponseWriter, r *http.Request) {
 		s.renderAccess(w, r, http.StatusOK, map[string]any{"Notice": "список не изменился"})
 		return
 	}
-	if !allowsIn(nets, remoteHost(r)) && r.PostForm.Get("lockout") != "1" {
+	if !allowsIn(nets, s.remoteHost(r)) && r.PostForm.Get("lockout") != "1" {
 		s.renderAccess(w, r, http.StatusOK, map[string]any{
 			"Warn": true, "Ips": text,
-			"Error": "Новый список не включает ваш адрес " + remoteHost(r) +
+			"Error": "Новый список не включает ваш адрес " + s.remoteHost(r) +
 				": после применения панель станет недоступна отсюда, подтвердить изменение будет нельзя, " +
 				"и через 2 минуты прежний список вернётся сам.",
 		})

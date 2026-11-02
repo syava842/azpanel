@@ -64,7 +64,7 @@ func (s *Server) accountTelegramUnlink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "tg_unlink", u.Login, tgText(u), "отвязан")
-	redirectMsg(w, r, "/account", "tg_unlinked")
+	s.redirectMsg(w, r, "/account", "tg_unlinked")
 }
 
 // userTelegramUnlink — администратор отвязывает Telegram пользователя.
@@ -78,7 +78,7 @@ func (s *Server) userTelegramUnlink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "tg_unlink", u.Login, tgText(u), "отвязан администратором")
-	redirectMsg(w, r, userHref(u), "tg_unlinked")
+	s.redirectMsg(w, r, userHref(u), "tg_unlinked")
 }
 
 func tgText(u store.User) string {

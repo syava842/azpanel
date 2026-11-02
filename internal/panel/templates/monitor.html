@@ -34,7 +34,7 @@
 
 {{if .Ranges}}
 <h2>История</h2>
-<p class="ranges">{{range .Ranges}}{{if .Current}}<b>{{.Name}}</b>{{else}}<a href="{{.Href}}">{{.Name}}</a>{{end}} {{end}}</p>
+<p class="ranges">{{range .Ranges}}{{if .Current}}<b>{{.Name}}</b>{{else}}<a href="{{url .Href}}">{{.Name}}</a>{{end}} {{end}}</p>
 {{if .HistoryErr}}<div class="error">{{.HistoryErr}}</div>{{else}}
 <div class="charts">
   <figure><figcaption>Процессор</figcaption>{{.Charts.CPU}}</figure>
@@ -52,7 +52,7 @@
   <thead><tr><th>Тип</th><th>Экземпляр</th><th>Клиент</th><th>Адрес</th>{{if .HasGeo}}<th>Город</th><th>Провайдер</th>{{end}}<th>↓</th><th>↑</th><th>Время</th></tr></thead>
   <tbody>
   {{range .Sessions}}
-  <tr><td>{{.Kind}}</td><td>{{.Instance}}</td><td><a href="{{.Href}}">{{.Name}}</a></td><td>{{.Addr}}{{if .Flapping}} <span class="warn" title="адрес меняется часто">⚠ адрес меняется часто — возможно, один ключ на двух устройствах</span>{{end}}</td>{{if $.HasGeo}}<td>{{.City}}</td><td>{{.ISP}}</td>{{end}}<td>{{.Down}}</td><td>{{.Up}}</td><td>{{.Time}}</td></tr>
+  <tr><td>{{.Kind}}</td><td>{{.Instance}}</td><td><a href="{{url .Href}}">{{.Name}}</a></td><td>{{.Addr}}{{if .Flapping}} <span class="warn" title="адрес меняется часто">⚠ адрес меняется часто — возможно, один ключ на двух устройствах</span>{{end}}</td>{{if $.HasGeo}}<td>{{.City}}</td><td>{{.ISP}}</td>{{end}}<td>{{.Down}}</td><td>{{.Up}}</td><td>{{.Time}}</td></tr>
   {{else}}
   <tr><td colspan="{{if $.HasGeo}}9{{else}}7{{end}}" class="muted">Подключений нет.</td></tr>
   {{end}}
@@ -68,7 +68,7 @@
   <thead><tr><th>Время</th><th>Клиент</th><th>Экземпляр</th><th>Адрес</th><th>Причина</th></tr></thead>
   <tbody>
   {{range .Denials}}
-  <tr><td>{{.Time}}</td><td><a href="{{.Href}}">{{.Name}}</a></td><td>{{.Instance}}</td><td>{{.Addr}}</td><td>{{.Reason}}</td></tr>
+  <tr><td>{{.Time}}</td><td><a href="{{url .Href}}">{{.Name}}</a></td><td>{{.Instance}}</td><td>{{.Addr}}</td><td>{{.Reason}}</td></tr>
   {{else}}
   <tr><td colspan="5" class="muted">Отказов нет.</td></tr>
   {{end}}

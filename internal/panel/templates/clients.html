@@ -1,19 +1,19 @@
 {{define "content"}}
 <h1>Клиенты</h1>
 <div class="toolbar">
-  <form method="get" action="/" class="inline">
+  <form method="get" action="{{url "/"}}" class="inline">
     <input type="search" name="q" value="{{.Q}}" placeholder="Поиск по имени">
     <button type="submit">Найти</button>
   </form>
-  {{if .IsAdmin}}<a class="button" href="/clients/new">Новый клиент</a>{{end}}
+  {{if .IsAdmin}}<a class="button" href="{{url "/clients/new"}}">Новый клиент</a>{{end}}
 </div>
 <div class="table-wrap">
 <table>
-  <thead><tr><th><a href="/?sort=name&q={{.Q}}">Имя</a></th><th>Тип</th><th>Сертификат</th><th><a href="/?sort=online&q={{.Q}}">Онлайн</a></th><th>Лимит</th>{{if .HasStore}}<th><a href="/?sort=traffic&q={{.Q}}">Трафик 30 дн.</a></th><th><a href="/?sort=until&q={{.Q}}">Доступ до</a></th>{{end}}<th>Состояние</th></tr></thead>
+  <thead><tr><th><a href="{{url "/"}}?sort=name&q={{.Q}}">Имя</a></th><th>Тип</th><th>Сертификат</th><th><a href="{{url "/"}}?sort=online&q={{.Q}}">Онлайн</a></th><th>Лимит</th>{{if .HasStore}}<th><a href="{{url "/"}}?sort=traffic&q={{.Q}}">Трафик 30 дн.</a></th><th><a href="{{url "/"}}?sort=until&q={{.Q}}">Доступ до</a></th>{{end}}<th>Состояние</th></tr></thead>
   <tbody>
   {{range .Rows}}
   <tr>
-    <td><a href="{{.Href}}">{{.Name}}</a></td>
+    <td><a href="{{url .Href}}">{{.Name}}</a></td>
     <td>{{if .OpenVPN}}OpenVPN{{end}}{{if and .OpenVPN .WG}} / {{end}}{{if .WG}}WireGuard{{end}}</td>
     <td>{{if .CertSoon}}<span class="warn">{{.Cert}}</span>{{else}}{{.Cert}}{{end}}</td>
     <td class="online">{{if $.NoOnline}}—{{else}}{{.Online}}{{end}}</td>
