@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // Умолчания AZ-WARP на узле.
@@ -58,6 +59,17 @@ func (w *Warper) bin() string {
 	return DefaultBin
 }
 
+// queryTimeout — предел чтения (status json, domainslist, iplist): зависший
+// warper не должен подвешивать GET /v1/warp. Шаги изменений (RunSteps) идут без него.
+const queryTimeout = 10 * time.Second
+
+// query — run со сроком queryTimeout.
+func (w *Warper) query(ctx context.Context, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+	return w.run(ctx, args...)
+}
+
 func (w *Warper) run(ctx context.Context, args ...string) ([]byte, error) {
 	if w.Run != nil {
 		return w.Run(ctx, w.bin(), args...)
@@ -97,8 +109,24 @@ func stripSecrets(v any) any {
 			t[i] = stripSecrets(t[i])
 		}
 		return t
+	case string:
+		return RedactLinks(t)
 	}
 	return v
+}
+
+// linkRe — ссылки прокси-подписок: ключи и пароли лежат в самом адресе, а имя
+// поля может быть любым (link, url, outbound…). credsRe — адрес с логином и паролем.
+var (
+	linkRe  = regexp.MustCompile(`(?i)\b(ss|ssr|vless|vmess|trojan|hy2|hysteria2|tuic|wireguard|socks5|socks)://[^\s"']+`)
+	credsRe = regexp.MustCompile(`(?i)\bhttps?://[^\s/@"']+:[^\s/@"']*@[^\s"']*`)
+)
+
+// RedactLinks затирает ссылки ss://, vless://, vmess://, trojan://, hy2://,
+// hysteria2://, wireguard:// (и адреса с логином и паролем) в любой строке.
+func RedactLinks(s string) string {
+	s = linkRe.ReplaceAllString(s, "${1}://***")
+	return credsRe.ReplaceAllString(s, "***")
 }
 
 // SanitizeStatus вырезает секреты из «warper status json». Результат — JSON,
@@ -198,7 +226,7 @@ func (w *Warper) Status(ctx context.Context) Status {
 	if !ok {
 		return Status{}
 	}
-	out, err := w.run(ctx, "status", "json")
+	out, err := w.query(ctx, "status", "json")
 	if err != nil {
 		return Status{Installed: true, Version: ver, Error: "warper status json: " + firstLine(RedactText(string(out)+" "+err.Error()))}
 	}
@@ -263,7 +291,7 @@ func parseDomainLine(l string) DomainEntry {
 
 // Domains — вывод «warper domainslist».
 func (w *Warper) Domains(ctx context.Context) ([]DomainEntry, error) {
-	out, err := w.run(ctx, "domainslist")
+	out, err := w.query(ctx, "domainslist")
 	if err != nil {
 		return nil, err
 	}
@@ -278,7 +306,7 @@ func (w *Warper) Domains(ctx context.Context) ([]DomainEntry, error) {
 
 // IPs — вывод «warper iplist»: подсети CIDR по строке.
 func (w *Warper) IPs(ctx context.Context) ([]string, error) {
-	out, err := w.run(ctx, "iplist")
+	out, err := w.query(ctx, "iplist")
 	if err != nil {
 		return nil, err
 	}
@@ -387,4 +415,4 @@ var redactRe = regexp.MustCompile(`(?i)("?[\w.-]*(?:pass|key|secret|token|privat
 
 // RedactText затирает значения полей password, key, secret, token…: вывод
 // warper попадает в журнал задачи.
-func RedactText(s string) string { return redactRe.ReplaceAllString(s, "${1}***") }
+func RedactText(s string) string { return RedactLinks(redactRe.ReplaceAllString(s, "${1}***")) }

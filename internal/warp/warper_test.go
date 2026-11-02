@@ -229,3 +229,82 @@ func TestIPsListParsing(t *testing.T) {
 		t.Fatalf("%v %v", got, err)
 	}
 }
+
+// Ссылки подписок затираются по значению, а не по имени поля: link, url,
+// outbound и любое другое имя не спасают ключ в адресе.
+func TestSanitizeStatusRedactsLinksByValue(t *testing.T) {
+	links := []string{
+		"ss://Y2hhY2hhMjA6c2VjcmV0@1.2.3.4:8388#node",
+		"vless://11111111-2222-3333-4444-555555555555@host:443?security=reality&pbk=ABC#x",
+		"vmess://eyJhZGQiOiJ4In0=", "trojan://pass@host:443", "hy2://auth@host:443/?sni=x",
+		"hysteria2://auth@host:443", "wireguard://PRIVATEKEY@host:51820",
+		"https://user:hunter2@proxy.example.com/path",
+	}
+	raw := map[string]any{
+		"outbound": map[string]any{"link": links[0], "name": "n", "nested": []any{map[string]any{"x": links[1]}, links[2]}},
+		"url":      links[3], "note": "см. " + links[4] + " и " + links[5],
+		"list": []any{links[6], links[7]},
+		"mode": "slave", "count": 3.0,
+	}
+	data, _ := json.Marshal(raw)
+	clean, err := SanitizeStatus(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range links {
+		secret := l[strings.Index(l, "://")+3:]
+		if strings.Contains(string(clean), secret) || strings.Contains(string(clean), l) {
+			t.Errorf("ссылка осталась в ответе: %s\n%s", l, clean)
+		}
+	}
+	st, err := ParseStatus(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawOut, _ := json.Marshal(st.Raw)
+	for _, l := range links {
+		if strings.Contains(string(rawOut), l[strings.Index(l, "://")+3:]) {
+			t.Errorf("ссылка в Status.Raw: %s", l)
+		}
+	}
+	if !strings.Contains(string(clean), `"mode":"slave"`) || !strings.Contains(string(clean), "ss://***") {
+		t.Errorf("остальное должно сохраниться: %s", clean)
+	}
+}
+
+func TestRedactTextRedactsLinks(t *testing.T) {
+	got := RedactText("outbound: ss://Y2hh@1.2.3.4:8388 и vless://u@h:1 и hy2://a@b")
+	for _, bad := range []string{"Y2hh", "1.2.3.4", "u@h", "a@b"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("%q остался: %s", bad, got)
+		}
+	}
+	// В журнале задач (RunSteps) ссылки тоже затираются.
+	w := &Warper{Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte("link=vless://abc@host:443\nreach ss://zzz@h:1\n"), nil
+	}}
+	var out bytes.Buffer
+	if err := w.RunSteps(context.Background(), [][]string{{"doctor"}}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "abc@host") || strings.Contains(out.String(), "zzz@h") {
+		t.Fatalf("ссылка в журнале задачи:\n%s", out.String())
+	}
+}
+
+func TestWarperQueriesHaveDeadline(t *testing.T) {
+	var withDeadline int
+	w := &Warper{Dir: t.TempDir(), Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if _, ok := ctx.Deadline(); ok {
+			withDeadline++
+		}
+		return []byte("{}"), nil
+	}}
+	os.WriteFile(filepath.Join(w.Dir, "version"), []byte("1.0.0"), 0o644)
+	w.Status(context.Background())
+	w.Domains(context.Background())
+	w.IPs(context.Background())
+	if withDeadline != 3 {
+		t.Fatalf("опросов со сроком: %d из 3", withDeadline)
+	}
+}

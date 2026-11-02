@@ -280,19 +280,33 @@ func (a *InstallAnswers) Validate() error {
 			return errors.New("для режима openvpn нужен путь к .ovpn")
 		}
 	}
+	// Ответы идут в псевдотерминал: дисциплина линии превращает Ctrl-C, Ctrl-D,
+	// Ctrl-U, Ctrl-Z и подобные байты в сигналы, конец ввода и стирание строки —
+	// установщик прервался бы или получил обрезанный ответ.
 	for _, s := range []string{a.SlaveLink, a.SlavePort, a.SlaveKey, a.ProxyLink, a.OvpnPath, a.OvpnUser, a.OvpnPass, a.Subnet} {
-		if strings.ContainsAny(s, "\r\n") {
-			return errors.New("ответы не могут содержать переводы строк")
+		if hasControl(s) {
+			return errors.New("ответы не могут содержать управляющие символы и переводы строк")
 		}
 	}
 	if w := a.WG; w != nil {
 		for _, s := range []string{w.Endpoint, w.Address, w.PrivateKey, w.PublicKey, w.PresharedKey, w.Keepalive} {
-			if strings.ContainsAny(s, "\r\n") {
-				return errors.New("ответы не могут содержать переводы строк")
+			if hasControl(s) {
+				return errors.New("ответы не могут содержать управляющие символы и переводы строк")
 			}
 		}
 	}
 	return nil
+}
+
+// hasControl — есть ли в строке байт ниже 0x20 или 0x7f (в том числе внутри
+// многобайтовых символов такого быть не может, UTF-8 их не использует).
+func hasControl(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 var subnetV4Re = regexp.MustCompile(`^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.0/(\d{1,2})$`)

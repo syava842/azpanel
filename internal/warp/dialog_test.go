@@ -283,3 +283,26 @@ func TestRulesCoverInstallScript(t *testing.T) {
 		t.Fatalf("найдено всего %d вопросов — разбор install.sh сломан", n)
 	}
 }
+
+// Управляющие символы в ответах превратились бы в сигналы и стирание строки
+// на псевдотерминале: любой байт ниже 0x20 и 0x7f — отказ.
+func TestAnswersRejectControlCharacters(t *testing.T) {
+	for _, c := range []string{"\x03", "\x04", "\x15", "\x1a", "\x1b", "\t", "\x7f", "\r", "\n", "\x00"} {
+		a := InstallAnswers{Mode: "vless", ProxyLink: "vless://u@h:1" + c + "x"}
+		if err := a.Validate(); err == nil {
+			t.Errorf("символ %q принят в ссылке", c)
+		}
+		a = InstallAnswers{Mode: "wg", WG: &WGManual{Endpoint: "h:1", Address: "10.0.0.2/32", PrivateKey: "k" + c, PublicKey: "p"}}
+		if err := a.Validate(); err == nil {
+			t.Errorf("символ %q принят в ключе WireGuard", c)
+		}
+		a = InstallAnswers{Mode: "openvpn", OvpnPath: "/root/a.ovpn", OvpnPass: "pw" + c}
+		if err := a.Validate(); err == nil {
+			t.Errorf("символ %q принят в пароле openvpn", c)
+		}
+	}
+	ok := InstallAnswers{Mode: "vless", ProxyLink: "vless://u@h:1?a=b#имя"}
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("обычная ссылка с юникодом отклонена: %v", err)
+	}
+}
