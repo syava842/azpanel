@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 
 	"github.com/syava842/azpanel/internal/telemt"
@@ -18,7 +19,7 @@ func init() {
 		}
 		env := telemt.NewEnv()
 		env.Log = out
-		return env.Install(ctx, p)
+		return redactTelemtErr(env.Install(ctx, p))
 	}
 	// telemt-apply --params ФАЙЛ: правка пользователей и перезапуск с проверкой
 	internalModes["telemt-apply"] = func(ctx context.Context, args []string, out io.Writer) error {
@@ -28,7 +29,7 @@ func init() {
 		}
 		env := telemt.NewEnv()
 		env.Log = out
-		return env.Apply(ctx, p)
+		return redactTelemtErr(env.Apply(ctx, p))
 	}
 }
 
@@ -59,5 +60,14 @@ func internalTelemtUpdate(ctx context.Context, args []string, out io.Writer) err
 		}
 		i++
 	}
-	return env.Update(ctx, force)
+	return redactTelemtErr(env.Update(ctx, force))
+}
+
+// redactTelemtErr затирает секреты в тексте ошибки: stderr задачи — её журнал,
+// который панель показывает целиком.
+func redactTelemtErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	return errors.New(telemt.RedactSecrets(err.Error()))
 }
