@@ -237,7 +237,7 @@ func TestWizardNonInteractivePathInNginx(t *testing.T) {
 	if strings.Count(got, "include /etc/nginx/snippets/azpanel.conf; # azpanel") != 1 {
 		t.Fatalf("include не вставлен ровно один раз:\n%s", got)
 	}
-	if !strings.Contains(string(e.fs.files[SnippetPath]), "location /azpanel/") {
+	if !strings.Contains(string(e.fs.files[SnippetPath]), "location ^~ /azpanel/") {
 		t.Fatal("фрагмент не записан")
 	}
 	if e.written.Panel.BasePath != "/azpanel/" || e.written.Panel.PublicURL != "https://vpn.test" {

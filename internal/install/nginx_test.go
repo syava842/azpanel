@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -158,7 +159,7 @@ func TestAddIncludeTabIndentAndStale(t *testing.T) {
 func TestSnippetKeepsPrefix(t *testing.T) {
 	s := Snippet("/azpanel", "127.0.0.1:8080")
 	for _, want := range []string{
-		"location /azpanel/ {",
+		"location ^~ /azpanel/ {",
 		"proxy_pass http://127.0.0.1:8080;\n",
 		"proxy_set_header Host $host;",
 		"proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
@@ -173,7 +174,7 @@ func TestSnippetKeepsPrefix(t *testing.T) {
 	if strings.Contains(s, "proxy_pass http://127.0.0.1:8080/") {
 		t.Fatal("proxy_pass не должен заканчиваться путём")
 	}
-	if !strings.Contains(Snippet("/", "127.0.0.1:8080"), "location / {") {
+	if !strings.Contains(Snippet("/", "127.0.0.1:8080"), "location ^~ / {") {
 		t.Fatal("корневой префикс")
 	}
 }
@@ -192,12 +193,34 @@ type fakeSys struct {
 	cmds    []string
 	nginxT  error
 	reloadE error
+	initial map[string]bool // файлы, которые были до правок
+	stray   []string        // посторонние файлы в каталогах, которые читает nginx
+}
+
+// strayFiles — файлы в sites-enabled, conf.d и snippets, которых не было до
+// правок и которые не наши: nginx подключает эти каталоги целиком.
+func (f *fakeSys) strayFiles() []string {
+	var out []string
+	for p := range f.files {
+		for _, d := range []string{"/etc/nginx/sites-enabled/", "/etc/nginx/conf.d/", "/etc/nginx/snippets/"} {
+			if !strings.HasPrefix(p, d) || f.initial[p] {
+				continue
+			}
+			if p == SnippetPath || p == AcmeSnippetPath {
+				continue
+			}
+			out = append(out, p)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func newFakeNginx(files map[string]string) (*Nginx, *fakeSys) {
-	f := &fakeSys{files: map[string][]byte{}, links: map[string]string{}}
+	f := &fakeSys{files: map[string][]byte{}, links: map[string]string{}, initial: map[string]bool{}}
 	for k, v := range files {
 		f.files[k] = []byte(v)
+		f.initial[k] = true
 	}
 	n := &Nginx{
 		Dir: "/etc/nginx",
@@ -221,9 +244,18 @@ func newFakeNginx(files map[string]string) (*Nginx, *fakeSys) {
 			return fs.ErrNotExist
 		},
 		Symlink: func(target, link string) error { f.links[link] = target; return nil },
+		Readlink: func(link string) (string, error) {
+			if t, ok := f.links[link]; ok {
+				return t, nil
+			}
+			return "", fs.ErrNotExist
+		},
+		BackupDir: "/opt/azpanel/backup/nginx",
 		Run: func(name string, args ...string) ([]byte, error) {
 			f.cmds = append(f.cmds, name+" "+strings.Join(args, " "))
 			if name == "nginx" {
+				// Настоящий nginx -t загрузил бы всё, что лежит в этих каталогах.
+				f.stray = append(f.stray, f.strayFiles()...)
 				if f.nginxT != nil {
 					return []byte("unexpected \"}\" in /etc/nginx/x:1"), f.nginxT
 				}
@@ -248,11 +280,11 @@ func TestEnableAndDisable(t *testing.T) {
 	if !strings.Contains(string(f.files[file]), "include /etc/nginx/snippets/azpanel.conf; # azpanel") {
 		t.Fatal("include не вставлен")
 	}
-	if !strings.Contains(string(f.files[SnippetPath]), "location /azpanel/") {
+	if !strings.Contains(string(f.files[SnippetPath]), "location ^~ /azpanel/") {
 		t.Fatal("фрагмент не записан")
 	}
-	if string(f.files[file+".bak-20261102"]) != orig {
-		t.Fatal("нет копии с датой")
+	if string(f.files["/opt/azpanel/backup/nginx/vpn.test.20261102T000000Z"]) != orig {
+		t.Fatalf("нет копии в каталоге копий: %v", f.keys())
 	}
 	if strings.Join(f.cmds, "|") != "nginx -t|systemctl reload nginx" {
 		t.Fatalf("команды: %v", f.cmds)
@@ -262,6 +294,9 @@ func TestEnableAndDisable(t *testing.T) {
 	}
 	if string(f.files[file]) != orig {
 		t.Fatal("после Disable файл не совпал с исходным")
+	}
+	if len(f.stray) != 0 || len(f.strayFiles()) != 0 {
+		t.Fatalf("в каталогах nginx появились посторонние файлы: %v %v", f.stray, f.strayFiles())
 	}
 	if _, ok := f.files[SnippetPath]; ok {
 		t.Fatal("фрагмент остался")
@@ -283,6 +318,9 @@ func TestEnableNginxTFailureRestores(t *testing.T) {
 	}
 	if _, ok := f.files[SnippetPath]; ok {
 		t.Fatal("созданный фрагмент не удалён")
+	}
+	if len(f.strayFiles()) != 0 || len(f.keysUnder("/opt/azpanel/backup/nginx/")) != 0 {
+		t.Fatalf("после отката остались копии: %v", f.keys())
 	}
 	for _, c := range f.cmds {
 		if strings.Contains(c, "reload") {
@@ -321,5 +359,113 @@ func TestApplyReloadErrorReported(t *testing.T) {
 	err := n.Apply(nil, func() error { return nil })
 	if err == nil || !strings.Contains(err.Error(), "reload") {
 		t.Fatal(err)
+	}
+}
+
+func (f *fakeSys) keys() []string {
+	var out []string
+	for p := range f.files {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (f *fakeSys) keysUnder(prefix string) []string {
+	var out []string
+	for _, p := range f.keys() {
+		if strings.HasPrefix(p, prefix) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// Копии лежат вне каталогов nginx: ни uninstall, ни поиск include их не видят,
+// и nginx -t не загружает их как конфиги (C1).
+func TestBackupsOutsideNginxDirs(t *testing.T) {
+	_, orig := copyTestdata(t, "default")
+	const file = "/etc/nginx/sites-enabled/default"
+	n, f := newFakeNginx(map[string]string{file: orig})
+	srv := parseServers(file, orig)[0].NginxServer
+	if err := n.Enable(srv, "/azpanel", "127.0.0.1:8080"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.stray) != 0 || len(f.strayFiles()) != 0 {
+		t.Fatalf("посторонние файлы в каталогах nginx: %v %v", f.stray, f.strayFiles())
+	}
+	if len(f.keysUnder("/opt/azpanel/backup/nginx/")) == 0 {
+		t.Fatal("копий нет")
+	}
+	// Другой момент времени: копии копятся только в каталоге копий.
+	n.Now = func() time.Time { return time.Date(2026, 11, 3, 1, 2, 3, 0, time.UTC) }
+	if err := n.Disable(file); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.stray) != 0 || len(f.strayFiles()) != 0 {
+		t.Fatalf("посторонние файлы после Disable: %v %v", f.stray, f.strayFiles())
+	}
+	if _, ok := f.files["/opt/azpanel/backup/nginx/default.20261103T010203Z"]; !ok {
+		t.Fatalf("копия Disable не там: %v", f.keys())
+	}
+}
+
+// Старая копия .bak-... в sites-enabled поиском блоков не берётся.
+func TestFindServersSkipsOldBackups(t *testing.T) {
+	dir := t.TempDir()
+	_, orig := copyTestdata(t, "default")
+	writeReal(t, filepath.Join(dir, "sites-enabled", "default"), orig)
+	writeReal(t, filepath.Join(dir, "sites-enabled", "default.bak-20260101"), orig)
+	got, err := FindServers(dir)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("%v %d", err, len(got))
+	}
+}
+
+// Правка файла по символьной ссылке пишет в цель, ссылка остаётся ссылкой (I1).
+func TestWriteKeepOrNewKeepsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "sites-available", "x")
+	link := filepath.Join(dir, "sites-enabled", "x")
+	writeReal(t, target, "старое\n")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skip("символьные ссылки недоступны:", err)
+	}
+	if err := writeKeepOrNew(link, []byte("новое\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st, err := os.Lstat(link)
+	if err != nil || st.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("ссылка заменена файлом: %v %v", st, err)
+	}
+	b, _ := os.ReadFile(target)
+	if string(b) != "новое\n" {
+		t.Fatalf("цель не обновлена: %q", b)
+	}
+}
+
+// Disable по двум файлам с include — один проход: nginx -t видит оба убранными.
+func TestDisableTwoIncludeFilesOneApply(t *testing.T) {
+	_, orig := copyTestdata(t, "vpn.test")
+	const a, b = "/etc/nginx/sites-enabled/a", "/etc/nginx/sites-enabled/b"
+	n, f := newFakeNginx(map[string]string{a: orig, b: orig})
+	if err := n.Enable(parseServers(a, orig)[1].NginxServer, "/azpanel", "127.0.0.1:8080"); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Enable(parseServers(b, orig)[1].NginxServer, "/azpanel", "127.0.0.1:8080"); err != nil {
+		t.Fatal(err)
+	}
+	f.cmds = nil
+	if err := n.Disable(a, b); err != nil {
+		t.Fatal(err)
+	}
+	if string(f.files[a]) != orig || string(f.files[b]) != orig {
+		t.Fatal("include остался")
+	}
+	if strings.Join(f.cmds, "|") != "nginx -t|systemctl reload nginx" {
+		t.Fatalf("ожидался один проход: %v", f.cmds)
 	}
 }

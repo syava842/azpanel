@@ -69,8 +69,21 @@ func TestSelfSignedParses(t *testing.T) {
 
 func TestPlanACME(t *testing.T) {
 	servers := testServers(t)
-	// Домен с блоком 80 и готовым location проверки (warper-web).
-	p, err := PlanACME(servers, "vpn.test", "nginx")
+	// На 94 первым по алфавиту читается vpn.test с return: блок warper-web
+	// с тем же server_name nginx отбрасывает, проверка получила бы редирект (I3).
+	if p, err := PlanACME(servers, "vpn.test", "nginx"); err == nil || !strings.Contains(err.Error(), "return") {
+		t.Fatalf("первый блок домена с return должен давать отказ: %+v %v", p, err)
+	}
+	// Первым стоит блок с location проверки (порядок обратный): берём его root.
+	var swapped []NginxServer
+	for _, s := range servers {
+		if strings.HasSuffix(s.File, "warper-web") {
+			swapped = append([]NginxServer{s}, swapped...)
+		} else {
+			swapped = append(swapped, s)
+		}
+	}
+	p, err := PlanACME(swapped, "vpn.test", "nginx")
 	if err != nil || p.Mode != ACMEExisting || p.Webroot != "/var/www/html" {
 		t.Fatalf("%+v %v", p, err)
 	}
@@ -103,17 +116,17 @@ func TestPlanACME(t *testing.T) {
 
 func TestCertbotArgs(t *testing.T) {
 	got := strings.Join(CertbotArgs(ACMEPlan{Mode: ACMETemp, Webroot: AcmeWebroot}, "a.example", "m@x.ru"), " ")
-	want := "certonly --webroot -w /var/www/azpanel-acme -d a.example --non-interactive --agree-tos -m m@x.ru"
+	want := "certonly --webroot -w /var/www/azpanel-acme -d a.example --non-interactive --agree-tos -m m@x.ru --deploy-hook systemctl reload nginx"
 	if got != want {
 		t.Fatal(got)
 	}
 	got = strings.Join(CertbotArgs(ACMEPlan{Mode: ACMEStandalone}, "a.example", "m@x.ru"), " ")
-	if got != "certonly --standalone -d a.example --non-interactive --agree-tos -m m@x.ru" {
+	if got != "certonly --standalone -d a.example --non-interactive --agree-tos -m m@x.ru --deploy-hook systemctl reload nginx" {
 		t.Fatal(got)
 	}
 }
 
-func TestIssueTempAddsAndRemovesLocation(t *testing.T) {
+func TestIssueTempKeepsLocationForRenewal(t *testing.T) {
 	_, orig := copyTestdata(t, "default")
 	const file = "/etc/nginx/sites-enabled/default"
 	n, f := newFakeNginx(map[string]string{file: orig})
@@ -141,11 +154,24 @@ func TestIssueTempAddsAndRemovesLocation(t *testing.T) {
 	if !strings.Contains(during, "azpanel-acme.conf; # azpanel") {
 		t.Fatal("во время certbot location проверки не подключён")
 	}
+	if !strings.Contains(string(f.files[file]), "azpanel-acme.conf; # azpanel") {
+		t.Fatal("после выпуска location проверки убран: продление не пройдёт")
+	}
+	if !strings.Contains(string(f.files[AcmeSnippetPath]), "acme-challenge") {
+		t.Fatal("фрагмент проверки удалён")
+	}
+	if len(f.stray) != 0 || len(f.strayFiles()) != 0 {
+		t.Fatalf("посторонние файлы в каталогах nginx: %v", f.stray)
+	}
+	// uninstall убирает и его.
+	if err := n.Disable(file); err != nil {
+		t.Fatal(err)
+	}
 	if string(f.files[file]) != orig {
-		t.Fatal("после выпуска временная строка не убрана")
+		t.Fatal("Disable не убрал include проверки")
 	}
 	if _, ok := f.files[AcmeSnippetPath]; ok {
-		t.Fatal("временный фрагмент остался")
+		t.Fatal("фрагмент проверки остался после Disable")
 	}
 }
 

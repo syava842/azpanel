@@ -252,7 +252,8 @@ func Uninstall(o Options) error {
 	if o.Nginx != nil {
 		includeFiles = o.Nginx.IncludeFiles()
 		_, serr := o.Nginx.ReadFile(SnippetPath)
-		nginxOwn = serr == nil || len(includeFiles) > 0
+		_, aerr := o.Nginx.ReadFile(AcmeSnippetPath)
+		nginxOwn = serr == nil || aerr == nil || len(includeFiles) > 0
 		if nginxOwn {
 			what += ", строка include и фрагмент " + SnippetPath + " в nginx (nginx -t, reload)"
 		}
@@ -273,13 +274,10 @@ func Uninstall(o Options) error {
 	if nginxOwn {
 		// Сначала nginx: пока панель жива, сбой уборки не оставляет
 		// висящий proxy_pass в пустоту.
-		if len(includeFiles) == 0 {
-			includeFiles = []string{""}
-		}
-		for _, f := range includeFiles {
-			if err := o.Nginx.Disable(f); err != nil {
-				return fmt.Errorf("nginx: %w", err)
-			}
+		// Одним проходом по всем файлам: пока в одном из них осталась
+		// строка include, фрагмент удалять нельзя (nginx -t не пройдёт).
+		if err := o.Nginx.Disable(includeFiles...); err != nil {
+			return fmt.Errorf("nginx: %w", err)
 		}
 	}
 	if _, err := os.Stat(panelUnit); err == nil {
@@ -317,7 +315,8 @@ func panelListen() string {
 	return config.Default().Panel.Listen
 }
 
-// IncludeFiles — файлы nginx, где стоит строка include нашего фрагмента.
+// IncludeFiles — файлы nginx, где стоит строка include нашего фрагмента
+// (панели или проверки домена).
 func (n *Nginx) IncludeFiles() []string {
 	servers, _ := FindServers(n.dir())
 	seen := map[string]bool{}
@@ -327,7 +326,8 @@ func (n *Nginx) IncludeFiles() []string {
 			continue
 		}
 		seen[s.File] = true
-		if data, err := n.ReadFile(s.File); err == nil && strings.Contains(string(data), includeLine(SnippetPath)) {
+		if data, err := n.ReadFile(s.File); err == nil && (strings.Contains(string(data), includeLine(SnippetPath)) ||
+			strings.Contains(string(data), includeLine(AcmeSnippetPath))) {
 			out = append(out, s.File)
 		}
 	}

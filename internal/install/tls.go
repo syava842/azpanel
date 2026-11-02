@@ -33,7 +33,7 @@ type ACMEMode int
 const (
 	ACMEStandalone ACMEMode = iota // порт 80 свободен: certbot слушает сам
 	ACMEExisting                   // в nginx на 80 уже есть location проверки: берём его root
-	ACMETemp                       // на 80 слушает nginx: временный location во фрагменте
+	ACMETemp                       // на 80 слушает nginx: постоянный location во фрагменте
 )
 
 // ACMEPlan — решение PlanACME.
@@ -64,26 +64,36 @@ func PlanACME(servers []NginxServer, domain, port80Owner string) (ACMEPlan, erro
 	if len(on80) == 0 {
 		return ACMEPlan{}, errors.New("nginx занимает порт 80, но в его конфигах нет server на 80: проверьте nginx -T")
 	}
-	// Уже есть location проверки у блока этого домена.
-	for _, s := range on80 {
-		if s.ACMERoot != "" && s.NamedFor(domain) {
-			return ACMEPlan{Mode: ACMEExisting, Webroot: s.ACMERoot, Server: s}, nil
+	// nginx берёт из блоков с одинаковым server_name на порту первый (порядок
+	// чтения конфигов), остальные отбрасывает. Решает поэтому первый блок
+	// домена; нет блока домена — сервер по умолчанию на порту 80.
+	var chosen *NginxServer
+	for i := range on80 {
+		if on80[i].NamedFor(domain) {
+			chosen = &on80[i]
+			break
 		}
 	}
-	// Блок без return: вставленный location в нём сработает. Сначала по
-	// имени домена, затем универсальный.
-	for _, catchAll := range []bool{false, true} {
-		for _, s := range on80 {
-			if s.Redirects {
-				continue
-			}
-			if !catchAll && s.NamedFor(domain) || catchAll && (s.NamedFor("_") || len(s.ServerName) == 0) {
-				return ACMEPlan{Mode: ACMETemp, Webroot: AcmeWebroot, Server: s}, nil
+	if chosen == nil {
+		for i := range on80 {
+			if on80[i].defaultServer(80) {
+				chosen = &on80[i]
+				break
 			}
 		}
 	}
-	return ACMEPlan{}, fmt.Errorf("на порту 80 у домена %s только блоки с return (редирект): location проверки в них не сработает; "+
-		"добавьте в такой блок location /.well-known/acme-challenge/ вручную или выберите другой способ", domain)
+	if chosen == nil {
+		chosen = &on80[0]
+	}
+	if chosen.Redirects {
+		return ACMEPlan{}, fmt.Errorf("запросы домена %s на порту 80 принимает первый по порядку блок %s (строка %d), а в нём return (редирект): "+
+			"location проверки до запроса не доживёт; добавьте в этот блок location /.well-known/acme-challenge/ "+
+			"выше return вручную или выберите другой способ", domain, chosen.File, chosen.StartLine)
+	}
+	if chosen.ACMERoot != "" {
+		return ACMEPlan{Mode: ACMEExisting, Webroot: chosen.ACMERoot, Server: *chosen}, nil
+	}
+	return ACMEPlan{Mode: ACMETemp, Webroot: AcmeWebroot, Server: *chosen}, nil
 }
 
 // TLS — сертификаты. Всё, что меняет систему, идёт через поля.
@@ -178,7 +188,9 @@ func (t *TLS) ExistingLetsEncrypt(domain string) (certPath, keyPath string, ok b
 	return certPath, keyPath, true
 }
 
-// CertbotArgs — аргументы certbot для плана.
+// CertbotArgs — аргументы certbot для плана. deploy-hook перезагружает nginx
+// после каждого выпуска и продления: без него продлённый сертификат nginx
+// не подхватит.
 func CertbotArgs(plan ACMEPlan, domain, email string) []string {
 	args := []string{"certonly"}
 	if plan.Mode == ACMEStandalone {
@@ -186,12 +198,14 @@ func CertbotArgs(plan ACMEPlan, domain, email string) []string {
 	} else {
 		args = append(args, "--webroot", "-w", plan.Webroot)
 	}
-	return append(args, "-d", domain, "--non-interactive", "--agree-tos", "-m", email)
+	return append(args, "-d", domain, "--non-interactive", "--agree-tos", "-m", email,
+		"--deploy-hook", "systemctl reload nginx")
 }
 
-// IssueLetsEncrypt выпускает сертификат. Для ACMETemp на время выпуска во
-// фрагмент добавляется location проверки и сразу убирается. Возвращает пути
-// к сертификату и ключу.
+// IssueLetsEncrypt выпускает сертификат. Для ACMETemp в блок на 80 подключается
+// фрагмент azpanel-acme.conf с location проверки; после успешного выпуска он
+// остаётся для продления, его удаляет uninstall. Возвращает пути к
+// сертификату и ключу.
 func (t *TLS) IssueLetsEncrypt(plan ACMEPlan, domain, email string) (certPath, keyPath string, err error) {
 	if domain == "" || email == "" {
 		return "", "", errors.New("для Let's Encrypt нужны домен и почта")
@@ -213,9 +227,14 @@ func (t *TLS) IssueLetsEncrypt(plan ACMEPlan, domain, email string) (certPath, k
 			})
 		})
 		if aerr != nil {
-			return "", "", fmt.Errorf("временный location проверки домена: %w", aerr)
+			return "", "", fmt.Errorf("location проверки домена: %w", aerr)
 		}
+		// Выпуск удался — location остаётся: certbot продлевает сертификат
+		// через тот же webroot. Не удался — убираем, продлевать нечего.
 		defer func() {
+			if err == nil {
+				return
+			}
 			cerr := t.Nginx.Apply([]string{srv.File, AcmeSnippetPath}, func() error {
 				if err := t.Nginx.editInclude(srv.File, func(src string) (string, error) {
 					return DropInclude(src, AcmeSnippetPath), nil
@@ -228,7 +247,7 @@ func (t *TLS) IssueLetsEncrypt(plan ACMEPlan, domain, email string) (certPath, k
 				return nil
 			})
 			if cerr != nil {
-				err = errors.Join(err, fmt.Errorf("уборка временного location: %w", cerr))
+				err = errors.Join(err, fmt.Errorf("уборка location проверки: %w", cerr))
 			}
 		}()
 	}

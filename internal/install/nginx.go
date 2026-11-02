@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/syava842/azpanel/internal/fsutil"
+	"github.com/syava842/azpanel/internal/paths"
 )
 
 // Пути и метка, которыми azpanel помечает свои правки в nginx.
@@ -77,6 +78,29 @@ func (s NginxServer) SSL() bool {
 		fields := strings.Fields(l)
 		for _, w := range fields[min(1, len(fields)):] {
 			if w == "ssl" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// defaultServer — блок помечен default_server на порту.
+func (s NginxServer) defaultServer(port int) bool {
+	for _, l := range s.Listen {
+		fields := strings.Fields(l)
+		if len(fields) == 0 {
+			continue
+		}
+		addr := fields[0]
+		if i := strings.LastIndex(addr, ":"); i >= 0 {
+			addr = addr[i+1:]
+		}
+		if p, err := strconv.Atoi(addr); err != nil || p != port {
+			continue
+		}
+		for _, w := range fields[1:] {
+			if w == "default_server" {
 				return true
 			}
 		}
@@ -234,6 +258,9 @@ func FindServers(dir string) ([]NginxServer, error) {
 	}
 	var servers []NginxServer
 	for _, f := range files {
+		if isBackupName(f) {
+			continue
+		}
 		st, err := os.Stat(f)
 		if err != nil || st.IsDir() {
 			continue
@@ -247,6 +274,12 @@ func FindServers(dir string) ([]NginxServer, error) {
 		}
 	}
 	return servers, nil
+}
+
+// isBackupName — имя похоже на старую копию .bak-… (прежние версии мастера
+// клали их рядом с конфигом, и nginx загружал их как конфиги).
+func isBackupName(file string) bool {
+	return strings.Contains(path.Base(filepath.ToSlash(file)), ".bak-")
 }
 
 func normalizeBase(basePath string) string {
@@ -266,7 +299,7 @@ func Snippet(basePath, upstream string) string {
 	if loc != "/" {
 		fmt.Fprintf(&b, "location = %s { return 301 %s; }\n", strings.TrimSuffix(loc, "/"), loc)
 	}
-	fmt.Fprintf(&b, "location %s {\n", loc)
+	fmt.Fprintf(&b, "location ^~ %s {\n", loc)
 	fmt.Fprintf(&b, "    proxy_pass http://%s;\n", upstream)
 	b.WriteString("    proxy_set_header Host $host;\n")
 	b.WriteString("    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n")
@@ -277,7 +310,8 @@ func Snippet(basePath, upstream string) string {
 	return b.String()
 }
 
-// AcmeSnippet — временный location для проверки домена certbot'ом.
+// AcmeSnippet — location для проверки домена certbot'ом. Остаётся и после
+// выпуска: certbot запоминает webroot и по нему же продлевает сертификат.
 func AcmeSnippet(webroot string) string {
 	return fmt.Sprintf("location ^~ /.well-known/acme-challenge/ {\n    root %s;\n}\n", webroot)
 }
@@ -389,12 +423,17 @@ func editFile(read func(string) ([]byte, error), write func(string, []byte, os.F
 // Nginx — применение правок к nginx. Всё, что меняет систему, идёт через
 // поля, в тестах они подменяются.
 type Nginx struct {
-	Dir       string // корень конфига, по умолчанию /etc/nginx
+	Dir string // корень конфига, по умолчанию /etc/nginx
+	// BackupDir — куда ложатся копии правленых файлов. Только вне каталогов,
+	// которые читает nginx: sites-enabled/* подключается целиком, и копия
+	// файла стала бы вторым конфигом.
+	BackupDir string
 	ReadFile  func(path string) ([]byte, error)
 	WriteFile func(path string, data []byte, perm os.FileMode) error
 	MkdirAll  func(path string, perm os.FileMode) error
 	Remove    func(path string) error
 	Symlink   func(target, link string) error
+	Readlink  func(link string) (string, error)
 	Run       func(name string, args ...string) ([]byte, error) // вывод — общий
 	Now       func() time.Time
 }
@@ -404,11 +443,16 @@ func runCombined(name string, args ...string) ([]byte, error) {
 }
 
 // writeKeepOrNew пишет атомарно, сохраняя владельца и права существующего файла.
-func writeKeepOrNew(path string, data []byte, perm os.FileMode) error {
-	if _, err := os.Stat(path); err == nil {
-		return fsutil.WriteFileKeepMeta(path, data)
+// Символьная ссылка (sites-enabled/* -> sites-available/*) не заменяется
+// обычным файлом: запись идёт в её цель.
+func writeKeepOrNew(p string, data []byte, perm os.FileMode) error {
+	if real, err := filepath.EvalSymlinks(p); err == nil {
+		p = real
 	}
-	return fsutil.WriteFileAtomic(path, data, perm)
+	if _, err := os.Stat(p); err == nil {
+		return fsutil.WriteFileKeepMeta(p, data)
+	}
+	return fsutil.WriteFileAtomic(p, data, perm)
 }
 
 // NewNginx — рабочий вариант на реальной системе.
@@ -420,9 +464,18 @@ func NewNginx() *Nginx {
 		MkdirAll:  os.MkdirAll,
 		Remove:    os.Remove,
 		Symlink:   os.Symlink,
+		Readlink:  os.Readlink,
+		BackupDir: path.Join(filepath.ToSlash(paths.Backup()), "nginx"),
 		Run:       runCombined,
 		Now:       time.Now,
 	}
+}
+
+func (n *Nginx) backupDir() string {
+	if n.BackupDir == "" {
+		return path.Join(filepath.ToSlash(paths.Backup()), "nginx")
+	}
+	return n.BackupDir
 }
 
 func (n *Nginx) dir() string {
@@ -432,16 +485,29 @@ func (n *Nginx) dir() string {
 	return n.Dir
 }
 
-// Apply: копии файлов <файл>.bak-<дата>, change, nginx -t. Не прошёл —
-// все файлы возвращаются (созданные change удаляются), ошибка с выводом
-// nginx. Прошёл — systemctl reload nginx.
+// Apply: копии файлов в BackupDir (<имя>.<UTC-время>), change, nginx -t. Не
+// прошёл — все файлы возвращаются (созданные change и копии удаляются), ошибка
+// с выводом nginx. Прошёл — systemctl reload nginx.
 func (n *Nginx) Apply(files []string, change func() error) error {
+	return n.apply(files, nil, change)
+}
+
+// apply: links — символьные ссылки, которыми управляет change; их содержимое
+// не копируется, откат возвращает прежнюю цель (или удаляет новую ссылку).
+func (n *Nginx) apply(files, links []string, change func() error) error {
 	type saved struct {
 		data    []byte
 		existed bool
 	}
 	before := make(map[string]saved, len(files))
-	stamp := n.Now().Format("20060102")
+	prevLink := make(map[string]string, len(links))
+	stamp := n.Now().UTC().Format("20060102T150405Z")
+	var copies []string // копии, созданные этим вызовом
+	dropCopies := func() {
+		for _, c := range copies {
+			_ = n.Remove(c)
+		}
+	}
 	for _, f := range files {
 		data, err := n.ReadFile(f)
 		if err != nil {
@@ -449,14 +515,28 @@ func (n *Nginx) Apply(files []string, change func() error) error {
 				before[f] = saved{}
 				continue
 			}
+			dropCopies()
 			return fmt.Errorf("чтение %s: %w", f, err)
 		}
 		before[f] = saved{data: data, existed: true}
-		bak := f + ".bak-" + stamp
-		// Самая ранняя копия дня — исходная; её не затираем.
+		bak := path.Join(n.backupDir(), path.Base(filepath.ToSlash(f))+"."+stamp)
+		// Копия в ту же секунду уже есть — она исходная, не затираем.
 		if _, err := n.ReadFile(bak); err != nil {
-			if err := n.WriteFile(bak, data, 0o644); err != nil {
+			if err := n.MkdirAll(n.backupDir(), 0o700); err != nil {
+				dropCopies()
+				return fmt.Errorf("каталог копий %s: %w", n.backupDir(), err)
+			}
+			if err := n.WriteFile(bak, data, 0o600); err != nil {
+				dropCopies()
 				return fmt.Errorf("копия %s: %w", bak, err)
+			}
+			copies = append(copies, bak)
+		}
+	}
+	for _, l := range links {
+		if n.Readlink != nil {
+			if target, err := n.Readlink(l); err == nil {
+				prevLink[l] = target
 			}
 		}
 	}
@@ -472,10 +552,22 @@ func (n *Nginx) Apply(files []string, change func() error) error {
 				errs = append(errs, err)
 			}
 		}
+		for _, l := range links {
+			if err := n.Remove(l); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				errs = append(errs, err)
+			}
+			if target, ok := prevLink[l]; ok {
+				if err := n.Symlink(target, l); err != nil {
+					errs = append(errs, err)
+				}
+			}
+		}
 		return errors.Join(errs...)
 	}
 	fail := func(cause error) error {
-		if rerr := rollback(); rerr != nil {
+		rerr := rollback()
+		dropCopies()
+		if rerr != nil {
 			return fmt.Errorf("%w; возврат файлов не удался: %v", cause, rerr)
 		}
 		return cause
@@ -516,7 +608,7 @@ func (n *Nginx) Enable(server NginxServer, basePath, upstream string) error {
 func (n *Nginx) EnableOwnPort(port int, cert, key, serverName, basePath, upstream string) error {
 	avail := path.Join(n.dir(), ownPortFile)
 	link := path.Join(n.dir(), ownPortLink)
-	return n.Apply([]string{SnippetPath, avail, link}, func() error {
+	return n.apply([]string{SnippetPath, avail}, []string{link}, func() error {
 		if err := n.MkdirAll(path.Dir(SnippetPath), 0o755); err != nil {
 			return err
 		}
@@ -533,25 +625,32 @@ func (n *Nginx) EnableOwnPort(port int, cert, key, serverName, basePath, upstrea
 	})
 }
 
-// Disable — обратное Enable/EnableOwnPort: строка include (если файл
-// задан), фрагмент, файл и ссылка отдельного порта.
-func (n *Nginx) Disable(includeFile string) error {
+// Disable — обратное Enable/EnableOwnPort: строки include (во всех
+// перечисленных файлах разом: пока одна ещё подключает фрагмент, удалять его
+// нельзя), фрагменты, файл и ссылка отдельного порта. Пустые имена файлов
+// пропускаются.
+func (n *Nginx) Disable(includeFiles ...string) error {
 	avail := path.Join(n.dir(), ownPortFile)
 	link := path.Join(n.dir(), ownPortLink)
-	files := []string{SnippetPath, avail, link}
-	if includeFile != "" {
-		files = append([]string{includeFile}, files...)
+	var edit []string
+	seen := map[string]bool{}
+	for _, f := range includeFiles {
+		if f != "" && !seen[f] {
+			seen[f] = true
+			edit = append(edit, f)
+		}
 	}
-	return n.Apply(files, func() error {
-		if includeFile != "" {
-			err := n.editInclude(includeFile, func(src string) (string, error) {
-				return DropInclude(src, SnippetPath), nil
+	files := append(append([]string{}, edit...), SnippetPath, AcmeSnippetPath, avail)
+	return n.apply(files, []string{link}, func() error {
+		for _, f := range edit {
+			err := n.editInclude(f, func(src string) (string, error) {
+				return DropInclude(DropInclude(src, SnippetPath), AcmeSnippetPath), nil
 			})
 			if err != nil {
 				return err
 			}
 		}
-		for _, f := range []string{link, avail, SnippetPath} {
+		for _, f := range []string{link, avail, SnippetPath, AcmeSnippetPath} {
 			if err := n.Remove(f); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return err
 			}
