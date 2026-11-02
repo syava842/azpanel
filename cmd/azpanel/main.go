@@ -17,6 +17,7 @@ import (
 	"github.com/syava842/azpanel/internal/limits"
 	"github.com/syava842/azpanel/internal/node"
 	"github.com/syava842/azpanel/internal/paths"
+	"github.com/syava842/azpanel/internal/proxy"
 )
 
 var version = "dev"
@@ -39,6 +40,8 @@ func run(args []string) int {
 		return 0
 	case "node":
 		return runNode()
+	case "proxy":
+		return runProxy()
 	case "panel":
 		return report(cmdPanel(args[1:]))
 	case "hook":
@@ -152,6 +155,7 @@ func usage() {
   azpanel uninstall [--yes] [--purge]  удалить (--purge — вместе с /opt/azpanel)
   azpanel node                         агент узла (запускает systemd)
   azpanel panel                        веб-панель (запускает systemd)
+  azpanel proxy                        агент прокси для VPS с proxy.sh (запускает systemd)
   azpanel panel passwd [--user ИМЯ]    задать пароль администратора панели
   azpanel user list                    пользователи панели
   azpanel user reset <логин>           новый пароль, 2FA выключить, сессии завершить
@@ -163,4 +167,19 @@ func usage() {
   azpanel hook install|uninstall|status
   azpanel hook connect|disconnect      вызывается OpenVPN
 `)
+}
+
+func runProxy() int {
+	cfg, err := config.Load(paths.ConfigFile())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "azpanel proxy:", err)
+		return 1
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := proxy.Run(ctx, cfg, version); err != nil {
+		fmt.Fprintln(os.Stderr, "azpanel proxy:", err)
+		return 1
+	}
+	return 0
 }
