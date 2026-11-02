@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/syava842/azpanel/internal/nodeapi"
+	"github.com/syava842/azpanel/internal/store"
 )
 
 // fakeNode — поддельный агент: каждое поле-функция заменяет один метод Node.
@@ -132,6 +134,8 @@ func adminHash(t *testing.T) string {
 
 type testEnv struct {
 	srv    *Server
+	st     *store.Store
+	admin  store.User
 	h      http.Handler
 	node   *fakeNode
 	sleeps []time.Duration
@@ -140,15 +144,27 @@ type testEnv struct {
 func newEnv(t *testing.T, hash string) *testEnv {
 	t.Helper()
 	e := &testEnv{node: &fakeNode{}}
+	st, err := store.Open(filepath.Join(t.TempDir(), "azpanel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	e.st = st
+	if hash != "" { // пустой хеш — в панели нет пользователей
+		e.admin, err = st.CreateUser(context.Background(), store.User{Login: "admin", Hash: hash, Role: store.RoleAdmin})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	e.srv = &Server{
-		Node:      e.node,
-		AdminUser: "admin",
-		AdminHash: hash,
-		Version:   "test",
-		Sessions:  NewSessions(time.Hour),
-		Limiter:   NewLimiter(),
-		Log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Sleep:     func(d time.Duration) { e.sleeps = append(e.sleeps, d) },
+		Node:       e.node,
+		Store:      st,
+		NodeID:     store.LocalNode,
+		Version:    "test",
+		SessionTTL: time.Hour,
+		Limiter:    NewLimiter(),
+		Log:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Sleep:      func(d time.Duration) { e.sleeps = append(e.sleeps, d) },
 	}
 	e.h = e.srv.Handler()
 	return e
@@ -173,14 +189,31 @@ func login(e *testEnv, pw string) *httptest.ResponseRecorder {
 	return e.do(postForm("/login", url.Values{"user": {"admin"}, "password": {pw}}))
 }
 
-// sessionCookie — вход напрямую через Sessions, минуя форму.
+// sessionCookie — вход администратора напрямую через базу, минуя форму.
 func (e *testEnv) sessionCookie(t *testing.T) (*http.Cookie, Session) {
 	t.Helper()
-	s, err := e.srv.Sessions.Create("admin")
+	return e.sessionFor(t, e.admin, false)
+}
+
+// sessionFor — сессия указанного пользователя (pending — ждёт код 2FA).
+func (e *testEnv) sessionFor(t *testing.T, u store.User, pending bool) (*http.Cookie, Session) {
+	t.Helper()
+	id, s, err := e.srv.createSession(context.Background(), u, "10.0.0.1", "test-agent", pending)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &http.Cookie{Name: cookieName, Value: s.ID}, s
+	return &http.Cookie{Name: cookieName, Value: id}, s
+}
+
+// lookup — сессия по значению cookie, как её видит сервер.
+func (e *testEnv) lookup(value string) (Session, bool) {
+	r := httptest.NewRequest("GET", "/", nil)
+	r.AddCookie(&http.Cookie{Name: cookieName, Value: value})
+	s, ok, err := e.srv.sessionFromRequest(r)
+	if err != nil {
+		panic(err)
+	}
+	return s, ok
 }
 
 func TestHealthz(t *testing.T) {
@@ -226,7 +259,7 @@ func TestLoginOK(t *testing.T) {
 	if c == nil || !c.HttpOnly || c.SameSite != http.SameSiteStrictMode || c.Secure || c.Path != "/" {
 		t.Fatalf("cookie: %+v", c)
 	}
-	if _, ok := e.srv.Sessions.Get(c.Value); !ok {
+	if _, ok := e.lookup(c.Value); !ok {
 		t.Fatal("сессия не создана")
 	}
 	// За прокси с TLS — Secure.
@@ -464,7 +497,7 @@ func TestLogDoesNotLeakSecrets(t *testing.T) {
 	if cookie == nil {
 		t.Fatal("нет cookie после входа")
 	}
-	sess, _ := e.srv.Sessions.Get(cookie.Value)
+	sess, _ := e.lookup(cookie.Value)
 	// Действие над клиентом и выход.
 	e.node.ClientsFn = func(context.Context) ([]nodeapi.Client, error) {
 		return []nodeapi.Client{{Name: "bob", OpenVPN: true}}, nil
@@ -487,7 +520,8 @@ func TestLogDoesNotLeakSecrets(t *testing.T) {
 		"пароль":       testPassword,
 		"неверный пар": "wrong-password-xyz",
 		"хеш":          adminHash(t),
-		"ID сессии":    sess.ID,
+		"ID сессии":    cookie.Value,
+		"хеш ID":       sess.IDHash,
 		"CSRF":         sess.CSRF,
 	} {
 		if strings.Contains(out, secret) {
@@ -520,7 +554,7 @@ func TestLogoutWithoutSession(t *testing.T) {
 
 	// Истёкшая по времени.
 	now := time.Now()
-	e.srv.Sessions.Now = func() time.Time { return now }
+	e.srv.Now = func() time.Time { return now }
 	c, _ := e.sessionCookie(t)
 	now = now.Add(2 * time.Hour)
 	req = postForm("/logout", url.Values{})
@@ -536,7 +570,7 @@ func TestLoginDropsPreviousSession(t *testing.T) {
 	if rec := e.do(req); rec.Code != 303 {
 		t.Fatalf("вход: %d", rec.Code)
 	}
-	if _, ok := e.srv.Sessions.Get(old.Value); ok {
+	if _, ok := e.lookup(old.Value); ok {
 		t.Fatal("прежняя сессия осталась жива после повторного входа")
 	}
 }

@@ -2,12 +2,14 @@ package panel
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,8 +21,9 @@ import (
 	"github.com/syava842/azpanel/internal/store"
 )
 
-// Run — режим «azpanel panel». Секреты (токен агента, хеш пароля) читаются
-// один раз при старте; после azpanel panel passwd панель перезапускают.
+// Run — режим «azpanel panel». Секреты (токен агента, ключ данных) читаются
+// один раз при старте. Хеш пароля из secrets.env нужен только для переноса
+// администратора в базу, пока в ней нет ни одного пользователя.
 func Run(ctx context.Context, cfg config.Config, version string) error {
 	w, err := logx.Open(filepath.Join(paths.Log(), "panel.log"), int64(cfg.Log.MaxSizeMB)<<20, cfg.Log.Keep)
 	if err != nil {
@@ -37,20 +40,18 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	if token == "" {
 		return errors.New("нет NODE_TOKEN в secrets.env: переустановите узел")
 	}
-	user := sec[SecretAdminUser]
-	if user == "" {
-		user = "admin"
-	}
-	hash := sec[SecretAdminHash]
-	if hash == "" {
-		log.Warn("пароль администратора не задан — вход невозможен; задайте: azpanel panel passwd")
-	}
-
 	st, err := store.Open(filepath.Join(paths.Data(), "azpanel.db"))
 	if err != nil {
 		return fmt.Errorf("база панели: %w", err)
 	}
 	defer st.Close()
+	dataKey, err := loadOrCreateDataKey(paths.SecretsFile(), sec, log)
+	if err != nil {
+		return err
+	}
+	if err := migrateAdmin(ctx, st, sec, time.Now(), log); err != nil {
+		return err
+	}
 	geo, err := OpenGeo(paths.Data())
 	if err != nil {
 		log.Warn("геоданные не открыты — работаем без города и провайдера", "err", err)
@@ -73,6 +74,8 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	var colDone sync.WaitGroup
 	colDone.Add(1)
 	go func() { defer colDone.Done(); col.Run(cctx) }()
+	colDone.Add(1)
+	go func() { defer colDone.Done(); purgeSessionsLoop(cctx, st, purgeEvery, log) }()
 	defer func() { stopCollector(); colDone.Wait() }()
 
 	s := &Server{
@@ -81,12 +84,13 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		NodeID:    store.LocalNode,
 		Collector: col,
 		Geo:       geo,
-		AdminUser: user,
-		AdminHash: hash,
 		Version:   version,
-		Sessions:  NewSessions(time.Duration(cfg.Panel.SessionHours) * time.Hour),
 		Limiter:   NewLimiter(),
 		Log:       log,
+
+		SessionTTL:      time.Duration(cfg.Panel.SessionHours) * time.Hour,
+		DataKey:         dataKey,
+		RequireAdmin2FA: cfg.Panel.RequireAdmin2FA,
 	}
 	ln, err := net.Listen("tcp", cfg.Panel.Listen)
 	if err != nil {
@@ -103,7 +107,7 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(ln) }()
-	log.Info("панель запущена", "listen", cfg.Panel.Listen, "user", user)
+	log.Info("панель запущена", "listen", cfg.Panel.Listen)
 
 	select {
 	case err := <-serveErr:
@@ -115,4 +119,77 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	err = srv.Shutdown(sctx)
 	log.Info("панель остановлена")
 	return err
+}
+
+const purgeEvery = time.Hour
+
+// loadOrCreateDataKey: ключ шифрования секретов 2FA — 32 байта в hex в
+// PANEL_DATA_KEY. Нет ключа — создаётся и записывается в secrets.env.
+// Испорченный ключ — отказ запускаться: молча заменить его значит потерять
+// все секреты 2FA.
+func loadOrCreateDataKey(file string, sec map[string]string, log *slog.Logger) ([]byte, error) {
+	if v := sec[SecretDataKey]; v != "" {
+		key, err := hex.DecodeString(v)
+		if err != nil || len(key) != 32 {
+			return nil, fmt.Errorf("%s в secrets.env должен быть 64 шестнадцатеричными знаками (32 байта)", SecretDataKey)
+		}
+		return key, nil
+	}
+	v, err := secrets.NewToken()
+	if err != nil {
+		return nil, err
+	}
+	if err := secrets.Set(file, SecretDataKey, v); err != nil {
+		return nil, fmt.Errorf("ключ данных не записан: %w", err)
+	}
+	log.Info("создан ключ шифрования секретов 2FA", "ключ", SecretDataKey)
+	return hex.DecodeString(v)
+}
+
+// migrateAdmin: в базе нет ни одного пользователя, а в secrets.env есть хеш
+// администратора — создаёт администратора с этим логином и хешем.
+func migrateAdmin(ctx context.Context, st *store.Store, sec map[string]string, now time.Time, log *slog.Logger) error {
+	us, err := st.Users(ctx)
+	if err != nil {
+		return fmt.Errorf("пользователи панели: %w", err)
+	}
+	if len(us) > 0 {
+		return nil
+	}
+	hash := sec[SecretAdminHash]
+	if hash == "" {
+		log.Warn("в панели нет пользователей и пароль администратора не задан — вход невозможен; задайте: azpanel panel passwd")
+		return nil
+	}
+	login := strings.ToLower(sec[SecretAdminUser])
+	if login == "" {
+		login = "admin"
+	}
+	if _, err := st.CreateUser(ctx, store.User{Login: login, Hash: hash, Role: store.RoleAdmin, Created: now.Unix()}); err != nil {
+		return fmt.Errorf("перенос администратора: %w", err)
+	}
+	log.Info("перенесён администратор из secrets.env", "user", login)
+	if err := st.Audit(ctx, store.AuditEntry{
+		TS: now.Unix(), User: "система", Action: "user_migrate", Target: login,
+		After: "перенесён администратор из secrets.env",
+	}); err != nil {
+		log.Warn("запись в журнал действий не удалась", "action", "user_migrate", "err", err)
+	}
+	return nil
+}
+
+// purgeSessionsLoop раз в every удаляет истёкшие сессии (и сразу при старте).
+func purgeSessionsLoop(ctx context.Context, st *store.Store, every time.Duration, log *slog.Logger) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		if err := st.PurgeExpiredSessions(ctx, time.Now().Unix()); err != nil && ctx.Err() == nil {
+			log.Warn("истёкшие сессии не удалены", "err", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }

@@ -1,0 +1,14 @@
+{{define "content"}}
+<h1>Код подтверждения</h1>
+<form method="post" action="/login/2fa" class="card narrow">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label>Код из приложения или резервный код
+    <input type="text" name="code" autocomplete="one-time-code" autofocus required>
+  </label>
+  <button type="submit">Войти</button>
+</form>
+<form method="post" action="/logout" class="inline">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <button type="submit" class="link">Отмена</button>
+</form>
+{{end}}

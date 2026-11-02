@@ -111,3 +111,19 @@ func TestValidateListenAddresses(t *testing.T) {
 		}
 	}
 }
+
+func TestRequireAdmin2FA(t *testing.T) {
+	if Default().Panel.RequireAdmin2FA {
+		t.Fatal("по умолчанию require_admin_2fa должна быть выключена")
+	}
+	c, err := Load(write(t, "config_version = 2\n[panel]\nrequire_admin_2fa = true\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Panel.RequireAdmin2FA {
+		t.Fatal("require_admin_2fa = true не прочитан")
+	}
+	if _, err := Load(write(t, "config_version = 2\n[panel]\nrequire_admin_2fa = \"да\"\n")); err == nil {
+		t.Fatal("не-bool в require_admin_2fa должен отвергаться")
+	}
+}

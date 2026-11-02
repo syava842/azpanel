@@ -56,19 +56,24 @@ type Node interface {
 var _ Node = (*nodeapi.HTTPClient)(nil)
 
 type Server struct {
-	Node      Node
-	AdminUser string
-	AdminHash string // пусто — вход невозможен, страница входа говорит «пароль не задан: azpanel panel passwd»
-	Version   string
-	Sessions  *Sessions
-	Limiter   *Limiter
-	Log       *slog.Logger
-	Sleep     func(time.Duration) // задержка неверного входа; в тестах — no-op
-	Now       func() time.Time    // по умолчанию time.Now
+	Node    Node
+	Version string
+	// SessionTTL — срок жизни сессии; ноль — семь суток.
+	SessionTTL time.Duration
+	// DataKey — 32 байта ключа AES-256-GCM для секретов TOTP; пусто — 2FA
+	// недоступна (вход пользователей с включённой 2FA невозможен).
+	DataKey []byte
+	// RequireAdmin2FA — администратор без 2FA после входа обязан её включить.
+	RequireAdmin2FA bool
+	Limiter         *Limiter
+	Log             *slog.Logger
+	Sleep           func(time.Duration) // задержка неверного входа; в тестах — no-op
+	Now             func() time.Time    // по умолчанию time.Now
 	// CheckPassword — проверка входа; по умолчанию CheckPassword пакета,
 	// в тестах подменяется счётчиком.
 	CheckPassword func(wantUser, hash, user, pw string) bool
-	// Store — база панели (карточки, история, журнал); nil — работа без неё.
+	// Store — база панели: пользователи, сессии, карточки, история, журнал;
+	// без неё войти нельзя.
 	Store  *store.Store
 	NodeID int64
 	// Collector нужен ради пометки частой смены адреса; nil — без пометок.
@@ -79,11 +84,10 @@ type Server struct {
 	pages map[string]*template.Template
 
 	loginSem      chan struct{} // ограничивает одновременные bcrypt
+	mfaMu         sync.Mutex    // сверка кода 2FA и запись принятого шага — одним куском
 	blockedMu     sync.Mutex
 	blockedLogged map[string]time.Time // адрес -> когда последний раз писали 429
 }
-
-type ctxKey struct{}
 
 // Handler собирает маршруты и разбирает шаблоны (один раз). Маршруты
 // страниц за входом добавляются через s.protect.
@@ -99,6 +103,9 @@ func (s *Server) Handler() http.Handler {
 	}
 	if s.CheckPassword == nil {
 		s.CheckPassword = CheckPassword
+	}
+	if s.SessionTTL <= 0 {
+		s.SessionTTL = defaultSessionTTL
 	}
 	s.loginSem = make(chan struct{}, maxParallelBcrypt)
 	s.blockedLogged = map[string]time.Time{}
@@ -116,6 +123,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(sub)))
 	mux.HandleFunc("GET /login", s.loginForm)
 	mux.HandleFunc("POST /login", s.loginSubmit)
+	mux.Handle("GET /login/2fa", s.guard(s.mfaForm, guardMFA))
+	mux.Handle("POST /login/2fa", s.guard(s.mfaSubmit, guardMFA))
 	mux.HandleFunc("POST /logout", s.logoutRoute)
 
 	// Всё остальное — за входом; новые страницы добавляются выше
@@ -181,44 +190,6 @@ func remoteHost(r *http.Request) string {
 	return host
 }
 
-// session — сессия запроса, положенная в контекст обработчиком protect.
-func session(r *http.Request) (Session, bool) {
-	sess, ok := r.Context().Value(ctxKey{}).(Session)
-	return sess, ok
-}
-
-// protect пускает только со входом; POST — ещё и с верным CSRF. Без
-// сессии GET уходит на /login, POST получает 403.
-func (s *Server) protect(h http.HandlerFunc) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var sess Session
-		ok := false
-		if c, err := r.Cookie(cookieName); err == nil {
-			sess, ok = s.Sessions.Get(c.Value)
-		}
-		if !ok {
-			if r.Method == http.MethodGet || r.Method == http.MethodHead {
-				http.Redirect(w, r, "/login", http.StatusSeeOther)
-				return
-			}
-			s.errorPage(w, r, http.StatusForbidden, "нужен вход")
-			return
-		}
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-			if err := r.ParseForm(); err != nil {
-				s.errorPage(w, r, http.StatusBadRequest, "неверный запрос")
-				return
-			}
-			if !SameCSRF(sess.CSRF, r.PostForm.Get("csrf")) {
-				s.errorPage(w, r, http.StatusForbidden, "неверный токен формы, обновите страницу")
-				return
-			}
-		}
-		h(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, sess)))
-	})
-}
-
 // render показывает страницу; в data добавляются CSRF, User, Version, Msg.
 func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, page string, data map[string]any) {
 	t, ok := s.pages[page]
@@ -232,7 +203,10 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, page
 		d[k] = v
 	}
 	if sess, ok := session(r); ok {
-		d["CSRF"], d["User"] = sess.CSRF, sess.User
+		d["CSRF"], d["Role"], d["IsAdmin"] = sess.CSRF, sess.Role, sess.IsAdmin()
+		if !sess.MFAPending { // до ввода кода меню и «Выйти» не показываются
+			d["User"] = sess.User
+		}
 	}
 	d["Version"] = s.Version
 	d["Msg"] = flashText(r)
@@ -263,62 +237,6 @@ func (s *Server) nodeErr(err error) (status int, text string) {
 	return http.StatusBadGateway, "агент недоступен: " + err.Error()
 }
 
-func (s *Server) loginForm(w http.ResponseWriter, r *http.Request) {
-	s.renderLogin(w, r, http.StatusOK, "", "")
-}
-
-func (s *Server) renderLogin(w http.ResponseWriter, r *http.Request, status int, user, errText string) {
-	if s.AdminHash == "" {
-		errText = "пароль не задан: azpanel panel passwd"
-	}
-	s.render(w, r, status, "login", map[string]any{"Error": errText, "FormUser": user})
-}
-
-func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
-		s.errorPage(w, r, http.StatusBadRequest, "неверный запрос")
-		return
-	}
-	host := remoteHost(r)
-	user, pw := r.PostForm.Get("user"), r.PostForm.Get("password")
-	// Попытка засчитывается до bcrypt и атомарно с проверкой лимита.
-	if !s.Limiter.Begin(host) {
-		if s.shouldLogBlocked(host) {
-			s.Log.Warn("вход заблокирован: слишком много попыток", "remote", host)
-		}
-		s.renderLogin(w, r, http.StatusTooManyRequests, user, "слишком много попыток, подождите 15 минут")
-		return
-	}
-	s.loginSem <- struct{}{} // одновременно не больше maxParallelBcrypt проверок
-	ok := s.CheckPassword(s.AdminUser, s.AdminHash, user, pw)
-	<-s.loginSem
-	if !ok {
-		s.Sleep(loginDelay)
-		s.Log.Warn("неверный вход", "user", truncateRunes(user, maxLoggedName), "remote", host)
-		s.auditAs(r, "", "login_failed", truncateRunes(user, maxLoggedName), "", "")
-		s.renderLogin(w, r, http.StatusUnauthorized, user, "неверное имя или пароль")
-		return
-	}
-	sess, err := s.Sessions.Create(user)
-	if err != nil {
-		s.Log.Error("сессия не создана", "err", err)
-		s.errorPage(w, r, http.StatusInternalServerError, "внутренняя ошибка")
-		return
-	}
-	if c, err := r.Cookie(cookieName); err == nil {
-		s.Sessions.Delete(c.Value) // прежняя сессия этого браузера не должна жить дальше
-	}
-	s.Limiter.Reset(host)
-	http.SetCookie(w, &http.Cookie{
-		Name: cookieName, Value: sess.ID, Path: "/", Expires: sess.Expires,
-		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: isHTTPS(r),
-	})
-	s.Log.Info("вход", "user", truncateRunes(user, maxLoggedName), "remote", host)
-	s.auditAs(r, truncateRunes(user, maxLoggedName), "login", "", "", "")
-	http.Redirect(w, r, "/", http.StatusSeeOther)
-}
-
 // shouldLogBlocked: 429 с одного адреса пишется в журнал не чаще раза в
 // минуту, иначе поток запросов вытеснит из ротации всё остальное.
 func (s *Server) shouldLogBlocked(host string) bool {
@@ -343,34 +261,4 @@ func truncateRunes(s string, n int) string {
 		return s
 	}
 	return string([]rune(s)[:n]) + "…"
-}
-
-func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{
-		Name: cookieName, Value: "", Path: "/", MaxAge: -1,
-		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: isHTTPS(r),
-	})
-}
-
-// logoutRoute: без живой сессии (истекла, вкладка осталась открытой) просто
-// стирает cookie и ведёт на вход — менять нечего, CSRF не нужен. С живой
-// сессией CSRF обязателен, как у остальных изменяющих маршрутов.
-func (s *Server) logoutRoute(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie(cookieName); err == nil {
-		if _, ok := s.Sessions.Get(c.Value); ok {
-			s.protect(s.logout).ServeHTTP(w, r)
-			return
-		}
-	}
-	clearSessionCookie(w, r)
-	http.Redirect(w, r, "/login", http.StatusSeeOther)
-}
-
-func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
-	sess, _ := session(r)
-	s.Sessions.Delete(sess.ID)
-	clearSessionCookie(w, r)
-	s.Log.Info("выход", "user", truncateRunes(sess.User, maxLoggedName), "remote", remoteHost(r))
-	s.auditAs(r, truncateRunes(sess.User, maxLoggedName), "logout", "", "", "")
-	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }

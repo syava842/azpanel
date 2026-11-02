@@ -33,35 +33,6 @@ func TestHashPasswordAndCheck(t *testing.T) {
 	}
 }
 
-func TestSessions(t *testing.T) {
-	s := NewSessions(time.Hour)
-	now := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
-	s.Now = func() time.Time { return now }
-	a, err := s.Create("admin")
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, _ := s.Create("admin")
-	if a.ID == b.ID || a.CSRF == b.CSRF || len(a.ID) != 64 || len(a.CSRF) != 64 || a.ID == a.CSRF {
-		t.Fatalf("идентификаторы: %q %q", a.ID, a.CSRF)
-	}
-	if got, ok := s.Get(a.ID); !ok || got.User != "admin" {
-		t.Fatal("сессия до срока не найдена")
-	}
-	now = now.Add(time.Hour + time.Second)
-	if _, ok := s.Get(a.ID); ok {
-		t.Fatal("истёкшая сессия отдана")
-	}
-	if _, ok := s.m[a.ID]; ok {
-		t.Fatal("истёкшая сессия не удалена")
-	}
-	c, _ := s.Create("admin")
-	s.Delete(c.ID)
-	if _, ok := s.Get(c.ID); ok {
-		t.Fatal("удалённая сессия найдена")
-	}
-}
-
 func TestLimiter(t *testing.T) {
 	l := NewLimiter()
 	now := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)

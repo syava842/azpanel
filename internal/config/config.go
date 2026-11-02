@@ -44,6 +44,9 @@ type Panel struct {
 	CollectSeconds int    `toml:"collect_seconds"`
 	HistoryDays    int    `toml:"history_days"`
 	SessionHours   int    `toml:"session_hours"`
+	// RequireAdmin2FA — администратор без двухфакторной проверки после
+	// входа обязан её включить, пока не включит, дальше не пускают.
+	RequireAdmin2FA bool `toml:"require_admin_2fa"`
 }
 
 type Log struct {

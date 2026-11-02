@@ -1,9 +1,10 @@
-// Package panel — веб-панель администратора: вход, сессии, страницы
-// клиентов и мониторинга. Своего хранилища нет, состояние берётся у агента.
+// Package panel — веб-панель: вход, сессии, страницы клиентов и
+// мониторинга. Пользователи и сессии лежат в базе (internal/store).
 package panel
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
@@ -12,11 +13,14 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/syava842/azpanel/internal/store"
 )
 
 const (
 	SecretAdminUser = "PANEL_ADMIN_USER"
 	SecretAdminHash = "PANEL_ADMIN_HASH"
+	SecretDataKey   = "PANEL_DATA_KEY"
 	cookieName      = "azpanel_session"
 	bcryptCost      = 12
 
@@ -76,67 +80,28 @@ func randomHex() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
+// Session — сессия запроса: то, что нужно обработчикам. В базе лежит
+// store.Session (хеш идентификатора); здесь к ней добавлены данные
+// пользователя, прочитанные на этом запросе.
 type Session struct {
-	ID      string // 32 случайных байта, hex
-	CSRF    string // 32 случайных байта, hex
-	User    string
-	Expires time.Time
+	IDHash     string // SHA-256 от cookie, hex
+	CSRF       string
+	UserID     int64
+	User       string // логин
+	Role       string // store.RoleAdmin | store.RoleUser
+	MustChange bool   // нужно сменить пароль
+	Has2FA     bool   // у пользователя включена 2FA
+	MFAPending bool   // пароль верен, код 2FA ещё не введён
+	Expires    time.Time
 }
 
-// Sessions — сессии в памяти: перезапуск панели выводит всех.
-type Sessions struct {
-	TTL time.Duration
-	Now func() time.Time
+// IsAdmin — роль «администратор».
+func (s Session) IsAdmin() bool { return s.Role == store.RoleAdmin }
 
-	mu sync.Mutex
-	m  map[string]Session
-}
-
-func NewSessions(ttl time.Duration) *Sessions {
-	return &Sessions{TTL: ttl, Now: time.Now, m: map[string]Session{}}
-}
-
-func (s *Sessions) Create(user string) (Session, error) {
-	id, err := randomHex()
-	if err != nil {
-		return Session{}, err
-	}
-	csrf, err := randomHex()
-	if err != nil {
-		return Session{}, err
-	}
-	now := s.Now()
-	sess := Session{ID: id, CSRF: csrf, User: user, Expires: now.Add(s.TTL)}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for k, v := range s.m { // истёкшие вычищаются при обращении
-		if !now.Before(v.Expires) {
-			delete(s.m, k)
-		}
-	}
-	s.m[id] = sess
-	return sess, nil
-}
-
-// Get: истёкшую сессию удаляет и не отдаёт.
-func (s *Sessions) Get(id string) (Session, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	sess, ok := s.m[id]
-	if !ok {
-		return Session{}, false
-	}
-	if !s.Now().Before(sess.Expires) {
-		delete(s.m, id)
-		return Session{}, false
-	}
-	return sess, true
-}
-
-func (s *Sessions) Delete(id string) {
-	s.mu.Lock()
-	delete(s.m, id)
-	s.mu.Unlock()
+// hashSessionID — то, что хранится в базе вместо идентификатора из cookie.
+func hashSessionID(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(sum[:])
 }
 
 // Limiter — попытки входа по адресу.

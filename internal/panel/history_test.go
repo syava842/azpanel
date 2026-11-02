@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -20,13 +19,8 @@ var histNow = time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
 func storeEnv(t *testing.T) (*testEnv, *http.Cookie, string) {
 	t.Helper()
 	e, c, s := clientsEnv(t)
-	st, err := store.Open(filepath.Join(t.TempDir(), "azpanel.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
-	e.srv.Store, e.srv.NodeID = st, store.LocalNode
 	e.srv.Now = func() time.Time { return histNow }
+	c, s = e.sessionCookie(t) // сессия считается по фиксированным часам
 	return e, c, s.CSRF
 }
 
