@@ -1,0 +1,50 @@
+{{define "head"}}<meta http-equiv="refresh" content="15">{{end}}
+{{define "content"}}
+<h1>Сейчас</h1>
+
+<h2>Ресурсы</h2>
+{{if .SystemErr}}<div class="error">{{.SystemErr}}</div>{{else}}
+<div class="card">
+  <table>
+    <tbody>
+      <tr><th>Процессор</th><td>{{.Res.CPU}}</td></tr>
+      <tr><th>Нагрузка (1, 5, 15 мин)</th><td>{{.Res.Load}}</td></tr>
+      <tr><th>Память</th><td>{{.Res.Memory}}</td></tr>
+      <tr><th>Диск /</th><td>{{.Res.Disk}}</td></tr>
+      <tr><th>Сеть</th><td>{{.Res.Net}}</td></tr>
+      <tr><th>Работает</th><td>{{.Res.Uptime}}</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h2>Службы</h2>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Служба</th><th>Состояние</th></tr></thead>
+  <tbody>
+  {{range .Services}}
+  <tr><td>{{.Unit}}</td><td class="{{if .Bad}}bad{{else}}ok{{end}}">{{.State}}</td></tr>
+  {{else}}
+  <tr><td colspan="2" class="muted">Служб нет.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{end}}
+
+<h2>Сессии</h2>
+{{if .SessionsErr}}<div class="error">{{.SessionsErr}}</div>{{else}}
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Тип</th><th>Экземпляр</th><th>Клиент</th><th>Адрес</th><th>↓</th><th>↑</th><th>Время</th></tr></thead>
+  <tbody>
+  {{range .Sessions}}
+  <tr><td>{{.Kind}}</td><td>{{.Instance}}</td><td><a href="{{.Href}}">{{.Name}}</a></td><td>{{.Addr}}</td><td>{{.Down}}</td><td>{{.Up}}</td><td>{{.Time}}</td></tr>
+  {{else}}
+  <tr><td colspan="7" class="muted">Подключений нет.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{end}}
+{{end}}

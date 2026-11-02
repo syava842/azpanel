@@ -87,8 +87,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /login", s.loginSubmit)
 	mux.Handle("POST /logout", s.protect(s.logout))
 
-	// Всё остальное — за входом; страницы мониторинга добавляются выше
+	// Всё остальное — за входом; новые страницы добавляются выше
 	// этих двух строк.
+	mux.Handle("GET /monitor", s.protect(s.monitor))
 	mux.Handle("GET /clients/new", s.protect(s.newForm))
 	mux.Handle("POST /clients", s.protect(s.createClient))
 	mux.Handle("GET /clients/{name}", s.protect(s.clientCard))
