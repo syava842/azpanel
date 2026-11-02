@@ -625,6 +625,26 @@ func (n *Nginx) EnableOwnPort(port int, cert, key, serverName, basePath, upstrea
 	})
 }
 
+// UpdateSnippet переписывает фрагмент панели под новый префикс и адрес, если
+// фрагмент стоит (done=true). Нет фрагмента — nginx не трогается (done=false).
+// Правка идёт через Apply: nginx -t, при отказе файл возвращается.
+func (n *Nginx) UpdateSnippet(basePath, upstream string) (done bool, err error) {
+	cur, err := n.ReadFile(SnippetPath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	want := Snippet(basePath, upstream)
+	if string(cur) == want {
+		return true, nil
+	}
+	return true, n.Apply([]string{SnippetPath}, func() error {
+		return n.WriteFile(SnippetPath, []byte(want), 0o644)
+	})
+}
+
 // Disable — обратное Enable/EnableOwnPort: строки include (во всех
 // перечисленных файлах разом: пока одна ещё подключает фрагмент, удалять его
 // нельзя), фрагменты, файл и ссылка отдельного порта. Пустые имена файлов

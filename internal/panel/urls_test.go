@@ -30,12 +30,27 @@ func TestTemplatesUseURLFunc(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, m := range bare.FindAllString(string(b), -1) {
-			if strings.Contains(m, "{{.QR}}") {
+			if strings.Contains(m, "{{.QR}}") || externalLink(m) {
 				continue
 			}
 			t.Errorf("%s: %q без {{url ...}}", e.Name(), m)
 		}
 	}
+}
+
+// externalHrefs — поля данных с абсолютными внешними адресами (https://, tg://):
+// префикс пути к ним не применяется, функция url им не нужна. Список явный,
+// страж остальных ссылок остаётся включённым; новое поле сюда добавляют
+// осознанно, а не отключением проверки.
+var externalHrefs = []string{"{{.LinkHref}}", "{{.WebHref}}"}
+
+func externalLink(match string) bool {
+	for _, f := range externalHrefs {
+		if strings.Contains(match, f) {
+			return true
+		}
+	}
+	return false
 }
 
 func prefixed(p *pEnv, base string) {

@@ -131,6 +131,10 @@ type Server struct {
 	// RestartNode просит агента узла перезапуститься (POST /v1/system/restart);
 	// nil — не умеем, оператор перезапускает вручную.
 	RestartNode func(ctx context.Context) error
+	// SyncNginx переписывает фрагмент nginx под новые panel.base_path и
+	// panel.listen. done=false — фрагмента нет, nginx не тронут. nil — панель
+	// nginx не правит.
+	SyncNginx func(basePath, listen string) (done bool, err error)
 	// Telegram — настройки бота (backup_chats для страницы «Telegram-бот»);
 	// заполняется при запуске бота.
 	Telegram config.Telegram

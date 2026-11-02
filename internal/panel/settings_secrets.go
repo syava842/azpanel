@@ -6,56 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 
+	"github.com/syava842/azpanel/internal/fsutil"
 	"github.com/syava842/azpanel/internal/secrets"
 )
-
-// reencryptTOTP перешифровывает секреты 2FA всех пользователей с ключа old
-// на new. Возвращает функцию отката; секрет, который не расшифровался
-// (повреждён ещё до замены), пропускается и остаётся как был.
-func (s *Server) reencryptTOTP(ctx context.Context, oldKey, newKey []byte) (undo func(), err error) {
-	if len(oldKey) != 32 {
-		return func() {}, nil // 2FA без ключа недоступна: перешифровывать нечего
-	}
-	users, err := s.Store.Users(ctx)
-	if err != nil {
-		return nil, err
-	}
-	type saved struct {
-		id   int64
-		raw  []byte
-		step int64
-	}
-	var done []saved
-	undo = func() {
-		for _, x := range done {
-			if err := s.Store.SetTOTP(context.Background(), x.id, x.raw, x.step); err != nil {
-				s.Log.Error("откат перешифровки 2FA не удался", "user_id", x.id, "err", err)
-			}
-		}
-	}
-	for _, u := range users {
-		if len(u.TOTPSecret) == 0 {
-			continue
-		}
-		plain, err := Open(oldKey, u.TOTPSecret)
-		if err != nil {
-			s.Log.Warn("секрет 2FA не расшифровался, пропущен", "user_id", u.ID)
-			continue
-		}
-		sealed, err := Seal(newKey, plain)
-		if err == nil {
-			err = s.Store.SetTOTP(ctx, u.ID, sealed, u.TOTPLastStep)
-		}
-		if err != nil {
-			undo()
-			return nil, fmt.Errorf("перешифровка секрета 2FA: %w", err)
-		}
-		done = append(done, saved{u.ID, u.TOTPSecret, u.TOTPLastStep})
-	}
-	return undo, nil
-}
 
 // applySecrets записывает ключи в secrets.env. Сменился NODE_TOKEN — сначала
 // агент получает команду перезапуститься (по старому токену, перезапуск
@@ -82,20 +38,72 @@ func (s *Server) applySecrets(ctx context.Context, kv map[string]string) error {
 			return fmt.Errorf("агент не перезапущен, токен не менялся: %w", err)
 		}
 	}
-	undo := func() {}
 	if v, ok := kv[SecretDataKey]; ok && v != cur[SecretDataKey] {
-		if s.Store == nil {
-			return errors.New("база панели недоступна: 2FA нельзя перешифровать")
-		}
-		newKey, _ := hex.DecodeString(v)
-		if undo, err = s.reencryptTOTP(ctx, s.DataKey, newKey); err != nil {
-			return err
-		}
+		return s.rotateDataKey(ctx, cur, kv)
 	}
-	if err := secrets.SetMany(s.secretsPath(), kv); err != nil {
-		undo()
+	return secrets.SetMany(s.secretsPath(), kv)
+}
+
+// rotateDataKey меняет PANEL_DATA_KEY так, чтобы сбой в любой точке не терял
+// секреты 2FA. Порядок: новый secrets.env целиком во временный файл
+// secrets.env.new; одна транзакция перешифровывает все секреты и перед
+// фиксацией атомарно заменяет secrets.env; только потом новый ключ — в памяти.
+// Сбой до фиксации откатывает базу, а файл остаётся прежним; сбой самой
+// фиксации после замены файла возвращает прежний файл.
+func (s *Server) rotateDataKey(ctx context.Context, cur, kv map[string]string) error {
+	if s.Store == nil {
+		return errors.New("база панели недоступна: 2FA нельзя перешифровать")
+	}
+	newKey, _ := hex.DecodeString(kv[SecretDataKey])
+	oldKey := s.DataKey
+	next := make(map[string]string, len(cur)+len(kv))
+	for k, v := range cur {
+		next[k] = v
+	}
+	for k, v := range kv {
+		next[k] = v
+	}
+	file := s.secretsPath()
+	tmp := file + ".new"
+	if err := fsutil.WriteFileAtomic(tmp, secrets.Marshal(next), 0o600); err != nil {
+		return fmt.Errorf("новый secrets.env не записан, ключ не менялся: %w", err)
+	}
+	defer os.Remove(tmp) // после замены файла его уже нет
+	rename := s.settings.rename
+	if rename == nil {
+		rename = os.Rename
+	}
+	swapped := false
+	_, err := s.Store.ReencryptTOTP(ctx, func(sealed []byte) ([]byte, bool, error) {
+		if len(oldKey) != 32 {
+			return nil, false, nil // 2FA без ключа недоступна: перешифровывать нечего
+		}
+		plain, err := Open(oldKey, sealed)
+		if err != nil {
+			s.Log.Warn("секрет 2FA не расшифровался, пропущен")
+			return nil, false, nil
+		}
+		out, err := Seal(newKey, plain)
+		if err != nil {
+			return nil, false, fmt.Errorf("перешифровка секрета 2FA: %w", err)
+		}
+		return out, true, nil
+	}, func() error {
+		if err := rename(tmp, file); err != nil {
+			return fmt.Errorf("замена secrets.env: %w", err)
+		}
+		swapped = true
+		return nil
+	})
+	if err != nil {
+		if swapped {
+			if rerr := fsutil.WriteFileAtomic(file, secrets.Marshal(cur), 0o600); rerr != nil {
+				return fmt.Errorf("%w; прежний secrets.env не возвращён: %v", err, rerr)
+			}
+		}
 		return err
 	}
+	s.DataKey = newKey
 	return nil
 }
 

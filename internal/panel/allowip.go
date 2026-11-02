@@ -3,6 +3,7 @@ package panel
 import (
 	"net/http"
 	"net/netip"
+	"path"
 	"strings"
 	"sync"
 )
@@ -55,10 +56,24 @@ func allowsIn(nets []netip.Prefix, host string) bool {
 // доверенного прокси (panel.trusted_proxies).
 func (s *Server) allowGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/healthz" && !isPortalPath(r.URL.Path) && !strings.HasPrefix(r.URL.Path, "/static/") && !s.Allow.Allows(s.remoteHost(r)) {
+		// Путь чистится до проверки: /p/../clients не должен сойти за портал.
+		// (Дальше ServeMux всё равно отвечает 301 на очищенный путь, но защита
+		// не должна держаться на его поведении.)
+		p := cleanURLPath(r.URL.Path)
+		if p != "/healthz" && !isPortalPath(p) && !strings.HasPrefix(p, "/static/") && !s.Allow.Allows(s.remoteHost(r)) {
 			http.Error(w, "доступ запрещён", http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// cleanURLPath — path.Clean с сохранением хвостового «/»: «/p/» остаётся
+// «/p/», «/p/../x» становится «/x».
+func cleanURLPath(p string) string {
+	c := path.Clean("/" + p)
+	if c != "/" && strings.HasSuffix(p, "/") {
+		c += "/"
+	}
+	return c
 }

@@ -33,6 +33,8 @@ type settingsState struct {
 	mu     sync.Mutex
 	dmu    sync.Mutex
 	drafts map[string]*settingsDraft
+	// rename подменяется в тестах (замена secrets.env при смене ключа данных).
+	rename func(oldpath, newpath string) error
 }
 
 // settingsDraft — проверенный набор изменений: из формы или из импорта.
@@ -120,6 +122,17 @@ func (s *Server) takeDraft(r *http.Request, id string) *settingsDraft {
 	}
 	delete(s.settings.drafts, id)
 	return d
+}
+
+// restoreDraft возвращает черновик на место: применение отклонено по причине,
+// не связанной с его содержимым, и введённое терять не нужно.
+func (s *Server) restoreDraft(id string, d *settingsDraft) {
+	s.settings.dmu.Lock()
+	defer s.settings.dmu.Unlock()
+	if s.settings.drafts == nil {
+		s.settings.drafts = map[string]*settingsDraft{}
+	}
+	s.settings.drafts[id] = d
 }
 
 // --- страница ---
@@ -392,13 +405,34 @@ func (s *Server) previewDraft(w http.ResponseWriter, r *http.Request, d *setting
 	if len(keys) > 0 {
 		needPanel = true
 	}
-	if !allowsIn(mustAllow(d.cfg.Panel.AllowIPs), s.remoteHost(r)) {
-		notes = append(notes, "Новый белый список не включает ваш адрес "+s.remoteHost(r)+": после перезапуска отсюда панель не откроется, подтвердить будет нельзя, и через 2 минуты прежнее значение вернётся само.")
+	// Адрес считается по НОВОМУ списку доверенных прокси: после перезапуска
+	// действует он, а не нынешний.
+	newProxies, _ := config.ParseTrustedProxies(d.cfg.Panel.TrustedProxies)
+	if me := s.remoteHostWith(r, newProxies); !allowsIn(mustAllow(d.cfg.Panel.AllowIPs), me) {
+		notes = append(notes, "Новый белый список не включает ваш адрес "+me+": после перезапуска отсюда панель не откроется, подтвердить будет нельзя, и через 2 минуты прежнее значение вернётся само.")
 	}
+	notes = append(notes, s.proxyNotes(r, newProxies)...)
 	s.render(w, r, http.StatusOK, "settings_preview", map[string]any{
 		"Draft": id, "Source": d.source, "Changes": views, "SecretKeys": keys, "Notes": notes,
 		"NeedNode": needNode, "NeedPanel": needPanel, "Dangerous": dangerous,
 	})
+}
+
+// proxyNotes — предупреждения о смене доверенных прокси: соединение пришло от
+// прокси, которого в новом списке нет, или новый список слишком широк.
+func (s *Server) proxyNotes(r *http.Request, next []netip.Prefix) []string {
+	var notes []string
+	if peer, err := netip.ParseAddr(peerHost(r)); err == nil && s.trusted(peer) && !trustedIn(next, peer) {
+		notes = append(notes, "Адрес "+peer.String()+", с которого вы работаете (прокси), исчезает из доверенных: после перезапуска все запросы через него будут приходить с этого адреса. "+
+			"Ограничитель входа станет общим для всех, а запись этого адреса в белом списке откроет панель каждому, кто идёт через прокси.")
+	}
+	for _, p := range next {
+		if p.Addr().Is4() && p.Bits() < 8 || p.Addr().Is6() && !p.Addr().Is4In6() && p.Bits() < 16 {
+			notes = append(notes, "Сеть "+p.String()+" в доверенных прокси слишком широка: любой клиент сможет подделать свой адрес заголовком X-Forwarded-For (белый список и ограничитель входа перестанут защищать).")
+			break
+		}
+	}
+	return notes
 }
 
 func mustAllow(list []string) []netip.Prefix {
@@ -432,7 +466,8 @@ func dangerousSnapshot(cfg config.Config, changes []config.Change) string {
 
 func (s *Server) settingsApply(w http.ResponseWriter, r *http.Request) {
 	s.initAccess()
-	d := s.takeDraft(r, r.PostForm.Get("draft"))
+	draftID := r.PostForm.Get("draft")
+	d := s.takeDraft(r, draftID)
 	s.settings.mu.Lock()
 	defer s.settings.mu.Unlock()
 	cur, err := s.loadConfig()
@@ -468,6 +503,7 @@ func (s *Server) settingsApply(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if _, ok, _ := s.Pending.Get(r.Context(), pendingSettings); ok {
+			s.restoreDraft(draftID, d) // введённое не теряется: подтвердите прежнее и примените снова
 			s.renderSettings(w, r, http.StatusConflict, cur, map[string]any{"Error": "Предыдущее опасное изменение ещё не подтверждено: подтвердите его или дождитесь возврата."})
 			return
 		}
@@ -505,6 +541,16 @@ func (s *Server) settingsApply(w http.ResponseWriter, r *http.Request) {
 	for _, c := range changes {
 		s.audit(r, "setting_set", c.Field.Path, c.Old, c.New)
 	}
+	// Префикс и адрес панели живут и во фрагменте nginx: обновляем его в
+	// рамках того же таймера возврата (откат вернёт и фрагмент).
+	for _, c := range dangerous {
+		if c.Field.Path == "panel.listen" || c.Field.Path == "panel.base_path" {
+			if note := s.syncNginx(d.cfg); note != "" {
+				notes = append(notes, note)
+			}
+			break
+		}
+	}
 	if needNode {
 		switch {
 		case s.RestartNode == nil:
@@ -527,6 +573,25 @@ func (s *Server) settingsApply(w http.ResponseWriter, r *http.Request) {
 	}
 	notes = append([]string{"Сохранено."}, notes...)
 	s.renderSettings(w, r, http.StatusOK, d.cfg, map[string]any{"Notice": strings.Join(notes, " ")})
+}
+
+// syncNginx обновляет фрагмент nginx под новый panel.base_path/panel.listen.
+// Пустая строка — делать нечего (фрагмента нет) или обновлено без замечаний;
+// иначе — пояснение для страницы. Сбой не отменяет изменение: ручная правка
+// фрагмента в пределах таймера возврата остаётся рабочим путём.
+func (s *Server) syncNginx(cfg config.Config) string {
+	if s.SyncNginx == nil {
+		return ""
+	}
+	done, err := s.SyncNginx(cfg.Panel.BasePath, cfg.Panel.Listen)
+	switch {
+	case err != nil:
+		s.Log.Warn("фрагмент nginx не обновлён", "err", err)
+		return "Фрагмент nginx не обновлён (" + err.Error() + "): поправьте location и proxy_pass в нём вручную, пока идёт таймер возврата."
+	case done:
+		return "Фрагмент nginx обновлён под новые префикс и адрес."
+	}
+	return ""
 }
 
 // renderRestart — страница «перезапуск…»: обновляется сама и через несколько
@@ -580,6 +645,14 @@ func (s *Server) restoreSettings(value string) error {
 	}
 	if err := config.Save(file, cfg); err != nil {
 		return err
+	}
+	// Фрагмент nginx возвращается вместе с префиксом и адресом.
+	_, listen := m["panel.listen"]
+	_, base := m["panel.base_path"]
+	if listen || base {
+		if note := s.syncNginx(cfg); strings.HasPrefix(note, "Фрагмент nginx не обновлён") {
+			s.Log.Error("возврат: фрагмент nginx не восстановлен", "note", note)
+		}
 	}
 	s.exitSoon()
 	return nil

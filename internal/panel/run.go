@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/syava842/azpanel/internal/config"
+	"github.com/syava842/azpanel/internal/install"
 	"github.com/syava842/azpanel/internal/logx"
 	"github.com/syava842/azpanel/internal/nodeapi"
 	"github.com/syava842/azpanel/internal/paths"
@@ -118,7 +119,12 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		BasePath:        cfg.Panel.BasePath,
 		SecretsFile:     paths.SecretsFile(),
 		Exit:            stop,
-		RestartNode:     func(ctx context.Context) error { return restartNodeHTTP(ctx, cfg.Panel.NodeURL, token) },
+		RestartNode: func(ctx context.Context) error {
+			return restartNodeHTTP(ctx, cfg.Panel.NodeURL, token, sec[NodeFingerprintKey])
+		},
+		SyncNginx: func(basePath, listen string) (bool, error) {
+			return install.NewNginx().UpdateSnippet(basePath, listen)
+		},
 	}
 	proxies, err := config.ParseTrustedProxies(cfg.Panel.TrustedProxies)
 	if err != nil {

@@ -57,9 +57,12 @@ func (s *Server) stripBase(next http.Handler) http.Handler {
 	})
 }
 
-func (s *Server) trusted(a netip.Addr) bool {
+func (s *Server) trusted(a netip.Addr) bool { return trustedIn(s.TrustedProxies, a) }
+
+// trustedIn — входит ли адрес в список доверенных прокси.
+func trustedIn(proxies []netip.Prefix, a netip.Addr) bool {
 	a = a.WithZone("").Unmap()
-	for _, p := range s.TrustedProxies {
+	for _, p := range proxies {
 		if p.Contains(a) {
 			return true
 		}
@@ -79,10 +82,14 @@ func peerHost(r *http.Request) string {
 // remoteHost — адрес клиента. Если соединение пришло от доверенного прокси,
 // берётся самый правый адрес X-Forwarded-For, не входящий в доверенные
 // (левые записи клиент может подделать); иначе — адрес соединения.
-func (s *Server) remoteHost(r *http.Request) string {
+func (s *Server) remoteHost(r *http.Request) string { return s.remoteHostWith(r, s.TrustedProxies) }
+
+// remoteHostWith — remoteHost при заданном списке доверенных прокси (например,
+// при новом, ещё не вступившем в силу).
+func (s *Server) remoteHostWith(r *http.Request, proxies []netip.Prefix) string {
 	host := peerHost(r)
 	peer, err := netip.ParseAddr(host)
-	if err != nil || !s.trusted(peer) {
+	if err != nil || !trustedIn(proxies, peer) {
 		return host
 	}
 	var chain []string
@@ -94,7 +101,7 @@ func (s *Server) remoteHost(r *http.Request) string {
 		if err != nil {
 			return host // мусор в цепочке: ему не верим
 		}
-		if !s.trusted(a) {
+		if !trustedIn(proxies, a) {
 			return a.WithZone("").Unmap().String()
 		}
 	}

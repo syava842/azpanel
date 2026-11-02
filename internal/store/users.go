@@ -191,6 +191,61 @@ func (s *Store) SetTOTP(ctx context.Context, id int64, secret []byte, lastStep i
 	return s.setFields(ctx, `UPDATE users SET totp_secret = ?, totp_last_step = ? WHERE id = ?`, secret, lastStep, id)
 }
 
+// ReencryptTOTP в одной транзакции перезаписывает секреты 2FA всех
+// пользователей: fn получает запечатанный секрет и возвращает новый; ok=false
+// оставляет секрет как есть (например, он не расшифровался ещё до замены
+// ключа). Ошибка fn откатывает всё. beforeCommit (может быть nil) вызывается
+// после всех записей и до фиксации: её ошибка тоже откатывает транзакцию.
+// Возвращает число перезаписанных секретов.
+func (s *Store) ReencryptTOTP(ctx context.Context, fn func(sealed []byte) (next []byte, ok bool, err error), beforeCommit func() error) (int, error) {
+	n := 0
+	err := s.tx(ctx, func(t *sql.Tx) error {
+		type row struct {
+			id  int64
+			raw []byte
+		}
+		var rows []row
+		rs, err := t.QueryContext(ctx, `SELECT id, totp_secret FROM users WHERE totp_secret IS NOT NULL AND length(totp_secret) > 0`)
+		if err != nil {
+			return err
+		}
+		for rs.Next() {
+			var x row
+			if err := rs.Scan(&x.id, &x.raw); err != nil {
+				rs.Close()
+				return err
+			}
+			rows = append(rows, x)
+		}
+		if err := rs.Err(); err != nil {
+			rs.Close()
+			return err
+		}
+		rs.Close()
+		for _, x := range rows {
+			next, ok, err := fn(x.raw)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				continue
+			}
+			if _, err := t.ExecContext(ctx, `UPDATE users SET totp_secret = ? WHERE id = ?`, next, x.id); err != nil {
+				return err
+			}
+			n++
+		}
+		if beforeCommit != nil {
+			return beforeCommit()
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 // EnableTOTP включает 2FA, только если она ещё выключена (ErrTOTPAlreadyOn).
 func (s *Store) EnableTOTP(ctx context.Context, id int64, secret []byte, lastStep int64) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE users SET totp_secret = ?, totp_last_step = ?

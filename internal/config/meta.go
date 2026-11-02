@@ -91,7 +91,7 @@ var fields = []Field{
 	{Path: "node.wireguard_dir", Section: "node", Title: "Каталог WireGuard", Hint: "Каталог с конфигами интерфейсов.", Kind: KindString, Apply: ApplyRestartNode},
 	{Path: "node.client_sh_timeout_seconds", Section: "node", Title: "Таймаут client.sh, секунд", Hint: "От 10 до 600.", Kind: KindInt, Apply: ApplyRestartNode},
 
-	{Path: "panel.listen", Section: "panel", Title: "Адрес панели", Hint: "Только петлевой интерфейс: наружу панель выходит через nginx. Неверный адрес отрежет панель от nginx.", Kind: KindString, Apply: ApplyDangerous},
+	{Path: "panel.listen", Section: "panel", Title: "Адрес панели", Hint: "Только петлевой интерфейс: наружу панель выходит через nginx. Фрагмент nginx (proxy_pass) обновляется при применении; если панель не смогла его записать, поправьте его вручную, пока идёт таймер возврата.", Kind: KindString, Apply: ApplyDangerous},
 	{Path: "panel.node_url", Section: "panel", Title: "Адрес агента", Hint: "http://127.0.0.1:9100 или https://…", Kind: KindString, Apply: ApplyRestartPanel},
 	{Path: "panel.collect_seconds", Section: "panel", Title: "Сбор статистики, секунд", Hint: "От 10 до 600.", Kind: KindInt, Apply: ApplyRestartPanel},
 	{Path: "panel.history_days", Section: "panel", Title: "Хранить историю, дней", Hint: "От 1 до 365.", Kind: KindInt, Apply: ApplyRestartPanel},
@@ -99,8 +99,8 @@ var fields = []Field{
 	{Path: "panel.require_admin_2fa", Section: "panel", Title: "Требовать 2FA у администраторов", Hint: "Администратор без двухфакторной проверки обязан включить её после входа.", Kind: KindBool, Apply: ApplyRestartPanel},
 	{Path: "panel.allow_ips", Section: "panel", Title: "Белый список адресов", Hint: "IP или сети; пусто — без ограничения. Меняется на отдельной странице с таймером возврата.", Kind: KindList, Apply: ApplyDangerous, Page: "/settings/access"},
 	{Path: "panel.public_url", Section: "panel", Title: "Внешний адрес панели", Hint: "https://vpn.example.org; префикс пути добавляется сам. Пусто — ссылки портала относительные.", Kind: KindString, Apply: ApplyRestartPanel},
-	{Path: "panel.base_path", Section: "panel", Title: "Префикс пути", Hint: "Пусто или /azpanel/ (с косой чертой в начале и в конце). Должен совпадать с location в nginx, иначе панель перестанет открываться.", Kind: KindString, Apply: ApplyDangerous},
-	{Path: "panel.trusted_proxies", Section: "panel", Title: "Доверенные прокси", Hint: "Адреса или сети, чьим X-Forwarded-For панель верит, по одному в строке. Лишний адрес даст подделывать адрес клиента, неверный — покажет везде адрес прокси.", Kind: KindList, Apply: ApplyDangerous},
+	{Path: "panel.base_path", Section: "panel", Title: "Префикс пути", Hint: "Пусто или /azpanel/ (с косой чертой в начале и в конце). Фрагмент nginx (location) обновляется при применении; если панель не смогла его записать, поправьте его вручную, пока идёт таймер возврата — иначе панель перестанет открываться.", Kind: KindString, Apply: ApplyDangerous},
+	{Path: "panel.trusted_proxies", Section: "panel", Title: "Доверенные прокси", Hint: "Адреса или сети, чьим X-Forwarded-For панель верит, по одному в строке. Лишний адрес даст подделывать адрес клиента, неверный — покажет везде адрес прокси. Осторожно с 127.0.0.1: заголовку верят и от любого локального HTTP- или SOCKS-прокси на этом хосте.", Kind: KindList, Apply: ApplyDangerous},
 
 	{Path: "log.max_size_mb", Section: "log", Title: "Размер файла журнала, МБ", Hint: "От 1 до 1000.", Kind: KindInt, Apply: ApplyRestartPanel},
 	{Path: "log.keep", Section: "log", Title: "Хранить файлов журнала", Hint: "От 1 до 100.", Kind: KindInt, Apply: ApplyRestartPanel},

@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -668,12 +669,10 @@ func TestRestartNodeHTTP(t *testing.T) {
 	var gotAuth, gotPath, gotMethod string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth, gotPath, gotMethod = r.Header.Get("Authorization"), r.URL.Path, r.Method
-		if r.URL.Query().Get("missing") != "" {
-			http.NotFound(w, r)
-		}
+		w.WriteHeader(http.StatusAccepted)
 	}))
 	defer srv.Close()
-	if err := restartNodeHTTP(context.Background(), srv.URL+"/", "TOKEN"); err != nil {
+	if err := restartNodeHTTP(context.Background(), srv.URL+"/", "TOKEN", ""); err != nil {
 		t.Fatal(err)
 	}
 	if gotAuth != "Bearer TOKEN" || gotPath != "/v1/system/restart" || gotMethod != "POST" {
@@ -681,10 +680,169 @@ func TestRestartNodeHTTP(t *testing.T) {
 	}
 	srv2 := httptest.NewServer(http.NotFoundHandler())
 	defer srv2.Close()
-	if err := restartNodeHTTP(context.Background(), srv2.URL, "T"); err == nil || !strings.Contains(err.Error(), "обновите агент") {
+	if err := restartNodeHTTP(context.Background(), srv2.URL, "T", ""); err == nil || !strings.Contains(err.Error(), "обновите агент") {
 		t.Fatalf("404: %v", err)
 	}
-	if err := restartNodeHTTP(context.Background(), "http://127.0.0.1:1", "T"); err == nil {
+	if err := restartNodeHTTP(context.Background(), "http://127.0.0.1:1", "T", ""); err == nil {
 		t.Fatal("недоступный агент не вернул ошибку")
+	}
+}
+
+// Агент по https: перезапуск идёт через клиент с закреплённым отпечатком (M11).
+func TestRestartNodeHTTPSPinned(t *testing.T) {
+	var hits int
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+	sum := sha256.Sum256(srv.Certificate().Raw)
+	good := hex.EncodeToString(sum[:])
+	if err := restartNodeHTTP(context.Background(), srv.URL, "T", good); err != nil || hits != 1 {
+		t.Fatalf("верный отпечаток: %v, запросов %d", err, hits)
+	}
+	bad := strings.Repeat("00", 32)
+	if err := restartNodeHTTP(context.Background(), srv.URL, "T", bad); err == nil || hits != 1 {
+		t.Fatalf("чужой отпечаток должен давать отказ без запроса: %v, запросов %d", err, hits)
+	}
+	if err := restartNodeHTTP(context.Background(), srv.URL, "T", ""); err == nil || hits != 1 {
+		t.Fatalf("https без отпечатка: %v, запросов %d", err, hits)
+	}
+}
+
+// Смена ключа данных: файл заменён целиком, временного файла нет, ключ в
+// памяти новый (I4).
+func TestSettingsRegenDataKeyLeavesNoTempFile(t *testing.T) {
+	e := newSetEnv(t)
+	oldKey := append([]byte(nil), e.srv.DataKey...)
+	e.post(t, "/settings/secrets", "10.0.0.1", url.Values{"key": {SecretDataKey}, "action": {"regen"}, "confirm": {"1"}})
+	if _, err := os.Stat(e.secFile + ".new"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("secrets.env.new остался: %v", err)
+	}
+	m, _ := secrets.Load(e.secFile)
+	got, _ := hex.DecodeString(m[SecretDataKey])
+	if !bytes.Equal(e.srv.DataKey, got) || bytes.Equal(e.srv.DataKey, oldKey) {
+		t.Fatal("ключ в памяти не совпал с файлом")
+	}
+	if m[secrets.NodeToken] != oldNodeToken {
+		t.Fatal("прочие секреты потеряны")
+	}
+}
+
+// Сбой замены secrets.env в середине смены ключа: база откатывается, файл и
+// ключ в памяти прежние, 2FA остаётся читаемой.
+func TestSettingsRegenDataKeyFailureKeepsEverything(t *testing.T) {
+	e := newSetEnv(t)
+	secret := []byte("12345678901234567890")
+	sealed, _ := Seal(e.srv.DataKey, secret)
+	if err := e.st.SetTOTP(context.Background(), e.admin.ID, sealed, 5); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(e.secFile)
+	oldKey := append([]byte(nil), e.srv.DataKey...)
+	e.srv.settings.rename = func(string, string) error { return errors.New("диск отказал") }
+	rec := e.post(t, "/settings/secrets", "10.0.0.1", url.Values{"key": {SecretDataKey}, "action": {"regen"}, "confirm": {"1"}})
+	if rec.Code == 200 && strings.Contains(rec.Body.String(), "перезапуск") {
+		t.Fatalf("сбой принят за успех:\n%s", rec.Body)
+	}
+	after, _ := os.ReadFile(e.secFile)
+	if !bytes.Equal(before, after) || !bytes.Equal(oldKey, e.srv.DataKey) {
+		t.Fatal("secrets.env или ключ в памяти изменились")
+	}
+	if _, err := os.Stat(e.secFile + ".new"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("временный файл остался")
+	}
+	u, _ := e.st.UserByID(context.Background(), e.admin.ID)
+	got, err := Open(oldKey, u.TOTPSecret)
+	if err != nil || !bytes.Equal(got, secret) {
+		t.Fatalf("секрет 2FA не читается прежним ключом: %v", err)
+	}
+	if e.wasExit() {
+		t.Fatal("панель перезапущена после сбоя")
+	}
+}
+
+// Предпросмотр: адрес считается по новому списку прокси (M2).
+func TestSettingsPreviewProxyWarnings(t *testing.T) {
+	e := newSetEnv(t)
+	e.srv.TrustedProxies = mustAllow([]string{"10.0.0.1"})
+	rec, draft := e.save(t, map[string]string{"panel.trusted_proxies": "192.0.2.0/24"})
+	if draft == "" || !strings.Contains(rec.Body.String(), "исчезает из доверенных") {
+		t.Fatalf("нет предупреждения о выбывшем прокси:\n%s", rec.Body)
+	}
+	rec, draft = e.save(t, map[string]string{"panel.trusted_proxies": "0.0.0.0/0"})
+	if draft == "" || !strings.Contains(rec.Body.String(), "слишком широка") {
+		t.Fatalf("нет предупреждения о широкой сети:\n%s", rec.Body)
+	}
+}
+
+// Смена listen/base_path обновляет фрагмент nginx в том же применении; возврат
+// по таймеру возвращает и фрагмент (M4).
+func TestSettingsDangerousSyncsNginxAndRestores(t *testing.T) {
+	e := newSetEnv(t)
+	type call struct{ base, listen string }
+	var calls []call
+	e.srv.SyncNginx = func(base, listen string) (bool, error) {
+		calls = append(calls, call{base, listen})
+		return true, nil
+	}
+	_, draft := e.save(t, map[string]string{"panel.base_path": "/azpanel/"})
+	rec := e.apply(t, draft)
+	if rec.Code != 200 || len(calls) != 1 || calls[0].base != "/azpanel/" {
+		t.Fatalf("фрагмент не обновлён: %d %v", rec.Code, calls)
+	}
+	if !strings.Contains(rec.Body.String(), "Фрагмент nginx обновлён") {
+		t.Fatalf("страница не сообщает об обновлении:\n%s", rec.Body)
+	}
+	e.wasExit()
+	e.now = e.now.Add(accessConfirmTTL + time.Second)
+	e.srv.CheckPending(context.Background())
+	if len(calls) != 2 || calls[1].base != "" {
+		t.Fatalf("возврат не вернул фрагмент: %v", calls)
+	}
+	// Не опасное поле nginx не трогает.
+	calls = nil
+	_, draft = e.save(t, map[string]string{"panel.history_days": "30"})
+	e.apply(t, draft)
+	if len(calls) != 0 {
+		t.Fatalf("лишнее обновление nginx: %v", calls)
+	}
+	// Сбой правки nginx — замечание на странице, изменение остаётся.
+	e.srv.SyncNginx = func(string, string) (bool, error) { return true, errors.New("нет прав") }
+	_, draft = e.save(t, map[string]string{"panel.base_path": "/x/"})
+	rec = e.apply(t, draft)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "не обновлён") || e.cfg(t).Panel.BasePath != "/x/" {
+		t.Fatalf("%d\n%s", rec.Code, rec.Body)
+	}
+}
+
+// Отказ из-за неподтверждённого опасного изменения не теряет черновик (M12).
+func TestSettingsPendingConflictKeepsDraft(t *testing.T) {
+	e := newSetEnv(t)
+	_, draft := e.save(t, map[string]string{"panel.base_path": "/azpanel/"})
+	if _, err := e.srv.Pending.Begin(context.Background(), pendingSettings, "{}", "{}", accessConfirmTTL); err != nil {
+		t.Fatal(err)
+	}
+	if rec := e.apply(t, draft); rec.Code != 409 {
+		t.Fatalf("ожидался отказ: %d", rec.Code)
+	}
+	if err := e.srv.Pending.Confirm(context.Background(), pendingSettings); err != nil {
+		t.Fatal(err)
+	}
+	if rec := e.apply(t, draft); rec.Code != 200 {
+		t.Fatalf("черновик потерян после отказа: %d\n%s", rec.Code, rec.Body)
+	}
+}
+
+// Портал не обходится путём с «..» (M5).
+func TestAllowGateCleansPath(t *testing.T) {
+	if got := cleanURLPath("/p/../clients"); got != "/clients" {
+		t.Fatal(got)
+	}
+	if got := cleanURLPath("/p/abc/"); got != "/p/abc/" {
+		t.Fatal(got)
+	}
+	if got := cleanURLPath("//dl/../x"); got != "/x" {
+		t.Fatal(got)
 	}
 }

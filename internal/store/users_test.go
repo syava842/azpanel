@@ -261,3 +261,65 @@ func TestTOTPStepAndEnable(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 }
+
+func TestReencryptTOTPAllOrNothing(t *testing.T) {
+	s := open(t)
+	var ids []int64
+	for i, login := range []string{"a", "b", "c"} {
+		u, err := s.CreateUser(ctx, User{Login: login, Hash: "h", Role: RoleUser, Created: 1,
+			TOTPSecret: []byte{byte('0' + i)}, TOTPLastStep: 7})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, u.ID)
+	}
+	read := func() []string {
+		var out []string
+		for _, id := range ids {
+			u, err := s.UserByID(ctx, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, string(u.TOTPSecret))
+		}
+		return out
+	}
+	// Сбой посередине: ничего не должно измениться.
+	calls := 0
+	_, err := s.ReencryptTOTP(ctx, func(raw []byte) ([]byte, bool, error) {
+		calls++
+		if calls == 2 {
+			return nil, false, errors.New("сбой посередине")
+		}
+		return append([]byte("new-"), raw...), true, nil
+	}, nil)
+	if err == nil {
+		t.Fatal("ожидалась ошибка")
+	}
+	if got := read(); got[0] != "0" || got[1] != "1" || got[2] != "2" {
+		t.Fatalf("транзакция не откатилась: %v", got)
+	}
+	// Сбой перед фиксацией (замена файла ключа не удалась) — тоже откат.
+	_, err = s.ReencryptTOTP(ctx, func(raw []byte) ([]byte, bool, error) {
+		return append([]byte("new-"), raw...), true, nil
+	}, func() error { return errors.New("файл не заменён") })
+	if err == nil || read()[0] != "0" {
+		t.Fatalf("откат при сбое beforeCommit: %v %v", err, read())
+	}
+	// Успех; секрет, помеченный ok=false, остаётся прежним; последний шаг цел.
+	n, err := s.ReencryptTOTP(ctx, func(raw []byte) ([]byte, bool, error) {
+		if string(raw) == "1" {
+			return nil, false, nil
+		}
+		return append([]byte("new-"), raw...), true, nil
+	}, nil)
+	if err != nil || n != 2 {
+		t.Fatalf("%d %v", n, err)
+	}
+	if got := read(); got[0] != "new-0" || got[1] != "1" || got[2] != "new-2" {
+		t.Fatalf("итог: %v", got)
+	}
+	if u, _ := s.UserByID(ctx, ids[0]); u.TOTPLastStep != 7 {
+		t.Fatal("последний шаг затёрт")
+	}
+}
