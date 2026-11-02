@@ -37,6 +37,8 @@ var routes = map[string]access{
 	"POST /account/sessions/revoke": accAny,
 	"POST /account/sessions/all":    accAny,
 	"GET /account/once":             accAny,
+	"POST /account/telegram":        accAny,
+	"POST /account/telegram/unlink": accAny,
 
 	"GET /settings/access":          accAdmin,
 	"POST /settings/access":         accAdmin,
@@ -53,6 +55,7 @@ var routes = map[string]access{
 	"POST /users/{id}/delete":          accAdmin,
 	"POST /users/{id}/access":          accAdmin,
 	"POST /users/{id}/portal":          accAdmin,
+	"POST /users/{id}/telegram/unlink": accAdmin,
 
 	"GET /codes":                       accAdmin,
 	"GET /codes/new":                   accAdmin,
@@ -93,6 +96,7 @@ var routes = map[string]access{
 	// «Продлить кодом»: администратор и владелец клиента (visibleClient)
 	"POST /clients/{name}/redeem": accAny,
 	"POST /clients/{name}/portal": accAdmin,
+	"POST /clients/{name}/kinds":  accAdmin,
 	"POST /clients/{name}/dl":     accAdmin,
 
 	// Портал клиента и одноразовые ссылки: роль public-portal, без сессии.

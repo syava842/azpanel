@@ -162,6 +162,7 @@ func (s *Server) userView(w http.ResponseWriter, r *http.Request, u store.User, 
 	}
 	data := map[string]any{"PublicURLSet": s.PublicURL != "", "Until": until, "UntilStamp": untilStamp(u.AccessUntil), "U": u, "Href": userHref(u), "RoleText": roleText(u.Role), "IsAdminRole": u.Role == store.RoleAdmin,
 		"Has2FA": len(u.TOTPSecret) > 0, "Sessions": rows, "Clients": clients, "IsSelf": u.ID == sess.UserID}
+	s.addTelegram(data, u)
 	if created, has, err := s.Store.UserLinkCreated(r.Context(), u.ID); err != nil {
 		s.Log.Warn("ссылка портала пользователя не прочитана", "user", u.Login, "err", err)
 	} else if has {

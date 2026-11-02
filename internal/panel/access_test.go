@@ -88,11 +88,13 @@ func TestUnlistedRoutePanics(t *testing.T) {
 // Пользователь-не-администратор на каждом маршруте Handler().
 // accountPostWant — код ответа пользователю на POST /account/* с пустой формой.
 var accountPostWant = map[string]int{
-	"POST /account/password":        http.StatusBadRequest, // пароль не по правилам
-	"POST /account/2fa":             http.StatusBadRequest, // нет запечатанного секрета
-	"POST /account/2fa/disable":     http.StatusBadRequest, // 2FA не включена
-	"POST /account/2fa/codes":       http.StatusBadRequest, // 2FA не включена
-	"POST /account/sessions/revoke": http.StatusNotFound,   // такой своей сессии нет
+	"POST /account/password":        http.StatusBadRequest,         // пароль не по правилам
+	"POST /account/2fa":             http.StatusBadRequest,         // нет запечатанного секрета
+	"POST /account/2fa/disable":     http.StatusBadRequest,         // 2FA не включена
+	"POST /account/2fa/codes":       http.StatusBadRequest,         // 2FA не включена
+	"POST /account/sessions/revoke": http.StatusNotFound,           // такой своей сессии нет
+	"POST /account/telegram":        http.StatusServiceUnavailable, // бот в тесте не запущен
+	"POST /account/telegram/unlink": http.StatusSeeOther,
 }
 
 func TestPermissionsEveryRouteAsUser(t *testing.T) {

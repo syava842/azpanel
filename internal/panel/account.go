@@ -190,6 +190,7 @@ func (s *Server) accountView(w http.ResponseWriter, r *http.Request, status int,
 	}
 	data := map[string]any{"Login": u.Login, "RoleText": roleText(u.Role), "Has2FA": len(u.TOTPSecret) > 0,
 		"MustChange": u.MustChange, "Sessions": rows, "Can2FA": len(s.DataKey) == 32}
+	s.addTelegram(data, u)
 	if errText != "" {
 		data["Error"] = errText
 	}

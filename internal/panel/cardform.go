@@ -1,6 +1,7 @@
 package panel
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"net/http"
@@ -167,20 +168,20 @@ func (s *Server) saveCard(w http.ResponseWriter, r *http.Request) {
 // forgetAutoBlock: ручная разблокировка клиента, которого заблокировала
 // панель, обнуляет auto_block и запоминает отпечаток причины в auto_skip —
 // сборщик не вернёт блокировку, пока причина (срок, лимит, период) та же.
-func (s *Server) forgetAutoBlock(r *http.Request, c nodeapi.Client) {
+func (s *Server) forgetAutoBlock(ctx context.Context, c nodeapi.Client) {
 	if s.Store == nil {
 		return
 	}
-	card, err := s.Store.Card(r.Context(), s.NodeID, c.Name)
+	card, err := s.Store.Card(ctx, s.NodeID, c.Name)
 	if err != nil || card.AutoBlock == "" {
 		return
 	}
 	// отпечаток считается от действующего срока, как у сборщика
-	if eff, err := s.Store.EffectiveUntil(r.Context(), s.NodeID, c.Name); err == nil {
+	if eff, err := s.Store.EffectiveUntil(ctx, s.NodeID, c.Name); err == nil {
 		card.AccessUntil = eff
 	}
-	fp := strings.Join(activeFingerprints(r.Context(), s.Store, s.NodeID, c.Name, card.AutoBlock, card, s.now()), skipSep)
-	if err := s.Store.SetAutoBlock(r.Context(), s.NodeID, c.Name, "", fp); err != nil {
+	fp := strings.Join(activeFingerprints(ctx, s.Store, s.NodeID, c.Name, card.AutoBlock, card, s.now()), skipSep)
+	if err := s.Store.SetAutoBlock(ctx, s.NodeID, c.Name, "", fp); err != nil {
 		s.Log.Warn("отметка автоблокировки не снята", "client", c.Name, "err", err)
 	}
 }
@@ -188,15 +189,15 @@ func (s *Server) forgetAutoBlock(r *http.Request, c nodeapi.Client) {
 // makeManualBlock: администратор заблокировал клиента, которого панель уже
 // заблокировала сама, — блок становится ручным (auto_block пуст), и продление
 // срока его не снимет. Отпечаток причины остаётся как был.
-func (s *Server) makeManualBlock(r *http.Request, c nodeapi.Client) {
+func (s *Server) makeManualBlock(ctx context.Context, c nodeapi.Client) {
 	if s.Store == nil {
 		return
 	}
-	card, err := s.Store.Card(r.Context(), s.NodeID, c.Name)
+	card, err := s.Store.Card(ctx, s.NodeID, c.Name)
 	if err != nil || card.AutoBlock == "" {
 		return
 	}
-	if err := s.Store.SetAutoBlock(r.Context(), s.NodeID, c.Name, "", card.AutoSkip); err != nil {
+	if err := s.Store.SetAutoBlock(ctx, s.NodeID, c.Name, "", card.AutoSkip); err != nil {
 		s.Log.Warn("отметка автоблокировки не снята", "client", c.Name, "err", err)
 	}
 }

@@ -1,6 +1,7 @@
 package panel
 
 import (
+	"context"
 	"fmt"
 	"mime"
 	"net/http"
@@ -246,7 +247,7 @@ func (s *Server) createClient(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	existed, known := s.clientExists(r, name)
+	existed, known := s.clientExists(r.Context(), name)
 	if _, err := s.Node.CreateClient(r.Context(), nodeapi.CreateClient{Name: name, Kind: kind, Days: days}); err != nil {
 		s.Log.Warn("действие", "user", s.user(r), "op", "create", "client", name, "err", err)
 		st, tx := s.nodeErr(err)
@@ -256,18 +257,18 @@ func (s *Server) createClient(w http.ResponseWriter, r *http.Request) {
 	s.Log.Info("действие", "user", s.user(r), "op", "create", "client", name, "detail", kind)
 	s.audit(r, "create", name, "", kind)
 	if known && !existed {
-		s.dropStaleHistory(r, name)
+		s.dropStaleHistory(r.Context(), name)
 	}
 	redirectMsg(w, r, clientHref(name), "created")
 }
 
 // clientExists: есть ли клиент с таким именем у агента; второе значение —
 // удалось ли узнать (нет — историю не трогаем).
-func (s *Server) clientExists(r *http.Request, name string) (exists, known bool) {
+func (s *Server) clientExists(ctx context.Context, name string) (exists, known bool) {
 	if s.Store == nil {
 		return false, false
 	}
-	list, err := s.Node.Clients(r.Context())
+	list, err := s.Node.Clients(ctx)
 	if err != nil {
 		return false, false
 	}
@@ -282,17 +283,17 @@ func (s *Server) clientExists(r *http.Request, name string) (exists, known bool)
 // dropStaleHistory: нового клиента с именем, которого у агента не было,
 // карточка и трафик прежнего владельца имени (удалённого мимо панели) не
 // должны блокировать и считаться в лимит.
-func (s *Server) dropStaleHistory(r *http.Request, name string) {
-	if err := s.Store.DeleteCard(r.Context(), s.NodeID, name); err != nil {
+func (s *Server) dropStaleHistory(ctx context.Context, name string) {
+	if err := s.Store.DeleteCard(ctx, s.NodeID, name); err != nil {
 		s.Log.Warn("старая карточка не удалена", "client", name, "err", err)
 	}
-	if err := s.Store.DeleteTraffic(r.Context(), s.NodeID, name); err != nil {
+	if err := s.Store.DeleteTraffic(ctx, s.NodeID, name); err != nil {
 		s.Log.Warn("старый трафик не удалён", "client", name, "err", err)
 	}
-	if err := s.Store.DeleteClientLink(r.Context(), s.NodeID, name); err != nil {
+	if err := s.Store.DeleteClientLink(ctx, s.NodeID, name); err != nil {
 		s.Log.Warn("старая ссылка портала не удалена", "client", name, "err", err)
 	}
-	if err := s.Store.DeleteDownloadLinks(r.Context(), s.NodeID, name); err != nil {
+	if err := s.Store.DeleteDownloadLinks(ctx, s.NodeID, name); err != nil {
 		s.Log.Warn("старые одноразовые ссылки не удалены", "client", name, "err", err)
 	}
 }
@@ -326,6 +327,9 @@ var msgTexts = map[string]string{
 	"2fa_reset":        "2FA сброшена, сессии завершены",
 	"owner_set":        "владелец назначен",
 	"owner_cleared":    "владелец снят",
+
+	"tg_unlinked": "Telegram отвязан",
+	"kinds_saved": "типы профилей для бота сохранены",
 
 	"access_extended":   "доступ продлён на %d дн.",
 	"user_access_saved": "срок доступа пользователя сохранён",
@@ -411,6 +415,7 @@ func (s *Server) card(w http.ResponseWriter, r *http.Request, c nodeapi.Client, 
 	s.addHistory(r, c, data)
 	if sess.IsAdmin() {
 		s.addPortalInfo(r, c, data)
+		s.addKinds(r, c, data)
 	}
 	s.render(w, r, status, "client", data)
 }
@@ -563,12 +568,12 @@ func (s *Server) block(w http.ResponseWriter, r *http.Request) {
 	}
 	if blocked {
 		// ручной блок поверх автоблока становится ручным: сборщик его не снимет
-		s.makeManualBlock(r, c)
+		s.makeManualBlock(r.Context(), c)
 		after := fmt.Sprintf("заблокирован, разорвано сессий: %d", res.Killed)
 		s.done(w, r, c, "block", "не заблокирован", after, "blocked", res.Killed)
 		return
 	}
-	s.forgetAutoBlock(r, c)
+	s.forgetAutoBlock(r.Context(), c)
 	s.done(w, r, c, "unblock", "заблокирован", "не заблокирован", "unblocked")
 }
 
@@ -592,21 +597,27 @@ func (s *Server) deleteClient(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Log.Info("действие", "user", s.user(r), "op", "delete", "client", c.Name, "detail", kind)
 	s.audit(r, "delete", c.Name, kind, "удалён")
-	// карточка уходит вместе с клиентом; пока остался другой тип — она нужна
-	if s.Store != nil && !(kind == nodeapi.KindOpenVPN && c.WireGuard) && !(kind == nodeapi.KindWireGuard && c.OpenVPN) {
-		if err := s.Store.DeleteCard(r.Context(), s.NodeID, c.Name); err != nil {
-			s.Log.Warn("карточка клиента не удалена", "client", c.Name, "err", err)
-		}
-		// ссылка портала клиента уходит вместе с ним
-		if err := s.Store.DeleteClientLink(r.Context(), s.NodeID, c.Name); err != nil {
-			s.Log.Warn("ссылка портала клиента не удалена", "client", c.Name, "err", err)
-		}
-		// одноразовые ссылки ищут профиль по имени: пересозданный клиент отдал бы новые ключи
-		if err := s.Store.DeleteDownloadLinks(r.Context(), s.NodeID, c.Name); err != nil {
-			s.Log.Warn("одноразовые ссылки клиента не удалены", "client", c.Name, "err", err)
-		}
-	}
+	s.dropDeletedRecords(r.Context(), c, kind)
 	redirectMsg(w, r, "/", "deleted")
+}
+
+// dropDeletedRecords: карточка, ссылка портала и одноразовые ссылки уходят вместе с клиентом;
+// пока остался другой тип — они нужны.
+func (s *Server) dropDeletedRecords(ctx context.Context, c nodeapi.Client, kind string) {
+	if s.Store == nil || (kind == nodeapi.KindOpenVPN && c.WireGuard) || (kind == nodeapi.KindWireGuard && c.OpenVPN) {
+		return
+	}
+	if err := s.Store.DeleteCard(ctx, s.NodeID, c.Name); err != nil {
+		s.Log.Warn("карточка клиента не удалена", "client", c.Name, "err", err)
+	}
+	// ссылка портала клиента уходит вместе с ним
+	if err := s.Store.DeleteClientLink(ctx, s.NodeID, c.Name); err != nil {
+		s.Log.Warn("ссылка портала клиента не удалена", "client", c.Name, "err", err)
+	}
+	// одноразовые ссылки ищут профиль по имени: пересозданный клиент отдал бы новые ключи
+	if err := s.Store.DeleteDownloadLinks(ctx, s.NodeID, c.Name); err != nil {
+		s.Log.Warn("одноразовые ссылки клиента не удалены", "client", c.Name, "err", err)
+	}
 }
 
 // addOwner кладёт в данные карточки выбор владельца: пользователей и

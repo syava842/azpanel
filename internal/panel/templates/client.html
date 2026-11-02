@@ -109,6 +109,18 @@
 </div>
 {{end}}
 
+{{if and .CanManage .KindOptions}}
+<h2>Профили в Telegram</h2>
+<div class="card">
+  <form method="post" action="{{.Href}}/kinds">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <p>Какие профили бот выдаёт владельцу. Администратору бот выдаёт все. Ничего не отмечено — разрешено всё.</p>
+    {{range .KindOptions}}<label><input type="checkbox" name="kinds" value="{{.Name}}"{{if .Checked}} checked{{end}}> {{.Name}}</label> {{end}}
+    <p><button type="submit">Сохранить</button></p>
+  </form>
+</div>
+{{end}}
+
 <h2>Сессии</h2>
 {{if .SessionsErr}}<div class="error">{{.SessionsErr}}</div>{{end}}
 <div class="table-wrap">

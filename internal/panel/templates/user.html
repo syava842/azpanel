@@ -54,6 +54,17 @@
   <button type="submit">{{if .PortalCreated}}Перевыпустить{{else}}Создать{{end}}</button>
 </form>
 
+<h2>Telegram</h2>
+<div class="card">
+  {{if .TGLinked}}
+  <p>Привязан, ID {{.TGID}}.</p>
+  <form method="post" action="{{.Href}}/telegram/unlink">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <button type="submit">Отвязать</button>
+  </form>
+  {{else}}<p class="muted">Не привязан. Пользователь привязывает его сам на странице «Аккаунт».</p>{{end}}
+</div>
+
 <h2>Клиенты</h2>
 <ul>
   {{range .Clients}}<li><a href="{{.Href}}">{{.Name}}</a></li>

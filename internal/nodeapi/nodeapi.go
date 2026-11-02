@@ -476,3 +476,54 @@ func (c *HTTPClient) SetSetup(ctx context.Context, values map[string]string) (Se
 	var v SetupResult
 	return v, c.do(ctx, http.MethodPut, "/v1/setup", SetupPut{Values: values}, &v)
 }
+
+// --- перезагрузка и бэкапы ---
+
+// Backup — файл бэкапа на узле (client.sh 8).
+type Backup struct {
+	Name     string    `json:"name"`
+	Size     int64     `json:"size"`
+	Modified time.Time `json:"modified"`
+}
+
+// Reboot запускает перезагрузку сервера задачей reboot.
+func (c *HTTPClient) Reboot(ctx context.Context) (Task, error) {
+	var v Task
+	return v, c.do(ctx, http.MethodPost, "/v1/system/reboot", nil, &v)
+}
+
+// CreateBackup запускает client.sh 8 задачей backup.
+func (c *HTTPClient) CreateBackup(ctx context.Context) (Task, error) {
+	var v Task
+	return v, c.do(ctx, http.MethodPost, "/v1/backups", nil, &v)
+}
+
+// Backups — файлы backup*.tar.gz на узле, новые первыми.
+func (c *HTTPClient) Backups(ctx context.Context) ([]Backup, error) {
+	var v []Backup
+	return v, c.do(ctx, http.MethodGet, "/v1/backups", nil, &v)
+}
+
+// Backup открывает файл бэкапа потоком (архив может быть больше лимита
+// обычных ответов); закрыть читатель обязан вызывающий.
+func (c *HTTPClient) Backup(ctx context.Context, name string) (io.ReadCloser, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/v1/backups/"+url.PathEscape(name), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 400 {
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponse))
+		var e ErrorBody
+		if json.Unmarshal(body, &e) != nil || e.Error == "" {
+			e.Error = http.StatusText(resp.StatusCode)
+		}
+		return nil, &Error{Status: resp.StatusCode, Message: e.Error}
+	}
+	return resp.Body, nil
+}

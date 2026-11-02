@@ -111,6 +111,9 @@ type Server struct {
 	// PublicURL — внешний адрес панели (panel.public_url) для ссылок портала
 	// и одноразовых ссылок; пусто — ссылки относительные.
 	PublicURL string
+	// BotName — имя бота для ссылки привязки Telegram; nil или пустая
+	// строка — бот не запущен, привязка в панели скрыта.
+	BotName func() string
 
 	pages      map[string]*template.Template
 	registered []string   // шаблоны маршрутов Handler(): сверяются с таблицей прав
@@ -177,7 +180,11 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /account/sessions/all", s.accountLogoutAll)
 	s.route(mux, "GET /account/once", s.oncePage)
 
+	s.route(mux, "POST /account/telegram", s.accountTelegram)
+	s.route(mux, "POST /account/telegram/unlink", s.accountTelegramUnlink)
+
 	s.route(mux, "GET /users", s.usersPage)
+	s.route(mux, "POST /users/{id}/telegram/unlink", s.userTelegramUnlink)
 	s.route(mux, "POST /users", s.userCreate)
 	s.route(mux, "GET /users/{id}", s.userPage)
 	s.route(mux, "POST /users/{id}/role", s.userRole)
@@ -217,6 +224,7 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /clients/{name}/delete", s.deleteClient)
 	s.route(mux, "POST /clients/{name}/owner", s.setOwner)
 	s.route(mux, "POST /clients/{name}/redeem", s.redeemCode)
+	s.route(mux, "POST /clients/{name}/kinds", s.setKinds)
 	s.route(mux, "POST /clients/{name}/portal", s.clientPortalLink)
 	s.route(mux, "POST /clients/{name}/dl", s.clientDownloadLink)
 

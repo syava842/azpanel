@@ -39,6 +39,7 @@ type API struct {
 	Inventory     antizapret.Inventory
 	ClientSh      *antizapret.ClientSh
 	AntiZapretDir string
+	BackupDir     string // куда client.sh 8 кладёт backup*.tar.gz; пусто — /root
 	SocketDir     string
 	Sampler       *sysinfo.Sampler
 	Denials       *Denials                   // отказы хука; nil — журнал пуст
@@ -87,6 +88,10 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("PUT /v1/routing/files/{name}", a.routingPut)
 	mux.HandleFunc("GET /v1/routing/backups/{name}", a.routingBackups)
 	mux.HandleFunc("POST /v1/routing/backups/{name}/{stamp}/restore", a.routingRestore)
+	mux.HandleFunc("POST /v1/system/reboot", a.rebootServer)
+	mux.HandleFunc("POST /v1/backups", a.createBackup)
+	mux.HandleFunc("GET /v1/backups", a.listBackups)
+	mux.HandleFunc("GET /v1/backups/{name}", a.getBackup)
 	mux.HandleFunc("GET /v1/setup", a.getSetup)
 	mux.HandleFunc("PUT /v1/setup", a.putSetup)
 	mux.HandleFunc("GET /v1/antizapret/version", a.azVersion)

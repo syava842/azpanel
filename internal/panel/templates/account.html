@@ -48,6 +48,25 @@
   {{end}}
 </div>
 
+<h2>Telegram</h2>
+<div class="card">
+  {{if .TGLinked}}
+  <p class="ok">Привязан (ID {{.TGID}}).</p>
+  <form method="post" action="/account/telegram/unlink">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <button type="submit" class="danger">Отвязать</button>
+  </form>
+  {{else if .CanTG}}
+  <p>Не привязан. Ссылка действует 10 минут и показывается один раз.</p>
+  <form method="post" action="/account/telegram">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <button type="submit">Привязать Telegram</button>
+  </form>
+  {{else}}
+  <p class="muted">Бот не запущен: привязать Telegram нельзя.</p>
+  {{end}}
+</div>
+
 <h2>Сессии</h2>
 <div class="table-wrap">
 <table>
