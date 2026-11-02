@@ -19,6 +19,7 @@ import (
 	"github.com/syava842/azpanel/internal/paths"
 	"github.com/syava842/azpanel/internal/secrets"
 	"github.com/syava842/azpanel/internal/store"
+	"github.com/syava842/azpanel/internal/update"
 )
 
 // Run — режим «azpanel panel». Секреты (токен агента, ключ данных) читаются
@@ -79,7 +80,26 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	} else if cfg.Telegram.Enabled {
 		log.Warn("telegram.enabled включён, но в secrets.env нет TELEGRAM_BOT_TOKEN — бот не запущен")
 	}
-	s := &Server{
+	// Проверка обновлений azpanel раз в 6 часов. Токен GitHub читается из
+	// secrets.env при каждой проверке; без него (и в сборке dev) проверка
+	// выключена, страница «Обновление» объясняет причину.
+	var s *Server
+	checker := &update.Checker{
+		Current: version,
+		Token:   func() string { return s.UpdateToken() },
+		Log:     log,
+	}
+	if botOn {
+		checker.OnAvailable = func(i update.Info) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := notifyUpdateAvailable(ctx, st, &cfg.Telegram, time.Now(), i); err != nil {
+				log.Warn("уведомление azpanel_update не поставлено в очередь", "err", err)
+			}
+		}
+	}
+	s = &Server{
+		Updates:   checker,
 		Node:      node,
 		Svc:       node,
 		Store:     st,
@@ -134,6 +154,13 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		colDone.Add(1)
 		go func() { defer colDone.Done(); wt.Run(cctx) }()
 	}
+	if update.IsDev(version) {
+		log.Info("проверка обновлений выключена: сборка без версии (dev)")
+	} else if s.UpdateToken() == "" {
+		log.Info("проверка обновлений выключена: нет " + update.TokenKey + " в secrets.env")
+	}
+	colDone.Add(1)
+	go func() { defer colDone.Done(); checker.Run(cctx) }()
 	defer func() { stopCollector(); colDone.Wait() }()
 	srv := &http.Server{
 		Handler:           s.Handler(),

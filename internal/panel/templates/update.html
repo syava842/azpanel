@@ -1,0 +1,67 @@
+{{define "head"}}{{if .Running}}<meta http-equiv="refresh" content="10">{{end}}{{end}}
+{{define "content"}}
+<h1>Обновление azpanel</h1>
+
+<div class="card">
+  <p>Установлена версия: <code>{{.Current}}</code>{{if .Dev}} <span class="warn">(сборка dev)</span>{{end}}</p>
+  {{if .Disabled}}
+  <p class="warn">{{.Disabled}}.</p>
+  {{else}}
+  {{with .Info}}
+    {{if .Latest}}
+    <p>Последняя версия: <code>{{.Latest}}</code> · проверено {{$.Checked}}</p>
+    {{if .Available}}<p class="warn">Есть обновление до {{.Latest}}.</p>{{else}}<p class="ok">Обновлений нет.</p>{{end}}
+    {{else}}
+    <p class="muted">Проверка ещё не выполнялась.</p>
+    {{end}}
+    {{if .Error}}<p class="bad">Последняя проверка не удалась: {{.Error}}</p>{{end}}
+  {{end}}
+  <form method="post" action="{{url "/update/check"}}" class="inline">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <button type="submit">Проверить сейчас</button>
+  </form>
+  <p class="muted">Автоматическая проверка — раз в 6 часов.</p>
+  {{end}}
+</div>
+
+{{with .Task}}
+<h2>Задача обновления</h2>
+<div class="card">
+  <p><a href="{{url .Href}}">Обновление azpanel</a>: начата {{.Started}} · {{if .Failure}}<span class="bad">{{.Status}}</span>{{else if .Running}}<span class="warn">{{.Status}}</span>{{else}}<span class="ok">{{.Status}}</span>{{end}}</p>
+  {{if .Running}}<p class="muted">Во время обновления панель и агент перезапускаются; страница может ненадолго пропасть и обновится сама.</p>{{end}}
+</div>
+{{end}}
+
+{{with .Result}}
+<h2>Итог последнего обновления</h2>
+<div class="card">
+  {{if .OK}}<p class="ok">Обновлено: {{.From}} → {{.To}}</p>
+  {{else}}<p class="bad">Обновление {{.From}} → {{.To}} откачено.</p>{{if .Reason}}<p>Причина: {{.Reason}}</p>{{end}}{{end}}
+  <p class="muted">{{$.ResultTime}}{{if .Backup}} · бэкап: <code>{{.Backup}}</code>{{end}}</p>
+</div>
+{{end}}
+
+{{if and .Info .Info.Available}}
+<h2>Изменения в {{.Info.Latest}}</h2>
+<div class="card"><pre class="notes">{{.Info.Notes}}</pre></div>
+
+{{if not .Disabled}}
+<h2>Установка</h2>
+<form method="post" action="{{url "/update"}}" class="card">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <input type="hidden" name="version" value="{{.Info.Latest}}">
+  {{if .Questions}}
+  <p class="warn">Новой версии нужны значения, которых нет в конфиге. Ответьте и отправьте снова: архив повторно скачиваться не будет.</p>
+  {{range .Questions}}
+  <label>{{.Text}} <small class="muted">{{.Key}}</small>
+    <input type="text" name="a_{{.Key}}" value="{{.Value}}" spellcheck="false" required>
+  </label>
+  {{end}}
+  {{end}}
+  <p class="warn">Перед заменой агент проверит подпись релиза, сохранит бэкап настроек и базы и перезапустит панель и агент. Не ответит <code>/healthz</code> за 30 секунд — вернёт прежнюю версию.</p>
+  <label><input type="checkbox" name="confirm" value="1"> Подтверждаю: панель и агент перезапустятся</label>
+  <button type="submit">Обновить до {{.Info.Latest}}</button>
+</form>
+{{end}}
+{{end}}
+{{end}}

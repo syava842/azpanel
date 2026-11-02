@@ -84,6 +84,7 @@ type Log struct {
 var TelegramNotifyKinds = []string{
 	"node_down", "load_high", "reboot", "sync_mismatch", "hook_error",
 	"limit_denials", "antizapret_update", "update_result", "cert_expiring", "access_expiring",
+	"azpanel_update",
 }
 
 // Telegram — настройки бота. Токен сюда не входит: он в secrets.env.

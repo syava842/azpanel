@@ -19,6 +19,7 @@ import (
 	"github.com/syava842/azpanel/internal/config"
 	"github.com/syava842/azpanel/internal/nodeapi"
 	"github.com/syava842/azpanel/internal/store"
+	"github.com/syava842/azpanel/internal/update"
 )
 
 //go:embed templates/*.html
@@ -136,6 +137,11 @@ type Server struct {
 	// Svc — узел с методами сервисов (обновление AntiZapret, telemt, WARP,
 	// самообновление); nil — берётся из Node, если он их умеет.
 	Svc ServiceNode
+	// Updates — проверка обновлений azpanel (раз в 6 часов); nil — страница
+	// «Обновление» без сведений о версии, пометки в шапке нет.
+	Updates *update.Checker
+	// FetchUpdate подменяет скачивание релиза (тесты); nil — GitHub.
+	FetchUpdate func(ctx context.Context) (update.Fetched, error)
 	// BotName — имя бота для ссылки привязки Telegram; nil или пустая
 	// строка — бот не запущен, привязка в панели скрыта.
 	BotName func() string
@@ -148,6 +154,7 @@ type Server struct {
 	settings   settingsState
 	once       onceStore // секреты «показать один раз»
 	az         azMemory  // что видели у обновления AntiZapret
+	upd        fetchedRelease
 
 	loginSem      chan struct{} // ограничивает одновременные bcrypt
 	mfaMu         sync.Mutex    // сверка кода 2FA и запись принятого шага — одним куском
@@ -314,6 +321,11 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /warp/update", s.warpUpdate)
 	s.route(mux, "POST /warp/install", s.warpInstall)
 
+	// Обновление azpanel: версия, изменения, запуск.
+	s.route(mux, "GET /update", s.updatePage)
+	s.route(mux, "POST /update", s.updateStart)
+	s.route(mux, "POST /update/check", s.updateCheck)
+
 	s.route(mux, "GET /{$}", s.clientsList)
 	s.route(mux, "/", func(w http.ResponseWriter, r *http.Request) {
 		s.errorPage(w, r, http.StatusNotFound, "страница не найдена")
@@ -372,6 +384,9 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, page
 	}
 	if sess, ok := session(r); ok {
 		d["CSRF"], d["Role"], d["IsAdmin"] = sess.CSRF, sess.Role, sess.IsAdmin()
+		if sess.IsAdmin() {
+			d["UpdateAvail"] = s.updateAvailable()
+		}
 		if !sess.MFAPending { // до ввода кода меню и «Выйти» не показываются
 			d["User"] = sess.User
 		}

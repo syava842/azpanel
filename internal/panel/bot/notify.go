@@ -28,6 +28,7 @@ const (
 	KindUpdateResult     = "update_result"
 	KindCertExpiring     = "cert_expiring"
 	KindAccessExpiring   = "access_expiring"
+	KindAzpanelUpdate    = "azpanel_update"
 )
 
 const (

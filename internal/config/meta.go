@@ -108,7 +108,7 @@ var fields = []Field{
 	{Path: "telegram.enabled", Section: "telegram", Title: "Бот включён", Hint: "Нужен TELEGRAM_BOT_TOKEN в секретах.", Kind: KindBool, Apply: ApplyRestartPanel},
 	{Path: "telegram.strangers", Section: "telegram", Title: "Незнакомые", Hint: "closed — молчать, request — принимать заявки на привязку.", Kind: KindChoice, Apply: ApplyRestartPanel, Choices: []string{"closed", "request"}},
 	{Path: "telegram.notify_chats", Section: "telegram", Title: "Чаты уведомлений", Hint: "Числовые ID чатов, по одному в строке.", Kind: KindIntList, Apply: ApplyRestartPanel},
-	{Path: "telegram.notify", Section: "telegram", Title: "Виды уведомлений", Hint: "Что присылать в чаты уведомлений.", Kind: KindMulti, Apply: ApplyRestartPanel, Choices: TelegramNotifyKinds},
+	{Path: "telegram.notify", Section: "telegram", Title: "Виды уведомлений", Hint: "Что присылать в чаты уведомлений: node_down, load_high, reboot, sync_mismatch, hook_error, limit_denials, antizapret_update (новые коммиты AntiZapret), update_result (итог обновления), cert_expiring, access_expiring, azpanel_update (вышла новая версия azpanel).", Kind: KindMulti, Apply: ApplyRestartPanel, Choices: TelegramNotifyKinds},
 	{Path: "telegram.cpu_percent", Section: "telegram", Title: "Порог CPU, %", Hint: "От 1 до 100.", Kind: KindInt, Apply: ApplyRestartPanel},
 	{Path: "telegram.mem_percent", Section: "telegram", Title: "Порог памяти, %", Hint: "От 1 до 100.", Kind: KindInt, Apply: ApplyRestartPanel},
 	{Path: "telegram.disk_percent", Section: "telegram", Title: "Порог диска, %", Hint: "От 1 до 100.", Kind: KindInt, Apply: ApplyRestartPanel},

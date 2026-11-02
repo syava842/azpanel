@@ -10,6 +10,7 @@
 <body>
 <header class="top">
   <span class="brand">azpanel <small>{{.Version}}</small></span>
+  {{if .UpdateAvail}}<a href="{{url "/update"}}" class="update-badge">есть обновление {{.UpdateAvail}}</a>{{end}}
   {{if .User}}
   <nav>
     <a href="{{url "/"}}">Клиенты</a>
@@ -20,6 +21,7 @@
     <a href="{{url "/antizapret/update"}}">Обновление AZ</a>
     <a href="{{url "/telemt"}}">telemt</a>
     <a href="{{url "/warp"}}">WARP</a>
+    <a href="{{url "/update"}}">Обновление</a>
     <a href="{{url "/tasks"}}">Задачи</a>
     <a href="{{url "/audit"}}">Журнал</a>
     <a href="{{url "/users"}}">Пользователи</a>

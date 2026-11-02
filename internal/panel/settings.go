@@ -16,6 +16,7 @@ import (
 	"github.com/syava842/azpanel/internal/config"
 	"github.com/syava842/azpanel/internal/paths"
 	"github.com/syava842/azpanel/internal/secrets"
+	"github.com/syava842/azpanel/internal/update"
 )
 
 const (
@@ -201,6 +202,7 @@ var knownSecrets = []secretView{
 	{Key: SecretDataKey, Title: "Ключ шифрования 2FA", Note: "Шифрует секреты двухфакторной проверки в базе.", Regen: true,
 		WarnRegen: "Секреты 2FA в базе будут перешифрованы новым ключом; панель перезапустится. Старый ключ после этого нигде не хранится."},
 	{Key: secrets.TelegramBotToken, Title: "Токен Telegram-бота", Note: "Нужен, чтобы бот работал; после замены панель перезапустится.", Replace: true, Delete: true},
+	{Key: update.TokenKey, Title: "Токен GitHub для обновлений", Note: "Fine-grained, право Contents: Read на репозиторий azpanel. Без него проверка обновлений выключена; после замены панель перезапустится.", Replace: true, Delete: true},
 }
 
 // maskSecret — «задан, заканчивается на …abcd»; короткие значения хвоста не

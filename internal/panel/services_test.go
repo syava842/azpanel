@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -260,7 +261,33 @@ func (n *svcNode) called(name string) int {
 // errNotSetNet — ошибка связи (не ответ агента): узел перезагружается.
 var errNotSetNet = errors.New("connection refused")
 
+// Страницы сервисов под префиксом пути: все ссылки и действия — с префиксом.
+func TestServicePagesBasePath(t *testing.T) {
+	e, n, c, _, _ := updEnv(t, "0.9.0")
+	azBehindNode(n)
+	telemtInstalled(n)
+	warpInstalledNode(n, nodeapi.WarpList{Lines: []string{"a.example"}, Domains: []nodeapi.WarpDomain{{Domain: "a.example", Source: "user", Enabled: true}}})
+	const base = "/azpanel/"
+	e.srv.BasePath = base
+	e.h = e.srv.Handler()
+	bare := regexp.MustCompile(`(?:href|action)="/[^a]`)
+	for _, pg := range []string{"/antizapret/update", "/telemt", "/warp", "/update"} {
+		r := httptest.NewRequest("GET", base[:len(base)-1]+pg, nil)
+		r.AddCookie(c)
+		rec := e.do(r)
+		if rec.Code != 200 {
+			t.Errorf("%s: %d", pg, rec.Code)
+			continue
+		}
+		b := rec.Body.String()
+		if bare.MatchString(b) || strings.Contains(b, `action="/antizapret`) || strings.Contains(b, `action="/telemt`) || strings.Contains(b, `action="/warp`) || strings.Contains(b, `action="/update`) {
+			t.Errorf("%s: ссылка без префикса", pg)
+		}
+		if !strings.Contains(b, `href="/azpanel/`) {
+			t.Errorf("%s: нет ссылок с префиксом", pg)
+		}
+	}
+}
+
 var _ = errors.New
-var _ = httptest.NewRecorder
 var _ = url.Values{}
-var _ = strings.Contains
