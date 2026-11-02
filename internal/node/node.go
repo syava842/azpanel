@@ -157,6 +157,7 @@ func startAPI(ctx context.Context, cfg config.Config, version string, tr *Tracke
 		Denials:       denials,
 		WGShow:        antizapret.WGShow,
 		Kill:          antizapret.KillClient,
+		WGCmd:         ExecWGCmd,
 		Log:           log,
 		Now:           time.Now,
 	}
@@ -183,6 +184,7 @@ func startAPI(ctx context.Context, cfg config.Config, version string, tr *Tracke
 		IdleTimeout:  time.Minute,
 		ErrorLog:     slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 	}
+	go api.RunWGGuard(ctx, time.Duration(n.PollSeconds)*time.Second)
 	go func() {
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("API агента остановлен с ошибкой", "err", err)

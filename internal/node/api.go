@@ -48,6 +48,7 @@ type API struct {
 	Services      func(ctx context.Context) ([]sysinfo.Service, error)
 	WGShow        func(ctx context.Context, iface string) ([]antizapret.WGPeer, error)
 	Kill          func(sock, name string, timeout time.Duration) (int, error)
+	WGCmd         func(ctx context.Context, name string, args ...string) ([]byte, error) // wg, wg-quick; nil — сторож WireGuard выключен
 	Log           *slog.Logger
 	Now           func() time.Time
 
@@ -222,6 +223,7 @@ func (a *API) createClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.Log.Info("клиент создан", "name", req.Name, "kind", req.Kind)
+	a.guardAfterClientSh(noCancel(r))
 	writeJSON(w, http.StatusCreated, nodeapi.Result{Output: out})
 }
 
@@ -255,6 +257,7 @@ func (a *API) renew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.Log.Info("сертификат продлён", "name", name, "days", req.Days)
+	a.guardAfterClientSh(noCancel(r))
 	writeJSON(w, http.StatusOK, nodeapi.Result{Output: out})
 }
 
@@ -293,6 +296,7 @@ func (a *API) deleteClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.Log.Info("клиент удалён", "name", name, "kind", kind)
+	a.guardAfterClientSh(noCancel(r))
 	// Клиента не осталось ни в одном виде — его лимит и блокировка больше
 	// ничего не значат, а с тем же именем может появиться новый клиент.
 	_, still, err := a.find(name)
@@ -420,6 +424,18 @@ func (a *API) setBlocked(w http.ResponseWriter, r *http.Request) {
 			}
 			res.Killed += n
 		}
+	}
+	// WireGuard: пира нельзя «выгнать» командой, его снимают с интерфейса;
+	// при разблокировке возвращают из конфига. Сбой не отменяет блокировку в
+	// limits.json — сторож повторит проход по таймеру.
+	if req.Blocked {
+		n, err := a.guardWG(noCancel(r))
+		if err != nil {
+			a.Log.Warn("пиры WireGuard не сняты", "name", name, "err", err)
+		}
+		res.Killed += n
+	} else if _, err := a.restoreWG(noCancel(r), name); err != nil {
+		a.Log.Warn("пиры WireGuard не возвращены", "name", name, "err", err)
 	}
 	a.Log.Info("блокировка изменена", "name", name, "blocked", req.Blocked, "killed", res.Killed)
 	writeJSON(w, http.StatusOK, res)
