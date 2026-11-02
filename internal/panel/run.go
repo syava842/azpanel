@@ -3,10 +3,12 @@ package panel
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/syava842/azpanel/internal/config"
@@ -14,6 +16,7 @@ import (
 	"github.com/syava842/azpanel/internal/nodeapi"
 	"github.com/syava842/azpanel/internal/paths"
 	"github.com/syava842/azpanel/internal/secrets"
+	"github.com/syava842/azpanel/internal/store"
 )
 
 // Run — режим «azpanel panel». Секреты (токен агента, хеш пароля) читаются
@@ -43,8 +46,41 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		log.Warn("пароль администратора не задан — вход невозможен; задайте: azpanel panel passwd")
 	}
 
+	st, err := store.Open(filepath.Join(paths.Data(), "azpanel.db"))
+	if err != nil {
+		return fmt.Errorf("база панели: %w", err)
+	}
+	defer st.Close()
+	geo, err := OpenGeo(paths.Data())
+	if err != nil {
+		log.Warn("геоданные не открыты — работаем без города и провайдера", "err", err)
+		geo = nil
+	}
+	defer geo.Close()
+
+	node := nodeapi.New(cfg.Panel.NodeURL, token)
+	col := &Collector{
+		Node:        node,
+		Store:       st,
+		NodeID:      store.LocalNode,
+		Every:       time.Duration(cfg.Panel.CollectSeconds) * time.Second,
+		HistoryDays: cfg.Panel.HistoryDays,
+		Log:         log,
+	}
+	// defer срабатывают в обратном порядке: сначала сборщик останавливается
+	// и его ждут, и только потом закрываются геоданные и база.
+	cctx, stopCollector := context.WithCancel(ctx)
+	var colDone sync.WaitGroup
+	colDone.Add(1)
+	go func() { defer colDone.Done(); col.Run(cctx) }()
+	defer func() { stopCollector(); colDone.Wait() }()
+
 	s := &Server{
-		Node:      nodeapi.New(cfg.Panel.NodeURL, token),
+		Node:      node,
+		Store:     st,
+		NodeID:    store.LocalNode,
+		Collector: col,
+		Geo:       geo,
 		AdminUser: user,
 		AdminHash: hash,
 		Version:   version,
