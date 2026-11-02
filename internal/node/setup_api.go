@@ -57,6 +57,9 @@ func (a *API) putSetup(w http.ResponseWriter, r *http.Request) {
 	case errors.As(err, &bad):
 		writeErr(w, http.StatusBadRequest, bad.Error())
 		return
+	case isBusy(err):
+		writeErr(w, http.StatusConflict, err.Error())
+		return
 	case err != nil:
 		a.fail(w, "setup не записан", err)
 		return

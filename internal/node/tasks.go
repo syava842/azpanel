@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/syava842/azpanel/internal/antizapret"
 	"github.com/syava842/azpanel/internal/fsutil"
 	"github.com/syava842/azpanel/internal/nodeapi"
 )
@@ -80,8 +81,16 @@ type Tasks struct {
 	// Exec — запуск процесса; возвращает код выхода. Ошибка — только если
 	// процесс не удалось запустить. nil — настоящий запуск. Подменяется в тестах.
 	Exec func(ctx context.Context, name string, args ...string) (code int, out []byte, err error)
-	// Active — работает ли юнит; nil — systemctl is-active.
-	Active func(ctx context.Context, unit string) bool
+	// Active — работает ли юнит; nil — systemctl is-active. Ошибка — состояние
+	// неизвестно (systemd занят, тайм-аут): задачу нельзя считать оконченной.
+	Active func(ctx context.Context, unit string) (bool, error)
+	// Result — итог юнита по systemctl show -p Result («timeout», «success»…);
+	// пусто — неизвестно. nil — настоящий systemctl.
+	Result func(ctx context.Context, unit string) string
+	// Ctx — жизнь агента. Отменён — агент останавливается: клиент systemd-run
+	// получил SIGTERM вместе с ним, а юнит задачи продолжает работать, поэтому
+	// результат задачи не записывается; её подхватит следующий запуск (Load).
+	Ctx context.Context
 	// PollEvery — как часто проверять юнит задачи, оставшейся с прошлого запуска агента.
 	PollEvery time.Duration
 	// Timeouts — предел времени по виду задачи; nil — DefaultTaskTimeouts.
@@ -145,7 +154,7 @@ func (t *Tasks) Load() error {
 			tk.ExitCode = &code
 			continue
 		}
-		if t.running == "" && t.isActive(Unit(tk.ID)) {
+		if t.running == "" && t.state(Unit(tk.ID)) != unitInactive { // неизвестное состояние — как «работает»
 			t.running = tk.ID
 			go t.waitOrphan(tk.ID)
 			continue
@@ -160,13 +169,80 @@ func (t *Tasks) Load() error {
 	return nil
 }
 
-func (t *Tasks) isActive(unit string) bool {
+// Состояния юнита задачи.
+type unitState int
+
+const (
+	unitInactive unitState = iota // юнита нет или он остановлен
+	unitActive
+	unitUnknown // systemctl не ответил: тайм-аут, сбой запуска
+)
+
+func (t *Tasks) context() context.Context {
+	if t.Ctx != nil {
+		return t.Ctx
+	}
+	return context.Background()
+}
+
+// state различает «остановлен» и «не удалось узнать»: ошибка опроса не должна
+// закрывать идущую задачу.
+func (t *Tasks) state(unit string) unitState {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	var (
+		active bool
+		err    error
+	)
 	if t.Active != nil {
-		return t.Active(ctx, unit)
+		active, err = t.Active(ctx, unit)
+	} else {
+		active, err = systemctlIsActive(ctx, unit)
 	}
-	return exec.CommandContext(ctx, "systemctl", "is-active", "--quiet", unit).Run() == nil
+	switch {
+	case err != nil:
+		return unitUnknown
+	case active:
+		return unitActive
+	}
+	return unitInactive
+}
+
+// systemctlIsActive: код 0 — работает; 3 (inactive, failed) и 4 (юнита нет) —
+// остановлен; всё остальное (не запустился, убит по тайм-ауту) — ошибка.
+func systemctlIsActive(ctx context.Context, unit string) (bool, error) {
+	err := exec.CommandContext(ctx, "systemctl", "is-active", "--quiet", unit).Run()
+	if err == nil {
+		return true, nil
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && ctx.Err() == nil && (ee.ExitCode() == 3 || ee.ExitCode() == 4) {
+		return false, nil
+	}
+	return false, err
+}
+
+// unitResult — итог юнита; после --collect юнита уже может не быть.
+func (t *Tasks) unitResult(unit string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if t.Result != nil {
+		return t.Result(ctx, unit)
+	}
+	out, err := exec.CommandContext(ctx, "systemctl", "show", "-p", "Result", "--value", unit).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// timedOut: задача без файла .exit остановлена по пределу времени, если так
+// говорит systemd либо она шла не меньше своего предела.
+func (t *Tasks) timedOut(task Task) bool {
+	if t.unitResult(Unit(task.ID)) == "timeout" {
+		return true
+	}
+	return t.now().Sub(task.Started) >= t.timeout(task.Kind)
 }
 
 // exitPath — файл с кодом выхода задачи рядом с её журналом. Берётся из
@@ -200,24 +276,34 @@ func (t *Tasks) timeout(kind string) time.Duration {
 	return fallbackTaskTimeout
 }
 
-// waitOrphan ждёт юнит задачи, начатой до перезапуска агента. Код выхода
-// берётся из файла обёртки; если файла нет (юнит убит по пределу времени или
-// сломан), код неизвестен — --collect уже убрал юнит вместе с результатом.
+// waitOrphan ждёт юнит задачи, у которой клиент systemd-run уже не с нами
+// (агент перезапускался или оборвался D-Bus). Пока systemd не ответил или юнит
+// работает — ждём. Код выхода берётся из файла обёртки; если файла нет, юнит
+// убит по пределу времени (--collect уже убрал его результат) или сломан.
 func (t *Tasks) waitOrphan(id string) {
 	every := t.PollEvery
 	if every <= 0 {
 		every = 2 * time.Second
 	}
-	for t.isActive(Unit(id)) {
-		time.Sleep(every)
+	for t.state(Unit(id)) != unitInactive {
+		select {
+		case <-t.context().Done():
+			return // агент останавливается: задачу подхватит следующий запуск
+		case <-time.After(every):
+		}
 	}
-	if task, ok := t.Get(id); ok {
+	task, ok := t.Get(id)
+	if ok {
 		if code, ok := t.readExit(task); ok {
-			t.finish(id, &code, false)
+			t.finish(id, &code, false, false)
+			return
+		}
+		if t.timedOut(task) {
+			t.finish(id, nil, false, true)
 			return
 		}
 	}
-	t.finish(id, nil, true)
+	t.finish(id, nil, true, false)
 }
 
 // Start запускает задачу в фоне. argv — команда и аргументы; запрет на
@@ -278,20 +364,43 @@ func (t *Tasks) run(task Task, argv []string) {
 	if run == nil {
 		run = execCommand
 	}
-	// Контекст не отменяется: ожидание кончается вместе с процессом агента.
-	code, out, err := run(context.Background(), "systemd-run", args...)
+	code, out, err := run(t.context(), "systemd-run", args...)
 	if len(out) > 0 {
 		appendLog(task.Log, string(out))
 	}
+	if t.context().Err() != nil {
+		return // агент останавливается; юнит живёт дальше, итог запишет следующий запуск
+	}
+	if c, ok := t.readExit(task); ok {
+		// Файл надёжнее: код самой команды, а не systemd-run.
+		t.logger().Info("задача завершена", "id", task.ID, "kind", task.Kind, "exit_code", c)
+		t.finish(task.ID, &c, false, false)
+		return
+	}
 	if err != nil {
 		appendLog(task.Log, "systemd-run не запущен: "+err.Error()+"\n")
-		code = -1
-	} else if c, ok := t.readExit(task); ok {
-		code = c // файл надёжнее: код самой команды, а не systemd-run
+		t.finish(task.ID, ptr(-1), false, false)
+		return
+	}
+	// systemd-run вернулся, а кода команды нет. Юнит ещё жив (клиент убит
+	// сигналом при остановке агента, оборван D-Bus) — ждём его, а не пишем
+	// ложный код: иначе правило «одна задача» перестало бы действовать.
+	if t.state(Unit(task.ID)) != unitInactive {
+		t.logger().Warn("systemd-run вернулся, а юнит задачи ещё работает — ждём", "id", task.ID, "code", code)
+		t.waitOrphan(task.ID)
+		return
+	}
+	if t.timedOut(task) {
+		appendLog(task.Log, "задача остановлена по пределу времени\n")
+		t.logger().Warn("задача остановлена по пределу времени", "id", task.ID, "kind", task.Kind)
+		t.finish(task.ID, nil, false, true)
+		return
 	}
 	t.logger().Info("задача завершена", "id", task.ID, "kind", task.Kind, "exit_code", code)
-	t.finish(task.ID, &code, false)
+	t.finish(task.ID, &code, false, false)
 }
+
+func ptr[T any](v T) *T { return &v }
 
 func appendLog(path, s string) {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o640)
@@ -311,7 +420,7 @@ func execCommand(ctx context.Context, name string, args ...string) (int, []byte,
 	return 0, out, err
 }
 
-func (t *Tasks) finish(id string, code *int, interrupted bool) {
+func (t *Tasks) finish(id string, code *int, interrupted, timedOut bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	now := t.now()
@@ -320,6 +429,7 @@ func (t *Tasks) finish(id string, code *int, interrupted bool) {
 			t.tasks[i].Finished = &now
 			t.tasks[i].ExitCode = code
 			t.tasks[i].Interrupted = interrupted
+			t.tasks[i].TimedOut = timedOut
 		}
 	}
 	if t.running == id {
@@ -451,4 +561,31 @@ func (t *Tasks) saveLocked() {
 	if err != nil {
 		t.logger().Error("tasks.json не записан", "err", err)
 	}
+}
+
+// busyDuring возвращает проверку для antizapret.Routing.Busy и SetupFile.Busy:
+// пока идёт задача одного из видов kinds, запись отклоняется.
+func busyDuring(t *Tasks, kinds ...string) func() error {
+	return func() error {
+		cur, ok := t.Running()
+		if !ok {
+			return nil
+		}
+		for _, k := range kinds {
+			if cur.Kind == k {
+				return &antizapret.BusyError{Reason: fmt.Sprintf("идёт задача %s — дождитесь её окончания и повторите", taskKindName(cur.Kind))}
+			}
+		}
+		return nil
+	}
+}
+
+func taskKindName(kind string) string {
+	switch kind {
+	case TaskDoall:
+		return "doall (применение списков)"
+	case TaskRestart:
+		return "restart (перезапуск antizapret)"
+	}
+	return kind
 }

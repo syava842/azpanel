@@ -109,6 +109,7 @@ type Task struct {
 	Finished    *time.Time `json:"finished,omitempty"`
 	ExitCode    *int       `json:"exit_code,omitempty"`
 	Interrupted bool       `json:"interrupted,omitempty"` // агент перезапускался: код выхода неизвестен
+	TimedOut    bool       `json:"timed_out,omitempty"`   // остановлена по пределу времени (RuntimeMaxSec)
 	Log         string     `json:"log"`                   // путь журнала на узле
 }
 
@@ -327,6 +328,17 @@ type RoutingPatchResult struct {
 // RoutingPut — полная замена содержимого (файлы до 1 МБ).
 type RoutingPut struct {
 	Content string `json:"content"`
+	// BaseSHA256 — отпечаток текста, который правили (RoutingRaw.SHA256);
+	// файл с тех пор изменился — 409. Пусто — без проверки.
+	BaseSHA256 string `json:"base_sha256,omitempty"`
+}
+
+// RoutingRaw — файл списка как есть, с комментариями и пустыми строками, и
+// sha256 его байтов (hex). Файл больше 1 МБ — 413.
+type RoutingRaw struct {
+	Name    string `json:"name"`
+	Content string `json:"content"`
+	SHA256  string `json:"sha256"`
 }
 
 // RoutingPutResult — итог PUT. applied=false при ошибках строк.
@@ -383,10 +395,17 @@ func (c *HTTPClient) PatchRouting(ctx context.Context, name string, p RoutingPat
 	return v, c.do(ctx, http.MethodPatch, "/v1/routing/files/"+url.PathEscape(name), p, &v)
 }
 
+// RoutingRaw — файл списка как есть (до 1 МБ) и его отпечаток.
+func (c *HTTPClient) RoutingRaw(ctx context.Context, name string) (RoutingRaw, error) {
+	var v RoutingRaw
+	return v, c.do(ctx, http.MethodGet, "/v1/routing/files/"+url.PathEscape(name)+"/raw", nil, &v)
+}
+
 // ReplaceRouting заменяет список целиком; для файла больше 1 МБ — 413.
-func (c *HTTPClient) ReplaceRouting(ctx context.Context, name, content string) (RoutingPutResult, error) {
+// baseSHA — отпечаток прочитанного текста: файл изменился — 409; пусто — без проверки.
+func (c *HTTPClient) ReplaceRouting(ctx context.Context, name, content, baseSHA string) (RoutingPutResult, error) {
 	var v RoutingPutResult
-	return v, c.do(ctx, http.MethodPut, "/v1/routing/files/"+url.PathEscape(name), RoutingPut{Content: content}, &v)
+	return v, c.do(ctx, http.MethodPut, "/v1/routing/files/"+url.PathEscape(name), RoutingPut{Content: content, BaseSHA256: baseSHA}, &v)
 }
 
 // RoutingBackups — копии списка, новые сверху (до 20).

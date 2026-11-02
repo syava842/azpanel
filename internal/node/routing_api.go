@@ -41,10 +41,20 @@ func (a *API) routingErr(w http.ResponseWriter, what string, err error) bool {
 		writeErr(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, antizapret.ErrTooLarge):
 		writeErr(w, http.StatusRequestEntityTooLarge, err.Error())
+	case errors.Is(err, antizapret.ErrChanged):
+		writeErr(w, http.StatusConflict, err.Error())
+	case isBusy(err):
+		writeErr(w, http.StatusConflict, err.Error())
 	default:
 		a.fail(w, what, err)
 	}
 	return true
+}
+
+// isBusy — запись отложена из-за идущей задачи.
+func isBusy(err error) bool {
+	var be *antizapret.BusyError
+	return errors.As(err, &be)
 }
 
 func (a *API) routingReady(w http.ResponseWriter) bool {
@@ -115,6 +125,19 @@ func (a *API) routingLines(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, nodeapi.RoutingPage{Name: name, Lines: pg.Lines, Total: pg.Total, Offset: offset, Limit: limit})
 }
 
+// routingRaw отдаёт файл как есть и sha256 его байтов.
+func (a *API) routingRaw(w http.ResponseWriter, r *http.Request) {
+	if !a.routingReady(w) {
+		return
+	}
+	name := r.PathValue("name")
+	content, sum, err := a.Routing.Raw(name)
+	if a.routingErr(w, "список не прочитан", err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, nodeapi.RoutingRaw{Name: name, Content: content, SHA256: sum})
+}
+
 func (a *API) routingPatch(w http.ResponseWriter, r *http.Request) {
 	if !a.routingReady(w) {
 		return
@@ -145,7 +168,7 @@ func (a *API) routingPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.PathValue("name")
-	n, errs, err := a.Routing.Replace(name, req.Content)
+	n, errs, err := a.Routing.Replace(name, req.Content, req.BaseSHA256)
 	if a.routingErr(w, "список не заменён", err) {
 		return
 	}

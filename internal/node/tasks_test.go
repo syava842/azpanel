@@ -42,6 +42,9 @@ func newTasks(t *testing.T, f *fakeExec) *Tasks {
 		Dir: "/root/antizapret", LogDir: filepath.Join(root, "log", "tasks"),
 		StatePath: filepath.Join(root, "data", "tasks.json"),
 		Exec:      f.exec, Now: time.Now, PollEvery: 5 * time.Millisecond,
+		// Юнитов в тестах нет: после возврата Exec задача считается оконченной.
+		Active: func(context.Context, string) (bool, error) { return false, nil },
+		Result: func(context.Context, string) string { return "" },
 	}
 }
 
@@ -152,7 +155,8 @@ func TestTasksListNewestFirstAndCapped(t *testing.T) {
 	root := t.TempDir()
 	tk := &Tasks{
 		Dir: "/x", LogDir: filepath.Join(root, "l"), StatePath: filepath.Join(root, "tasks.json"),
-		Exec: func(context.Context, string, ...string) (int, []byte, error) { return 0, nil, nil },
+		Exec:   func(context.Context, string, ...string) (int, []byte, error) { return 0, nil, nil },
+		Active: func(context.Context, string) (bool, error) { return false, nil },
 	}
 	var ids []string
 	for i := 0; i < maxTasks+5; i++ {
@@ -185,7 +189,7 @@ func TestTasksInterruptedWhenUnitGone(t *testing.T) {
 	os.WriteFile(state, []byte(`[{"id":"aaaaaaaaaaaa","kind":"doall","started":"2026-11-02T10:00:00Z","log":"/x/a.log"}]`), 0o640)
 	tk := &Tasks{
 		LogDir: root, StatePath: state,
-		Active: func(context.Context, string) bool { return false },
+		Active: func(context.Context, string) (bool, error) { return false, nil },
 	}
 	if err := tk.Load(); err != nil {
 		t.Fatal(err)
@@ -213,10 +217,10 @@ func TestTasksOrphanWaitedWhileUnitActive(t *testing.T) {
 	active := true
 	tk := &Tasks{
 		LogDir: root, StatePath: state, PollEvery: 5 * time.Millisecond,
-		Active: func(_ context.Context, unit string) bool {
+		Active: func(_ context.Context, unit string) (bool, error) {
 			mu.Lock()
 			defer mu.Unlock()
-			return active && unit == "azpanel-task-bbbbbbbbbbbb"
+			return active && unit == "azpanel-task-bbbbbbbbbbbb", nil
 		},
 		Exec: func(context.Context, string, ...string) (int, []byte, error) { return 0, nil, nil },
 	}
@@ -517,7 +521,7 @@ func TestTasksOrphanExitCodeFromFile(t *testing.T) {
 	active := true
 	tk := &Tasks{
 		LogDir: root, StatePath: state, PollEvery: 5 * time.Millisecond,
-		Active: func(context.Context, string) bool { mu.Lock(); defer mu.Unlock(); return active },
+		Active: func(context.Context, string) (bool, error) { mu.Lock(); defer mu.Unlock(); return active, nil },
 	}
 	if err := tk.Load(); err != nil {
 		t.Fatal(err)
@@ -537,7 +541,7 @@ func TestTasksLoadFinishedWhileAgentDown(t *testing.T) {
 	state := filepath.Join(root, "tasks.json")
 	os.WriteFile(state, []byte(`[{"id":"dddddddddddd","kind":"restart","started":"2026-11-02T10:00:00Z","log":"/x/d.log"}]`), 0o640)
 	os.WriteFile(filepath.Join(root, "d.log.exit"), []byte("2\n"), 0o640)
-	tk := &Tasks{LogDir: root, StatePath: state, Active: func(context.Context, string) bool { return false }}
+	tk := &Tasks{LogDir: root, StatePath: state, Active: func(context.Context, string) (bool, error) { return false, nil }}
 	if err := tk.Load(); err != nil {
 		t.Fatal(err)
 	}

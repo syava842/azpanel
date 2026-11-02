@@ -80,6 +80,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/clients/profiles/rebuild", a.rebuildProfiles)
 	mux.HandleFunc("GET /v1/routing/files", a.routingFiles)
 	mux.HandleFunc("GET /v1/routing/files/{name}", a.routingLines)
+	mux.HandleFunc("GET /v1/routing/files/{name}/raw", a.routingRaw)
 	mux.HandleFunc("PATCH /v1/routing/files/{name}", a.routingPatch)
 	mux.HandleFunc("PUT /v1/routing/files/{name}", a.routingPut)
 	mux.HandleFunc("GET /v1/routing/backups/{name}", a.routingBackups)

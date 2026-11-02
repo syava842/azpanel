@@ -131,7 +131,7 @@ func startAPI(ctx context.Context, cfg config.Config, version string, tr *Tracke
 	n := cfg.Node
 	tasks := &Tasks{
 		Dir: n.AntiZapretDir, LogDir: filepath.Join(paths.Log(), "tasks"),
-		StatePath: filepath.Join(paths.Data(), "tasks.json"), Log: log, Now: time.Now,
+		StatePath: filepath.Join(paths.Data(), "tasks.json"), Log: log, Now: time.Now, Ctx: ctx,
 	}
 	if err := tasks.Load(); err != nil {
 		log.Error("список задач не прочитан — задачи начаты заново", "err", err)
@@ -141,12 +141,16 @@ func startAPI(ctx context.Context, cfg config.Config, version string, tr *Tracke
 		ConfigDir: filepath.Join(n.AntiZapretDir, "config"),
 		Backups:   &antizapret.Backups{Dir: filepath.Join(paths.Backup(), "antizapret")},
 	}
+	// Пока идёт doall, parse.sh переписывает config/*.txt (sed -i) и может
+	// затереть правку; setup читают doall и restart.
+	routing.Busy = busyDuring(tasks, TaskDoall)
 	api := &API{
 		Tasks:   tasks,
 		Routing: routing,
 		Setup: &antizapret.SetupFile{
 			Path:    filepath.Join(n.AntiZapretDir, "setup"),
 			Backups: routing.Backups,
+			Busy:    busyDuring(tasks, TaskDoall, TaskRestart),
 		},
 		Token: token, Version: version, Tracker: tr, LimitsPath: paths.LimitsFile(),
 		Inventory:     antizapret.Inventory{PKI: n.EasyRSAPKI, WireGuardDir: n.WireGuardDir},

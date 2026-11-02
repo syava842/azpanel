@@ -130,7 +130,7 @@ func TestAPIRoutingNames(t *testing.T) {
 		if _, err := e.client.PatchRouting(ctx, n, nodeapi.RoutingPatch{Add: []string{"a.example.com"}}); err == nil {
 			t.Errorf("PatchRouting(%q) должно отказывать", n)
 		}
-		if _, err := e.client.ReplaceRouting(ctx, n, "x.example.com\n"); err == nil {
+		if _, err := e.client.ReplaceRouting(ctx, n, "x.example.com\n", ""); err == nil {
 			t.Errorf("ReplaceRouting(%q) должно отказывать", n)
 		}
 	}
@@ -151,22 +151,22 @@ func TestAPIRoutingNames(t *testing.T) {
 func TestAPIRoutingPut(t *testing.T) {
 	e := routingEnv(t, map[string]string{"include-hosts.txt": "a.example.com\n"})
 	ctx := context.Background()
-	res, err := e.client.ReplaceRouting(ctx, "include-hosts.txt", "# новое\nB.example.com\n")
+	res, err := e.client.ReplaceRouting(ctx, "include-hosts.txt", "# новое\nB.example.com\n", "")
 	if err != nil || !res.Applied || res.Lines != 1 || len(res.Errors) != 0 {
 		t.Fatalf("%+v, %v", res, err)
 	}
-	res, err = e.client.ReplaceRouting(ctx, "include-hosts.txt", "ok.example.com\nbad host\n")
+	res, err = e.client.ReplaceRouting(ctx, "include-hosts.txt", "ok.example.com\nbad host\n", "")
 	if err != nil || res.Applied || len(res.Errors) != 1 || res.Errors[0].Line != 2 {
 		t.Fatalf("%+v, %v", res, err)
 	}
 	// Больше 1 МБ — 413.
 	big := strings.Repeat("a.example.com\n", 80000)
-	if _, err := e.client.ReplaceRouting(ctx, "include-hosts.txt", big); status(err) != 413 || !strings.Contains(err.Error(), "по строкам") {
+	if _, err := e.client.ReplaceRouting(ctx, "include-hosts.txt", big, ""); status(err) != 413 || !strings.Contains(err.Error(), "по строкам") {
 		t.Fatalf("1 МБ: %v", err)
 	}
 	// Больше лимита тела запроса — тоже 413.
 	huge := strings.Repeat("a.example.com\n", 700000)
-	if _, err := e.client.ReplaceRouting(ctx, "include-hosts.txt", huge); status(err) != 413 {
+	if _, err := e.client.ReplaceRouting(ctx, "include-hosts.txt", huge, ""); status(err) != 413 {
 		t.Fatalf("лимит тела: %v", err)
 	}
 	if got := readCfg(t, e, "include-hosts.txt"); got != "# новое\nb.example.com\n" {
@@ -191,7 +191,7 @@ func TestAPIRoutingBackupsAndRestore(t *testing.T) {
 	e := routingEnv(t, map[string]string{"include-hosts.txt": "v0.example.com\n"})
 	ctx := context.Background()
 	for _, v := range []string{"v1", "v2"} {
-		if _, err := e.client.ReplaceRouting(ctx, "include-hosts.txt", v+".example.com\n"); err != nil {
+		if _, err := e.client.ReplaceRouting(ctx, "include-hosts.txt", v+".example.com\n", ""); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(2 * time.Millisecond)
