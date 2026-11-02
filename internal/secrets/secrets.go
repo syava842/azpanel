@@ -34,6 +34,13 @@ func Load(path string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parse(data, path)
+}
+
+// Parse разбирает содержимое secrets.env (например, из архива импорта).
+func Parse(data []byte) (map[string]string, error) { return parse(data, "secrets.env") }
+
+func parse(data []byte, path string) (map[string]string, error) {
 	out := map[string]string{}
 	for i, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimRight(line, "\r")
@@ -75,6 +82,23 @@ func SetMany(path string, kv map[string]string) error {
 	for k, v := range kv {
 		m[k] = v
 	}
+	return fsutil.WriteFileAtomic(path, Marshal(m), 0o600)
+}
+
+// Delete убирает ключи; отсутствующий ключ — не ошибка.
+func Delete(path string, keys ...string) error {
+	m, err := Load(path)
+	if err != nil {
+		return err
+	}
+	for _, k := range keys {
+		delete(m, k)
+	}
+	return fsutil.WriteFileAtomic(path, Marshal(m), 0o600)
+}
+
+// Marshal — содержимое файла для карты: ключи по алфавиту.
+func Marshal(m map[string]string) []byte {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
@@ -84,7 +108,7 @@ func SetMany(path string, kv map[string]string) error {
 	for _, k := range keys {
 		fmt.Fprintf(&b, "%s=%s\n", k, m[k])
 	}
-	return fsutil.WriteFileAtomic(path, []byte(b.String()), 0o600)
+	return []byte(b.String())
 }
 
 // NewToken — 32 случайных байта в hex.

@@ -25,6 +25,10 @@ import (
 // один раз при старте. Хеш пароля из secrets.env нужен только для переноса
 // администратора в базу, пока в ней нет ни одного пользователя.
 func Run(ctx context.Context, cfg config.Config, version string) error {
+	// stop — «перезапуск» из настроек: панель завершается, systemd поднимает её
+	// заново (Restart=always).
+	ctx, stop := context.WithCancel(ctx)
+	defer stop()
 	w, err := logx.Open(filepath.Join(paths.Log(), "panel.log"), int64(cfg.Log.MaxSizeMB)<<20, cfg.Log.Keep)
 	if err != nil {
 		return err
@@ -91,6 +95,9 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		ConfigFile:      paths.ConfigFile(),
 		PublicURL:       cfg.Panel.PublicURL,
 		BasePath:        cfg.Panel.BasePath,
+		SecretsFile:     paths.SecretsFile(),
+		Exit:            stop,
+		RestartNode:     func(ctx context.Context) error { return restartNodeHTTP(ctx, cfg.Panel.NodeURL, token) },
 	}
 	proxies, err := config.ParseTrustedProxies(cfg.Panel.TrustedProxies)
 	if err != nil {

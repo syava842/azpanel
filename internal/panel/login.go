@@ -182,8 +182,18 @@ func (s *Server) guard(h http.HandlerFunc, mode guardMode) http.Handler {
 			if strings.HasPrefix(r.URL.Path, "/routing/files/") {
 				limit = maxRoutingForm // списки целиком — до 1 МБ текста
 			}
+			multipart := strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data")
+			if multipart {
+				limit = 2 * maxImport // файл импорта настроек
+			}
 			r.Body = http.MaxBytesReader(w, r.Body, limit)
-			if err := r.ParseForm(); err != nil {
+			var err error
+			if multipart {
+				err = r.ParseMultipartForm(maxFormBody)
+			} else {
+				err = r.ParseForm()
+			}
+			if err != nil {
 				s.errorPage(w, r, http.StatusBadRequest, "неверный запрос")
 				return
 			}

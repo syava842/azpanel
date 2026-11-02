@@ -106,3 +106,24 @@ func TestSetManyBadInputWritesNothing(t *testing.T) {
 		t.Fatalf("файл изменён: %q -> %q", before, after)
 	}
 }
+
+func TestDeleteAndParse(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "secrets.env")
+	if err := SetMany(f, map[string]string{"A_KEY": "1", "TELEGRAM_BOT_TOKEN": "x:y", "ZED": "3"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Delete(f, TelegramBotToken, "НЕТ_ТАКОГО"); err != nil {
+		t.Fatal(err)
+	}
+	m, err := Load(f)
+	if err != nil || len(m) != 2 || m["A_KEY"] != "1" || m["ZED"] != "3" {
+		t.Fatalf("%v %v", m, err)
+	}
+	p, err := Parse(Marshal(m))
+	if err != nil || p["ZED"] != "3" || len(p) != 2 {
+		t.Fatalf("%v %v", p, err)
+	}
+	if _, err := Parse([]byte("мусор без равно")); err == nil {
+		t.Fatal("мусор принят")
+	}
+}

@@ -10,7 +10,7 @@ func TestProxyUnit(t *testing.T) {
 	for _, s := range []string{
 		"ExecStart=/x proxy\n", "Description=azpanel: прокси-агент", "ProtectSystem=strict", "ProtectHome=true",
 		"ReadWritePaths=/opt/azpanel -/etc/iptables\n", "NoNewPrivileges=true", "PrivateTmp=true",
-		"AF_NETLINK", "Restart=on-failure", "WantedBy=multi-user.target",
+		"AF_NETLINK", "Restart=always", "WantedBy=multi-user.target",
 	} {
 		if !strings.Contains(u, s) {
 			t.Errorf("в юните прокси-агента нет %q:\n%s", s, u)

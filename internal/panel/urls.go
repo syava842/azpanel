@@ -12,12 +12,16 @@ import (
 // впереди добавляется BasePath без хвостового «/». Путь «/» при префиксе
 // «/x/» даёт «/x/». Годится и для шаблонов ({{url "/clients/" .Name}}),
 // и для редиректов.
-func (s *Server) url(parts ...any) string {
+func (s *Server) url(parts ...any) string { return urlAt(s.BasePath, parts...) }
+
+// urlAt — то же с явным префиксом: страница «перезапуск…» ведёт на адрес по
+// новому base_path, который ещё не действует.
+func urlAt(base string, parts ...any) string {
 	var b strings.Builder
 	for _, p := range parts {
 		fmt.Fprint(&b, p)
 	}
-	return strings.TrimSuffix(s.BasePath, "/") + b.String()
+	return strings.TrimSuffix(base, "/") + b.String()
 }
 
 // cookiePath — Path cookie сессии: префикс пути либо «/».

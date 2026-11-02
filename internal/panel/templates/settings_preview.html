@@ -1,0 +1,24 @@
+{{define "content"}}
+<h1>Проверка изменений</h1>
+<p class="muted">Источник: {{.Source}}. Пока вы не подтвердите, ничего не записано.</p>
+{{range .Notes}}<div class="error">{{.}}</div>{{end}}
+<table>
+  <thead><tr><th>Параметр</th><th>Было</th><th>Станет</th><th>Как применится</th></tr></thead>
+  <tbody>
+  {{range .Changes}}
+  <tr><td>{{.Title}}<br><code>{{.Path}}</code></td><td>{{.Old}}</td><td>{{.New}}</td><td{{if .Dangerous}} class="warn"{{end}}>{{.ApplyText}}</td></tr>
+  {{end}}
+  </tbody>
+</table>
+{{if .SecretKeys}}
+<p>Секреты, которые будут заменены (значения не показываются): {{range $i, $k := .SecretKeys}}{{if $i}}, {{end}}<code>{{$k}}</code>{{end}}. Панель перезапустится.</p>
+{{end}}
+{{if .NeedNode}}<p>Агент узла перезапустится сам.</p>{{end}}
+{{if .NeedPanel}}<p>Панель перезапустится сама через секунду после применения.{{if .Dangerous}} Опасные значения нужно подтвердить на странице «Настройки» в течение 2 минут, иначе вернётся прежнее.{{end}}</p>{{end}}
+<form method="post" action="{{url "/settings/apply"}}" class="inline">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <input type="hidden" name="draft" value="{{.Draft}}">
+  <button type="submit">Применить</button>
+</form>
+<a class="button" href="{{url "/settings"}}">Отмена</a>
+{{end}}

@@ -176,7 +176,7 @@ func TestUninstall(t *testing.T) {
 
 func TestPanelUnit(t *testing.T) {
 	u := PanelUnit("/x")
-	for _, s := range []string{"ExecStart=/x panel", "ProtectSystem=strict", "ProtectHome=true", "ReadWritePaths=/opt/azpanel", "After=network-online.target azpanel-node.service", "Description=azpanel: веб-панель", "PrivateTmp=true", "NoNewPrivileges=true",
+	for _, s := range []string{"ExecStart=/x panel", "ProtectSystem=strict", "ProtectHome=true", "ReadWritePaths=/opt/azpanel\n", "InaccessiblePaths=-/opt/azpanel/backup/antizapret\n", "Restart=always\n", "After=network-online.target azpanel-node.service", "Description=azpanel: веб-панель", "PrivateTmp=true", "NoNewPrivileges=true",
 		"\nCapabilityBoundingSet=\n", "\nAmbientCapabilities=\n", "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX",
 		"ProtectKernelTunables=true", "ProtectKernelModules=true", "ProtectControlGroups=true", "RestrictNamespaces=true",
 		"LockPersonality=true", "RestrictSUIDSGID=true", "PrivateDevices=true", "SystemCallArchitectures=native"} {
@@ -255,5 +255,24 @@ func TestNodeUnitAllowsSystemdRun(t *testing.T) {
 		if strings.Contains(u, bad) {
 			t.Errorf("в юните агента %s: systemd-run может не достучаться до D-Bus", bad)
 		}
+	}
+}
+
+// Агент и панель завершают себя при перезапуске из настроек — поднимает systemd.
+func TestUnitsRestartAlways(t *testing.T) {
+	for name, u := range map[string]string{"агент": NodeUnit("/x"), "панель": PanelUnit("/x"), "прокси": ProxyUnit("/x")} {
+		if !strings.Contains(u, "\nRestart=always\n") || strings.Contains(u, "on-failure") {
+			t.Errorf("юнит %s: нужен Restart=always:\n%s", name, u)
+		}
+	}
+}
+
+// Копии setup с ключами WARP панели не видны; агент их по-прежнему пишет.
+func TestPanelUnitHidesAntiZapretBackups(t *testing.T) {
+	if !strings.Contains(PanelUnit("/x"), "\nInaccessiblePaths=-/opt/azpanel/backup/antizapret\n") {
+		t.Error("нет InaccessiblePaths для backup/antizapret")
+	}
+	if strings.Contains(NodeUnit("/x"), "InaccessiblePaths") {
+		t.Error("агенту копии закрывать нельзя")
 	}
 }

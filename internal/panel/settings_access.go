@@ -38,6 +38,7 @@ func (s *Server) initAccess() {
 				s.Pending.Apply = map[string]func(string) error{}
 			}
 			s.Pending.Apply[pendingAllowIPs] = func(v string) error { return s.restoreAllow(splitList(v)) }
+			s.Pending.Apply[pendingSettings] = s.restoreSettings
 		}
 	})
 }

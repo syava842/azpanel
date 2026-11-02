@@ -260,15 +260,27 @@ func loopbackAddr(s string) bool {
 }
 
 func Save(path string, c Config) error {
-	if err := c.Validate(); err != nil {
+	data, err := Marshal(c)
+	if err != nil {
 		return err
+	}
+	return fsutil.WriteFileAtomic(path, data, 0o600)
+}
+
+// Marshal проверяет конфиг и кодирует его в TOML.
+func Marshal(c Config) ([]byte, error) {
+	if err := c.Validate(); err != nil {
+		return nil, err
 	}
 	var buf bytes.Buffer
 	if err := toml.NewEncoder(&buf).Encode(c); err != nil {
-		return err
+		return nil, err
 	}
-	return fsutil.WriteFileAtomic(path, buf.Bytes(), 0o600)
+	return buf.Bytes(), nil
 }
+
+// Parse читает конфиг из байт (файл импорта) поверх умолчаний, с миграцией.
+func Parse(data []byte) (Config, error) { return loadMigrated(data, "импорт") }
 
 func allowErr(list []string) error {
 	_, err := ParseAllowIPs(list)

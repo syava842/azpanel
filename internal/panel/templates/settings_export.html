@@ -1,0 +1,19 @@
+{{define "content"}}
+<h1>Экспорт и импорт настроек</h1>
+<p class="muted"><a href="{{url "/settings"}}">← Настройки</a></p>
+<form method="post" action="{{url "/settings/export"}}" class="card narrow">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <h2>Экспорт</h2>
+  <p>Файл <code>config.toml</code>. С секретами получится архив <code>azpanel-settings-ДАТА.tar</code> из двух файлов (с токеном агента и ключом шифрования): храните его как пароль.</p>
+  <label><input type="checkbox" name="with_secrets" value="1"> Включить секреты</label>
+  <button type="submit">Скачать</button>
+</form>
+<form method="post" action="{{url "/settings/import"}}" enctype="multipart/form-data" class="card narrow">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <h2>Импорт</h2>
+  <p>Загрузите <code>config.toml</code> или архив из экспорта. Файл проверится, и вы увидите «было → стало»; применяется только после подтверждения.</p>
+  <input type="file" name="file" required>
+  <label><input type="checkbox" name="with_secrets" value="1"> Принять секреты из архива</label>
+  <button type="submit">Проверить файл</button>
+</form>
+{{end}}

@@ -117,6 +117,18 @@ type Server struct {
 	// TrustedProxies — прокси, чьим X-Forwarded-For и X-Forwarded-Proto
 	// верим (panel.trusted_proxies); пусто — не верим никому.
 	TrustedProxies []netip.Prefix
+	// SecretsFile — secrets.env, который правит страница «Настройки»; пусто —
+	// по умолчанию из paths.
+	SecretsFile string
+	// Exit завершает процесс панели: так она перезапускается из настроек
+	// (поднимает systemd, Restart=always). nil — перезапуск не настроен.
+	Exit func()
+	// ExitDelay — пауза между страницей «перезапуск…» и вызовом Exit;
+	// ноль — секунда.
+	ExitDelay time.Duration
+	// RestartNode просит агента узла перезапуститься (POST /v1/system/restart);
+	// nil — не умеем, оператор перезапускает вручную.
+	RestartNode func(ctx context.Context) error
 	// BotName — имя бота для ссылки привязки Telegram; nil или пустая
 	// строка — бот не запущен, привязка в панели скрыта.
 	BotName func() string
@@ -126,6 +138,7 @@ type Server struct {
 	usersMu    sync.Mutex // действия над пользователями — по одному (защита последнего администратора)
 	attemptMu  keyedMutex // счёт попыток ввода кода: замок на ключ, а не общий на всех
 	access     accessState
+	settings   settingsState
 	once       onceStore // секреты «показать один раз»
 
 	loginSem      chan struct{} // ограничивает одновременные bcrypt
@@ -215,6 +228,15 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /settings/access", s.accessSave)
 	s.route(mux, "POST /settings/access/confirm", s.accessConfirm)
 
+	s.route(mux, "GET /settings", s.settingsPage)
+	s.route(mux, "POST /settings", s.settingsSave)
+	s.route(mux, "POST /settings/apply", s.settingsApply)
+	s.route(mux, "POST /settings/confirm", s.settingsConfirm)
+	s.route(mux, "POST /settings/secrets", s.settingsSecrets)
+	s.route(mux, "GET /settings/export", s.exportPage)
+	s.route(mux, "POST /settings/export", s.exportDownload)
+	s.route(mux, "POST /settings/import", s.settingsImport)
+
 	// Всё остальное — за входом; права каждого маршрута — в таблице routes.
 	s.route(mux, "GET /monitor", s.monitor)
 	s.route(mux, "GET /audit", s.auditPage)
@@ -277,7 +299,7 @@ func (s *Server) parsePages() map[string]*template.Template {
 		if name == "layout.html" {
 			continue
 		}
-		t := template.Must(template.New(name).Funcs(template.FuncMap{"url": s.url}).ParseFS(templatesFS, "templates/layout.html", path.Join("templates", name)))
+		t := template.Must(template.New(name).Funcs(template.FuncMap{"url": s.url, "urlAt": urlAt}).ParseFS(templatesFS, "templates/layout.html", path.Join("templates", name)))
 		pages[strings.TrimSuffix(name, ".html")] = t
 	}
 	return pages

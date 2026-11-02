@@ -63,6 +63,7 @@ func Defaults() Options {
 // NodeUnit — юнит агента. Сам агент пишет только в /opt/azpanel; остальные
 // пути на запись нужны client.sh (PKI EasyRSA, профили, конфиги WireGuard)
 // и установке хука (скрипты OpenVPN). «-» — каталога может не быть.
+// Restart=always: агент завершает себя по POST /v1/system/restart.
 func NodeUnit(bin string) string {
 	return `[Unit]
 Description=azpanel: агент узла AntiZapret
@@ -71,7 +72,7 @@ Wants=network-online.target
 
 [Service]
 ExecStart=` + bin + ` node
-Restart=on-failure
+Restart=always
 RestartSec=3
 RuntimeDirectory=azpanel
 RuntimeDirectoryMode=0755
@@ -88,7 +89,9 @@ WantedBy=multi-user.target
 // PanelUnit — юнит веб-панели. Панель пишет только в /opt/azpanel (журнал),
 // с агентом говорит по HTTP, поэтому остальные пути ей закрыты. Права сужены:
 // secrets.env принадлежит root (600), читается и без CAP_DAC_OVERRIDE; порт
-// выше 1024.
+// выше 1024. Копии setup с ключами WARP (backup/antizapret) панели закрыты
+// целиком. Restart=always: панель и агент завершают себя при перезапуске из
+// настроек, поднимает их systemd.
 func PanelUnit(bin string) string {
 	return `[Unit]
 Description=azpanel: веб-панель
@@ -97,11 +100,12 @@ Wants=network-online.target
 
 [Service]
 ExecStart=` + bin + ` panel
-Restart=on-failure
+Restart=always
 RestartSec=3
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/opt/azpanel
+InaccessiblePaths=-/opt/azpanel/backup/antizapret
 PrivateTmp=true
 NoNewPrivileges=true
 CapabilityBoundingSet=

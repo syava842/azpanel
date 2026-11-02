@@ -1,0 +1,7 @@
+{{define "head"}}<meta http-equiv="refresh" content="{{.Wait}};url={{urlAt .Base "/settings"}}">{{end}}
+{{define "content"}}
+<h1>Перезапуск…</h1>
+<p>Панель перезапускается. Страница откроется сама через несколько секунд; если нет — <a href="{{urlAt .Base "/settings"}}">откройте настройки</a>.</p>
+{{if .Dangerous}}<p>Опасные значения применены с таймером: подтвердите их на странице «Настройки» в течение 2 минут, иначе вернётся прежнее.</p>{{end}}
+{{range .Notes}}<p class="muted">{{.}}</p>{{end}}
+{{end}}

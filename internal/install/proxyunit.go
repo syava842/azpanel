@@ -15,7 +15,7 @@ Wants=network-online.target
 
 [Service]
 ExecStart=` + bin + ` proxy
-Restart=on-failure
+Restart=always
 RestartSec=3
 ProtectSystem=strict
 ProtectHome=true

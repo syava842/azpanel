@@ -1,0 +1,83 @@
+{{define "content"}}
+<h1>Настройки</h1>
+{{if .Notice}}<div class="flash">{{.Notice}}</div>{{end}}
+{{if .Pending}}
+<form method="post" action="{{url "/settings/confirm"}}" class="card">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <p>Опасные изменения ({{.Pending.Fields}}) применены и вернутся к прежним значениям в {{.Pending.Deadline}} (осталось около {{.Pending.Left}} с), если их не подтвердить.</p>
+  <button type="submit">Подтвердить</button>
+</form>
+{{end}}
+<p class="muted"><a href="{{url "/settings/export"}}">Экспорт и импорт</a> · <a href="{{url "/settings/access"}}">Белый список адресов</a> · <a href="{{url "/settings/antizapret"}}">Настройки AntiZapret</a></p>
+<form method="post" action="{{url "/settings"}}">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  {{range .Sections}}
+  <div class="card">
+    <h2>{{.Title}}</h2>
+    {{range .Fields}}{{$f := .}}
+    <div class="field">
+      {{if .Page}}
+      <div>{{.Title}}: <a href="{{url .Page}}">изменить на отдельной странице</a></div>
+      {{else if eq .Kind "bool"}}
+      <label><input type="checkbox" name="{{.Name}}" value="1"{{if .Checked}} checked{{end}}> {{.Title}}</label>
+      {{else if eq .Kind "choice"}}
+      <label>{{.Title}}
+        <select name="{{.Name}}">{{range .Opts}}<option value="{{.Value}}"{{if .On}} selected{{end}}>{{.Value}}</option>{{end}}</select>
+      </label>
+      {{else if eq .Kind "multi"}}
+      <div>{{.Title}}</div>
+      {{range .Opts}}<label class="inline"><input type="checkbox" name="{{$f.Name}}" value="{{.Value}}"{{if .On}} checked{{end}}> {{.Value}}</label> {{end}}
+      {{else if or (eq .Kind "list") (eq .Kind "intlist")}}
+      <label>{{.Title}}
+        <textarea name="{{.Name}}" rows="3" cols="40" spellcheck="false">{{.Value}}</textarea>
+      </label>
+      {{else}}
+      <label>{{.Title}}
+        <input type="text" name="{{.Name}}" value="{{.Value}}" spellcheck="false">
+      </label>
+      {{end}}
+      <div class="muted">{{.Hint}} <em>Применяется: {{.ApplyText}}.</em></div>
+      {{if .Err}}<div class="error">{{.Err}}</div>{{end}}
+    </div>
+    {{end}}
+  </div>
+  {{end}}
+  <button type="submit">Проверить изменения</button>
+</form>
+
+<h2>Секреты</h2>
+<p class="muted">Значения не показываются. Замена и удаление применяются сразу и перезапускают панель.</p>
+{{range .Secrets}}{{$k := .}}
+<div class="card">
+  <div><b>{{.Title}}</b> <code>{{.Key}}</code> — {{.Mask}}</div>
+  <div class="muted">{{.Note}}</div>
+  {{if .Replace}}
+  <form method="post" action="{{url "/settings/secrets"}}" class="inline">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <input type="hidden" name="key" value="{{.Key}}">
+    <input type="hidden" name="action" value="replace">
+    <input type="password" name="value" autocomplete="off" placeholder="новое значение" required>
+    <button type="submit">Заменить</button>
+  </form>
+  {{end}}
+  {{if and .Delete .Set}}
+  <form method="post" action="{{url "/settings/secrets"}}" class="inline">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <input type="hidden" name="key" value="{{.Key}}">
+    <input type="hidden" name="action" value="delete">
+    <button type="submit">Удалить</button>
+  </form>
+  {{end}}
+  {{if .Regen}}
+  <form method="post" action="{{url "/settings/secrets"}}">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <input type="hidden" name="key" value="{{.Key}}">
+    <input type="hidden" name="action" value="regen">
+    <p class="muted">{{.WarnRegen}}</p>
+    <label><input type="checkbox" name="confirm" value="1"> Понимаю последствия</label>
+    <button type="submit">Сгенерировать заново</button>
+  </form>
+  {{end}}
+</div>
+{{end}}
+{{end}}
