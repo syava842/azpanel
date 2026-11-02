@@ -1,0 +1,29 @@
+{{define "content"}}
+<h1>Клиенты</h1>
+<div class="toolbar">
+  <form method="get" action="/" class="inline">
+    <input type="search" name="q" value="{{.Q}}" placeholder="Поиск по имени">
+    <button type="submit">Найти</button>
+  </form>
+  <a class="button" href="/clients/new">Новый клиент</a>
+</div>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Имя</th><th>Тип</th><th>Сертификат</th><th>Онлайн</th><th>Лимит</th><th>Состояние</th></tr></thead>
+  <tbody>
+  {{range .Rows}}
+  <tr>
+    <td><a href="{{.Href}}">{{.Name}}</a></td>
+    <td>{{if .OpenVPN}}OpenVPN{{end}}{{if and .OpenVPN .WG}} / {{end}}{{if .WG}}WireGuard{{end}}</td>
+    <td>{{if .CertSoon}}<span class="warn">{{.Cert}}</span>{{else}}{{.Cert}}{{end}}</td>
+    <td class="online">{{if $.NoOnline}}—{{else}}{{.Online}}{{end}}</td>
+    <td class="limit">{{.Limit}}</td>
+    <td>{{if .Blocked}}<span class="bad">заблокирован</span>{{if .WGOnly}} <small class="muted">({{$.NotOnlyOVPN}})</small>{{end}}{{end}}</td>
+  </tr>
+  {{else}}
+  <tr><td colspan="6" class="muted">Клиентов нет.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{end}}

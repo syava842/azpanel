@@ -1,0 +1,19 @@
+{{define "content"}}
+<h1>Новый клиент</h1>
+<form method="post" action="/clients" class="card narrow">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label>Имя
+    <input type="text" name="name" value="{{.Name}}" autocomplete="off" autofocus required>
+  </label>
+  <label>Тип
+    <select name="kind">
+      <option value="openvpn"{{if eq .Kind "openvpn"}} selected{{end}}>OpenVPN</option>
+      <option value="wireguard"{{if eq .Kind "wireguard"}} selected{{end}}>WireGuard</option>
+    </select>
+  </label>
+  <label>Срок сертификата, дней (только OpenVPN; пусто — 3650)
+    <input type="number" name="days" min="1" max="3650" value="{{.Days}}">
+  </label>
+  <button type="submit">Создать</button>
+</form>
+{{end}}

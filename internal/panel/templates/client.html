@@ -1,0 +1,83 @@
+{{define "content"}}
+<h1>{{.Name}}</h1>
+<div class="card">
+  <p>Тип: {{if .Client.OpenVPN}}OpenVPN{{end}}{{if and .Client.OpenVPN .Client.WireGuard}} / {{end}}{{if .Client.WireGuard}}WireGuard{{end}}</p>
+  <p>Сертификат: {{if .CertSoon}}<span class="warn">{{.Cert}}</span>{{else}}{{.Cert}}{{end}}</p>
+  <p>Лимит: {{.Limit}}</p>
+  <p>Состояние: {{if .Client.Blocked}}<span class="bad">заблокирован</span>{{if .WGOnlyBlock}} <small class="muted">({{.NotOnlyOVPN}})</small>{{end}}{{else}}<span class="ok">активен</span>{{end}}</p>
+</div>
+
+<h2>Сессии</h2>
+{{if .SessionsErr}}<div class="error">{{.SessionsErr}}</div>{{end}}
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Тип</th><th>Экземпляр</th><th>Адрес</th><th>↓</th><th>↑</th><th>Время</th></tr></thead>
+  <tbody>
+  {{range .Sessions}}
+  <tr><td>{{.Kind}}</td><td>{{.Instance}}</td><td>{{.Addr}}</td><td>{{.Down}}</td><td>{{.Up}}</td><td>{{.Time}}</td></tr>
+  {{else}}
+  <tr><td colspan="6" class="muted">Сейчас не подключён.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+
+<h2>Профили</h2>
+{{if .ProfilesErr}}<div class="error">{{.ProfilesErr}}</div>{{end}}
+<ul>
+  {{range .Profiles}}
+  <li>{{.Kind}} / {{.Variant}}: <a href="{{.Href}}">{{.File}}</a>{{if .QRHref}} · <a href="{{.QRHref}}">QR</a>{{end}}</li>
+  {{else}}
+  <li class="muted">Профилей нет.</li>
+  {{end}}
+</ul>
+
+<h2>Действия</h2>
+<div class="card actions">
+  {{if .Client.OpenVPN}}
+  <form method="post" action="{{.Href}}/renew">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label>Продлить сертификат на, дней
+      <input type="number" name="days" min="1" max="3650" value="365" required>
+    </label>
+    <button type="submit">Продлить</button>
+  </form>
+  {{end}}
+
+  <form method="post" action="{{.Href}}/limit">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label>Лимит одновременных подключений (0 — снять)
+      <input type="number" name="limit" min="0" max="1000" value="{{.Client.Limit}}" required>
+    </label>
+    <button type="submit">Сохранить лимит</button>
+  </form>
+
+  <form method="post" action="{{.Href}}/block">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <input type="hidden" name="blocked" value="{{if .Client.Blocked}}0{{else}}1{{end}}">
+    {{if not .Client.OpenVPN}}<p class="muted">{{.NotOnlyOVPN}}</p>{{end}}
+    <button type="submit">{{if .Client.Blocked}}Разблокировать{{else}}Заблокировать{{end}}</button>
+  </form>
+
+  {{if .Client.OpenVPN}}
+  <form method="post" action="{{.Href}}/delete">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <input type="hidden" name="kind" value="openvpn">
+    <label>Чтобы удалить OpenVPN, впишите имя клиента
+      <input type="text" name="confirm" autocomplete="off" required>
+    </label>
+    <button type="submit" class="danger">Удалить OpenVPN</button>
+  </form>
+  {{end}}
+  {{if .Client.WireGuard}}
+  <form method="post" action="{{.Href}}/delete">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <input type="hidden" name="kind" value="wireguard">
+    <label>Чтобы удалить WireGuard, впишите имя клиента
+      <input type="text" name="confirm" autocomplete="off" required>
+    </label>
+    <button type="submit" class="danger">Удалить WireGuard</button>
+  </form>
+  {{end}}
+</div>
+{{end}}

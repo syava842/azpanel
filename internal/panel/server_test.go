@@ -192,6 +192,8 @@ func TestIndexNeedsLogin(t *testing.T) {
 	if rec := e.do(postForm("/anything", url.Values{})); rec.Code != 403 {
 		t.Fatalf("POST без сессии: %d", rec.Code)
 	}
+	e.node.ClientsFn = func(context.Context) ([]nodeapi.Client, error) { return nil, nil }
+	e.node.SessionsFn = func(context.Context) ([]nodeapi.Session, error) { return nil, nil }
 	c, _ := e.sessionCookie(t)
 	req := httptest.NewRequest("GET", "/", nil)
 	req.AddCookie(c)

@@ -87,9 +87,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /login", s.loginSubmit)
 	mux.Handle("POST /logout", s.protect(s.logout))
 
-	// Всё остальное — за входом; страницы клиентов и мониторинга
-	// добавляются выше этих двух строк.
-	mux.Handle("GET /{$}", s.protect(s.home))
+	// Всё остальное — за входом; страницы мониторинга добавляются выше
+	// этих двух строк.
+	mux.Handle("GET /clients/new", s.protect(s.newForm))
+	mux.Handle("POST /clients", s.protect(s.createClient))
+	mux.Handle("GET /clients/{name}", s.protect(s.clientCard))
+	mux.Handle("GET /clients/{name}/profiles/{kind}/{variant}/{file}", s.protect(s.profileFile))
+	mux.Handle("GET /clients/{name}/qr/{kind}/{variant}/{file}", s.protect(s.profileQR))
+	mux.Handle("POST /clients/{name}/renew", s.protect(s.renew))
+	mux.Handle("POST /clients/{name}/limit", s.protect(s.setLimit))
+	mux.Handle("POST /clients/{name}/block", s.protect(s.block))
+	mux.Handle("POST /clients/{name}/delete", s.protect(s.deleteClient))
+	mux.Handle("GET /{$}", s.protect(s.clientsList))
 	mux.Handle("/", s.protect(func(w http.ResponseWriter, r *http.Request) {
 		s.errorPage(w, r, http.StatusNotFound, "страница не найдена")
 	}))
@@ -218,10 +227,6 @@ func (s *Server) nodeErr(err error) (status int, text string) {
 		return http.StatusBadRequest, ne.Message
 	}
 	return http.StatusBadGateway, "агент недоступен: " + err.Error()
-}
-
-func (s *Server) home(w http.ResponseWriter, r *http.Request) {
-	s.render(w, r, http.StatusOK, "home", nil) // заглушка до страницы клиентов
 }
 
 func (s *Server) loginForm(w http.ResponseWriter, r *http.Request) {

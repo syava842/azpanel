@@ -104,3 +104,10 @@ form.inline { display: inline; margin: 0; }
   th, td { padding: .4rem; }
   .narrow { max-width: none; }
 }
+
+.toolbar { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem; }
+.toolbar form { display: flex; gap: .5rem; }
+.toolbar input[type=search] { margin-top: 0; width: 16rem; max-width: 100%; }
+.actions form { padding: .75rem 0; border-bottom: 1px solid var(--line); }
+.actions form:last-child { border-bottom: 0; }
+.actions input[type=number], .actions input[type=text] { max-width: 16rem; }
