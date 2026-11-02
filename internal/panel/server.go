@@ -49,6 +49,7 @@ type Node interface {
 	DeleteClient(ctx context.Context, kind, name string) (nodeapi.Result, error)
 	SetLimit(ctx context.Context, name string, limit int) error
 	SetBlocked(ctx context.Context, name string, blocked bool) (nodeapi.Result, error)
+	Denials(ctx context.Context, since time.Time) ([]nodeapi.Denial, error)
 }
 
 var _ Node = (*nodeapi.HTTPClient)(nil)

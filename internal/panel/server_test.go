@@ -32,6 +32,7 @@ type fakeNode struct {
 	DeleteClientFn func(ctx context.Context, kind, name string) (nodeapi.Result, error)
 	SetLimitFn     func(ctx context.Context, name string, limit int) error
 	SetBlockedFn   func(ctx context.Context, name string, blocked bool) (nodeapi.Result, error)
+	DenialsFn      func(ctx context.Context, since time.Time) ([]nodeapi.Denial, error)
 }
 
 var errNotSet = errors.New("fakeNode: метод не задан")
@@ -101,6 +102,12 @@ func (f *fakeNode) SetBlocked(ctx context.Context, name string, blocked bool) (n
 		return nodeapi.Result{}, errNotSet
 	}
 	return f.SetBlockedFn(ctx, name, blocked)
+}
+func (f *fakeNode) Denials(ctx context.Context, since time.Time) ([]nodeapi.Denial, error) {
+	if f.DenialsFn == nil {
+		return nil, errNotSet
+	}
+	return f.DenialsFn(ctx, since)
 }
 
 const testPassword = "correct-horse-battery"

@@ -51,6 +51,7 @@ func Run(ctx context.Context, cfg config.Config, version string, ensureHook func
 	}
 	checkHook()
 
+	denials := NewDenials(maxDenials)
 	tr := NewTracker()
 	p := &Poller{
 		Dir:     cfg.Node.OpenVPNSocketDir,
@@ -79,13 +80,14 @@ func Run(ctx context.Context, cfg config.Config, version string, ensureHook func
 		Tracker: tr,
 		Limits:  limits.NewStore(paths.LimitsFile()),
 		HookLog: logx.New(hookW),
+		Denials: denials,
 		Log:     log,
 		Now:     time.Now,
 		Peer:    PeerChecker(),
 	}
 	go p.Run(ctx, time.Duration(cfg.Node.PollSeconds)*time.Second)
 	if cfg.Node.APIListen != "" {
-		stop, err := startAPI(cfg, version, tr, log)
+		stop, err := startAPI(cfg, version, tr, denials, log)
 		if err != nil {
 			log.Error("API агента не запущен — панель узел не увидит, хук работает", "err", err)
 		} else {
@@ -114,7 +116,7 @@ func Run(ctx context.Context, cfg config.Config, version string, ensureHook func
 // startAPI запускает HTTP API для панели. Его сбой не трогает хук: лимиты
 // и блокировки работают и без API. При остановке службы systemd гасит и
 // дочерние процессы — client.sh, запущенный в эту секунду, оборвётся.
-func startAPI(cfg config.Config, version string, tr *Tracker, log *slog.Logger) (func(), error) {
+func startAPI(cfg config.Config, version string, tr *Tracker, denials *Denials, log *slog.Logger) (func(), error) {
 	sec, err := secrets.Load(paths.SecretsFile())
 	if err != nil {
 		return nil, err
@@ -134,6 +136,7 @@ func startAPI(cfg config.Config, version string, tr *Tracker, log *slog.Logger) 
 		AntiZapretDir: n.AntiZapretDir,
 		SocketDir:     n.OpenVPNSocketDir,
 		Sampler:       &sysinfo.Sampler{Proc: "/proc", DiskPath: "/"},
+		Denials:       denials,
 		WGShow:        antizapret.WGShow,
 		Kill:          antizapret.KillClient,
 		Log:           log,

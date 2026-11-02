@@ -80,6 +80,7 @@ func newAPI(t *testing.T) apiEnv {
 		AntiZapretDir: az,
 		SocketDir:     socks,
 		Sampler:       &sysinfo.Sampler{Proc: proc, DiskPath: root},
+		Denials:       NewDenials(maxDenials),
 		Services: func(context.Context) ([]sysinfo.Service, error) {
 			return []sysinfo.Service{{Unit: "openvpn-server@antizapret-udp", State: "active"}}, nil
 		},

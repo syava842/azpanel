@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,6 +53,18 @@ type Session struct {
 	TxBytes       int64      `json:"tx_bytes"`
 	Since         *time.Time `json:"since,omitempty"`          // OpenVPN
 	LastHandshake *time.Time `json:"last_handshake,omitempty"` // WireGuard
+}
+
+// Denial — отказ хука в подключении. Reason: limit (сверх лимита
+// подключений) или blocked (клиент заблокирован).
+type Denial struct {
+	Time     time.Time `json:"time"`
+	Name     string    `json:"name"`
+	Instance string    `json:"instance"`
+	Addr     string    `json:"addr"`
+	Reason   string    `json:"reason"`
+	Count    int       `json:"count,omitempty"` // сессий клиента на момент отказа
+	Limit    int       `json:"limit,omitempty"`
 }
 
 type System struct {
@@ -127,6 +140,16 @@ func (c *HTTPClient) Clients(ctx context.Context) ([]Client, error) {
 func (c *HTTPClient) Sessions(ctx context.Context) ([]Session, error) {
 	var v []Session
 	return v, c.do(ctx, http.MethodGet, "/v1/sessions", nil, &v)
+}
+
+// Denials — отказы хука новее since (нулевое время — все), по возрастанию.
+func (c *HTTPClient) Denials(ctx context.Context, since time.Time) ([]Denial, error) {
+	var ts int64
+	if !since.IsZero() {
+		ts = since.Unix()
+	}
+	var v []Denial
+	return v, c.do(ctx, http.MethodGet, "/v1/denials?since="+strconv.FormatInt(ts, 10), nil, &v)
 }
 
 func (c *HTTPClient) System(ctx context.Context) (System, error) {

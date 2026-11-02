@@ -10,6 +10,7 @@ import (
 
 	"github.com/syava842/azpanel/internal/agentproto"
 	"github.com/syava842/azpanel/internal/limits"
+	"github.com/syava842/azpanel/internal/nodeapi"
 )
 
 // maxRequest — предел запроса хука: имя клиента — до 64 символов, адрес и
@@ -22,6 +23,7 @@ type Server struct {
 	Tracker *Tracker
 	Limits  *limits.Store
 	HookLog *slog.Logger // hook.log: решения по подключениям
+	Denials *Denials     // последние отказы для API; nil — не вести
 	Log     *slog.Logger // node.log: работа агента
 	Now     func() time.Time
 	Peer    func(net.Conn) error // nil — без проверки собеседника
@@ -44,11 +46,13 @@ func (s *Server) Handle(req agentproto.Request) agentproto.Response {
 		}
 		if e.Blocked {
 			s.HookLog.Warn("отказ: клиент заблокирован", "cn", req.CN, "instance", req.Instance, "addr", req.Addr)
+			s.deny(nodeapi.Denial{Name: req.CN, Instance: req.Instance, Addr: req.Addr, Reason: "blocked"})
 			return agentproto.Response{Allow: false, Blocked: true}
 		}
 		ok, n := s.Tracker.Admit(k, s.Now(), e.Limit)
 		if !ok {
 			s.HookLog.Warn("отказ: лимит подключений", "cn", req.CN, "instance", req.Instance, "addr", req.Addr, "sessions", n, "limit", e.Limit)
+			s.deny(nodeapi.Denial{Name: req.CN, Instance: req.Instance, Addr: req.Addr, Reason: "limit", Count: n, Limit: e.Limit})
 			return agentproto.Response{Allow: false, Count: n, Limit: e.Limit}
 		}
 		s.HookLog.Info("подключение", "cn", req.CN, "instance", req.Instance, "addr", req.Addr, "sessions", n, "limit", e.Limit)
@@ -95,4 +99,13 @@ func (s *Server) serveConn(c net.Conn) {
 		return
 	}
 	json.NewEncoder(c).Encode(s.Handle(req))
+}
+
+// deny запоминает отказ для GET /v1/denials.
+func (s *Server) deny(d nodeapi.Denial) {
+	if s.Denials == nil {
+		return
+	}
+	d.Time = s.Now().UTC()
+	s.Denials.Add(d)
 }

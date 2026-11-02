@@ -41,6 +41,7 @@ type API struct {
 	AntiZapretDir string
 	SocketDir     string
 	Sampler       *sysinfo.Sampler
+	Denials       *Denials // отказы хука; nil — журнал пуст
 	Services      func(ctx context.Context) ([]sysinfo.Service, error)
 	WGShow        func(ctx context.Context, iface string) ([]antizapret.WGPeer, error)
 	Kill          func(sock, name string, timeout time.Duration) (int, error)
@@ -67,6 +68,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("PUT /v1/clients/{name}/blocked", a.setBlocked)
 	mux.HandleFunc("GET /v1/sessions", a.sessions)
 	mux.HandleFunc("GET /v1/system", a.system)
+	mux.HandleFunc("GET /v1/denials", a.denials)
 	return a.auth(mux)
 }
 
@@ -441,6 +443,24 @@ func (a *API) sessions(w http.ResponseWriter, r *http.Request) {
 				RxBytes: p.RxBytes, TxBytes: p.TxBytes, LastHandshake: &hs,
 			})
 		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// denials отдаёт отказы хука новее ?since=<unix>.
+func (a *API) denials(w http.ResponseWriter, r *http.Request) {
+	var since time.Time
+	if q := r.URL.Query().Get("since"); q != "" {
+		ts, err := strconv.ParseInt(q, 10, 64)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "since — секунды Unix")
+			return
+		}
+		since = time.Unix(ts, 0)
+	}
+	out := []nodeapi.Denial{}
+	if a.Denials != nil {
+		out = a.Denials.Since(since)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
