@@ -41,6 +41,9 @@ type User struct {
 	// AccessUntil — срок доступа пользователя (nil — без срока); пишется
 	// только SetUserAccessUntil.
 	AccessUntil *int64
+	// TelegramID — привязанный Telegram (nil — не привязан); пишется только
+	// SetTelegramID и ClearTelegramID.
+	TelegramID *int64
 }
 
 // ClientRef — ссылка на клиента: узел и имя.
@@ -49,17 +52,21 @@ type ClientRef struct {
 	Name string
 }
 
-const userCols = `id, login, hash, role, disabled, must_change, totp_secret, totp_last_step, created, access_until`
+const userCols = `id, login, hash, role, disabled, must_change, totp_secret, totp_last_step, created, access_until, telegram_id`
 
 func scanUser(sc interface{ Scan(...any) error }) (User, error) {
 	var u User
-	var until sql.NullInt64
-	if err := sc.Scan(&u.ID, &u.Login, &u.Hash, &u.Role, &u.Disabled, &u.MustChange, &u.TOTPSecret, &u.TOTPLastStep, &u.Created, &until); err != nil {
+	var until, tg sql.NullInt64
+	if err := sc.Scan(&u.ID, &u.Login, &u.Hash, &u.Role, &u.Disabled, &u.MustChange, &u.TOTPSecret, &u.TOTPLastStep, &u.Created, &until, &tg); err != nil {
 		return User{}, err
 	}
 	if until.Valid {
 		v := until.Int64
 		u.AccessUntil = &v
+	}
+	if tg.Valid {
+		v := tg.Int64
+		u.TelegramID = &v
 	}
 	return u, nil
 }

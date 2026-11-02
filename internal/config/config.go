@@ -8,7 +8,9 @@ import (
 	"io/fs"
 	"net/netip"
 	"os"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 
@@ -20,10 +22,11 @@ import (
 const CurrentVersion = 2
 
 type Config struct {
-	ConfigVersion int   `toml:"config_version"`
-	Node          Node  `toml:"node"`
-	Panel         Panel `toml:"panel"`
-	Log           Log   `toml:"log"`
+	ConfigVersion int      `toml:"config_version"`
+	Node          Node     `toml:"node"`
+	Panel         Panel    `toml:"panel"`
+	Log           Log      `toml:"log"`
+	Telegram      Telegram `toml:"telegram"`
 }
 
 type Node struct {
@@ -57,6 +60,33 @@ type Log struct {
 	Keep      int `toml:"keep"`
 }
 
+// TelegramNotifyKinds — виды уведомлений бота, которые можно включить.
+var TelegramNotifyKinds = []string{
+	"node_down", "load_high", "reboot", "sync_mismatch", "hook_error",
+	"limit_denials", "antizapret_update", "update_result", "cert_expiring", "access_expiring",
+}
+
+// Telegram — настройки бота. Токен сюда не входит: он в secrets.env.
+type Telegram struct {
+	Enabled bool `toml:"enabled"`
+	// Strangers — как вести себя с непривязанными: closed — молчать,
+	// request — принимать заявки.
+	Strangers   string  `toml:"strangers"`
+	NotifyChats []int64 `toml:"notify_chats"`
+	// Notify — включённые виды уведомлений (TelegramNotifyKinds).
+	Notify []string `toml:"notify"`
+	// Пороги нагрузки, проценты; держаться должны LoadMinutes минут.
+	CPUPercent  int `toml:"cpu_percent"`
+	MemPercent  int `toml:"mem_percent"`
+	DiskPercent int `toml:"disk_percent"`
+	LoadMinutes int `toml:"load_minutes"`
+	// SummaryAt — время сводки «ЧЧ:ММ» по UTC; пусто — выкл.
+	SummaryAt string `toml:"summary_at"`
+	// BackupEveryDays — периодичность бэкапа в чат; 0 — выкл.
+	BackupEveryDays int     `toml:"backup_every_days"`
+	BackupChats     []int64 `toml:"backup_chats"`
+}
+
 func Default() Config {
 	return Config{
 		ConfigVersion: CurrentVersion,
@@ -79,6 +109,15 @@ func Default() Config {
 			SessionHours:   168,
 		},
 		Log: Log{MaxSizeMB: 10, Keep: 5},
+		Telegram: Telegram{
+			Strangers:   "closed",
+			Notify:      slices.Clone(TelegramNotifyKinds),
+			CPUPercent:  90,
+			MemPercent:  90,
+			DiskPercent: 90,
+			LoadMinutes: 5,
+			SummaryAt:   "09:00",
+		},
 	}
 }
 
@@ -145,7 +184,47 @@ func (c Config) Validate() error {
 	case c.Log.Keep < 1 || c.Log.Keep > 100:
 		return fmt.Errorf("log.keep = %d, нужно 1..100", c.Log.Keep)
 	}
+	return c.Telegram.validate()
+}
+
+func (g Telegram) validate() error {
+	switch {
+	case g.Strangers != "closed" && g.Strangers != "request":
+		return fmt.Errorf("telegram.strangers = %q, нужно closed или request", g.Strangers)
+	case g.CPUPercent < 1 || g.CPUPercent > 100:
+		return fmt.Errorf("telegram.cpu_percent = %d, нужно 1..100", g.CPUPercent)
+	case g.MemPercent < 1 || g.MemPercent > 100:
+		return fmt.Errorf("telegram.mem_percent = %d, нужно 1..100", g.MemPercent)
+	case g.DiskPercent < 1 || g.DiskPercent > 100:
+		return fmt.Errorf("telegram.disk_percent = %d, нужно 1..100", g.DiskPercent)
+	case g.LoadMinutes < 1 || g.LoadMinutes > 1440:
+		return fmt.Errorf("telegram.load_minutes = %d, нужно 1..1440", g.LoadMinutes)
+	case g.SummaryAt != "" && !validClock(g.SummaryAt):
+		return fmt.Errorf("telegram.summary_at = %q, нужно ЧЧ:ММ (00:00..23:59) или пусто", g.SummaryAt)
+	case g.BackupEveryDays < 0 || g.BackupEveryDays > 365:
+		return fmt.Errorf("telegram.backup_every_days = %d, нужно 0..365", g.BackupEveryDays)
+	}
+	for _, k := range g.Notify {
+		if !slices.Contains(TelegramNotifyKinds, k) {
+			return fmt.Errorf("telegram.notify: неизвестный вид %q", k)
+		}
+	}
+	if slices.Contains(g.NotifyChats, 0) {
+		return errors.New("telegram.notify_chats: ID чата не может быть 0")
+	}
+	if slices.Contains(g.BackupChats, 0) {
+		return errors.New("telegram.backup_chats: ID чата не может быть 0")
+	}
 	return nil
+}
+
+// validClock — «ЧЧ:ММ» ровно в пять символов.
+func validClock(s string) bool {
+	if len(s) != 5 || s[2] != ':' {
+		return false
+	}
+	t, err := time.Parse("15:04", s)
+	return err == nil && t.Format("15:04") == s
 }
 
 // loopbackAddr — «адрес:порт» на петлевом интерфейсе. В этом этапе ни API

@@ -75,6 +75,14 @@ CREATE TABLE attempts (key TEXT NOT NULL, ts INTEGER NOT NULL);
 CREATE INDEX attempts_key ON attempts(key, ts);
 CREATE TABLE outbox (id INTEGER PRIMARY KEY, kind TEXT NOT NULL, user_id INTEGER, payload TEXT NOT NULL,
   created INTEGER NOT NULL, sent INTEGER);`,
+	// Telegram-бот: привязка, коды, заявки, блокировки, разрешённые типы профилей.
+	`ALTER TABLE users ADD COLUMN telegram_id INTEGER;
+CREATE UNIQUE INDEX users_tg ON users(telegram_id) WHERE telegram_id IS NOT NULL;
+CREATE TABLE tg_link_codes (hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires INTEGER NOT NULL);
+CREATE TABLE tg_requests (telegram_id INTEGER PRIMARY KEY, username TEXT, name TEXT, created INTEGER NOT NULL);
+CREATE TABLE tg_banned (telegram_id INTEGER PRIMARY KEY, created INTEGER NOT NULL);
+CREATE TABLE client_kinds (node_id INTEGER NOT NULL, name TEXT NOT NULL, allowed TEXT NOT NULL,
+  PRIMARY KEY (node_id, name));`,
 }
 
 // SchemaVersion — версия схемы в базе; 0 у пустой.

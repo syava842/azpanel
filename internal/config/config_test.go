@@ -175,3 +175,91 @@ func TestParseAllowIPsMappedShortPrefix(t *testing.T) {
 		t.Fatalf("%v %v", got, err)
 	}
 }
+
+func TestTelegramDefaults(t *testing.T) {
+	c := Default().Telegram
+	if c.Enabled || c.Strangers != "closed" || c.CPUPercent != 90 || c.MemPercent != 90 || c.DiskPercent != 90 ||
+		c.LoadMinutes != 5 || c.SummaryAt != "09:00" || c.BackupEveryDays != 0 {
+		t.Fatalf("умолчания: %+v", c)
+	}
+	if len(c.Notify) != len(TelegramNotifyKinds) {
+		t.Fatalf("виды по умолчанию: %v", c.Notify)
+	}
+	if err := Default().Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTelegramLoadOverrides(t *testing.T) {
+	c, err := Load(write(t, `config_version = 2
+[telegram]
+enabled = true
+strangers = "request"
+notify_chats = [123, -100456]
+notify = ["node_down", "reboot"]
+summary_at = ""
+backup_every_days = 7
+backup_chats = [123]
+cpu_percent = 80
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := c.Telegram
+	if !g.Enabled || g.Strangers != "request" || len(g.NotifyChats) != 2 || g.NotifyChats[1] != -100456 ||
+		len(g.Notify) != 2 || g.SummaryAt != "" || g.BackupEveryDays != 7 || g.CPUPercent != 80 || g.MemPercent != 90 {
+		t.Fatalf("получено %+v", g)
+	}
+}
+
+func TestValidateTelegram(t *testing.T) {
+	cases := map[string]func(*Telegram){
+		"strangers":       func(g *Telegram) { g.Strangers = "open" },
+		"неизвестный вид": func(g *Telegram) { g.Notify = []string{"node_down", "boom"} },
+		"summary_at":      func(g *Telegram) { g.SummaryAt = "25:00" },
+		"summary_at 2":    func(g *Telegram) { g.SummaryAt = "9:00" },
+		"summary_at 3":    func(g *Telegram) { g.SummaryAt = "09:60" },
+		"cpu":             func(g *Telegram) { g.CPUPercent = 0 },
+		"mem":             func(g *Telegram) { g.MemPercent = 101 },
+		"disk":            func(g *Telegram) { g.DiskPercent = -1 },
+		"minutes":         func(g *Telegram) { g.LoadMinutes = 0 },
+		"backup":          func(g *Telegram) { g.BackupEveryDays = -1 },
+		"backup 2":        func(g *Telegram) { g.BackupEveryDays = 400 },
+		"chat 0":          func(g *Telegram) { g.NotifyChats = []int64{0} },
+		"backup chat 0":   func(g *Telegram) { g.BackupChats = []int64{0} },
+	}
+	for name, mut := range cases {
+		c := Default()
+		mut(&c.Telegram)
+		err := c.Validate()
+		if err == nil || !strings.Contains(err.Error(), "telegram.") {
+			t.Fatalf("%s: ошибка %v", name, err)
+		}
+	}
+	c := Default()
+	c.Telegram.SummaryAt = ""
+	c.Telegram.Notify = nil
+	c.Telegram.BackupEveryDays = 30
+	if err := c.Validate(); err != nil {
+		t.Fatalf("допустимые значения отвергнуты: %v", err)
+	}
+	// Загрузка с неверным значением отвергается.
+	if _, err := Load(write(t, "[telegram]\nsummary_at = \"7pm\"\n")); err == nil {
+		t.Fatal("Load принял неверное время")
+	}
+}
+
+func TestTelegramSaveLoadRoundTrip(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.toml")
+	c := Default()
+	c.Telegram.Enabled = true
+	c.Telegram.NotifyChats = []int64{1, -2}
+	c.Telegram.Notify = []string{"reboot"}
+	if err := Save(p, c); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(p)
+	if err != nil || !reflect.DeepEqual(got, c) {
+		t.Fatalf("получено %+v, %v", got, err)
+	}
+}
