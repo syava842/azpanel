@@ -20,9 +20,10 @@ func Log() string    { return filepath.Join(Root(), "log") }
 func Data() string   { return filepath.Join(Root(), "data") }
 func Backup() string { return filepath.Join(Root(), "backup") }
 
-func Binary() string     { return filepath.Join(Bin(), "azpanel") }
-func ConfigFile() string { return filepath.Join(Etc(), "config.toml") }
-func LimitsFile() string { return filepath.Join(Data(), "limits.json") }
+func Binary() string      { return filepath.Join(Bin(), "azpanel") }
+func ConfigFile() string  { return filepath.Join(Etc(), "config.toml") }
+func SecretsFile() string { return filepath.Join(Etc(), "secrets.env") }
+func LimitsFile() string  { return filepath.Join(Data(), "limits.json") }
 
 // NodeSocket — сокет агента. Путь не настраивается: хук работает от nobody,
 // config.toml ему не прочитать.

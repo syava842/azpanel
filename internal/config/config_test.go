@@ -68,3 +68,46 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		t.Fatalf("получено %+v, ждали %+v", got, c)
 	}
 }
+
+func TestLoadV1FileGetsV2Defaults(t *testing.T) {
+	c, err := Load(write(t, "config_version = 1\n[node]\npoll_seconds = 7\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ConfigVersion != CurrentVersion || CurrentVersion != 2 {
+		t.Fatalf("config_version = %d, CurrentVersion = %d", c.ConfigVersion, CurrentVersion)
+	}
+	if c.Node.PollSeconds != 7 {
+		t.Fatalf("poll_seconds = %d", c.Node.PollSeconds)
+	}
+	if c.Node.APIListen != "127.0.0.1:9100" || c.Node.ClientShTimeoutS != 120 {
+		t.Fatalf("умолчания узла: %+v", c.Node)
+	}
+	if c.Panel.Listen != "127.0.0.1:8080" || c.Panel.HistoryDays != 30 {
+		t.Fatalf("умолчания панели: %+v", c.Panel)
+	}
+}
+
+func TestValidateListenAddresses(t *testing.T) {
+	cases := []struct {
+		name string
+		edit func(*Config)
+		ok   bool
+	}{
+		{"api пусто — API выключен", func(c *Config) { c.Node.APIListen = "" }, true},
+		{"api ipv6 loopback", func(c *Config) { c.Node.APIListen = "[::1]:9100" }, true},
+		{"api наружу", func(c *Config) { c.Node.APIListen = "0.0.0.0:9100" }, false},
+		{"api без порта", func(c *Config) { c.Node.APIListen = "127.0.0.1" }, false},
+		{"панель наружу", func(c *Config) { c.Panel.Listen = "10.0.0.1:8080" }, false},
+		{"адрес агента не http", func(c *Config) { c.Panel.NodeURL = "127.0.0.1:9100" }, false},
+		{"тайм-аут client.sh мал", func(c *Config) { c.Node.ClientShTimeoutS = 5 }, false},
+		{"история 0 дней", func(c *Config) { c.Panel.HistoryDays = 0 }, false},
+	}
+	for _, tc := range cases {
+		c := Default()
+		tc.edit(&c)
+		if err := c.Validate(); (err == nil) != tc.ok {
+			t.Errorf("%s: err = %v", tc.name, err)
+		}
+	}
+}
