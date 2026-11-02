@@ -2,8 +2,10 @@ package panel
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 
@@ -21,6 +23,27 @@ type serviceRow struct {
 type liveSession struct {
 	sessionRow
 	Name, Href string
+	City, ISP  string
+	Flapping   bool // у WG-клиента адрес меняется часто
+}
+
+const (
+	denialsWindow = 24 * time.Hour
+	maxDenials    = 50
+)
+
+type denialRow struct {
+	Time, Name, Href, Instance, Addr, Reason string
+}
+
+func denialReason(d nodeapi.Denial) string {
+	switch d.Reason {
+	case "limit":
+		return fmt.Sprintf("превышен лимит подключений: %d из %d", d.Count, d.Limit)
+	case "blocked":
+		return "клиент заблокирован"
+	}
+	return d.Reason
 }
 
 // resourceView — ресурсы уже в человеческих единицах.
@@ -58,10 +81,14 @@ func (s *Server) monitor(w http.ResponseWriter, r *http.Request) {
 		sysErr  error
 		sess    []nodeapi.Session
 		sessErr error
+		dens    []nodeapi.Denial
+		denErr  error
 	)
-	wg.Add(2)
+	now := s.now()
+	wg.Add(3)
 	go func() { defer wg.Done(); sys, sysErr = s.Node.System(ctx) }()
 	go func() { defer wg.Done(); sess, sessErr = s.Node.Sessions(ctx) }()
+	go func() { defer wg.Done(); dens, denErr = s.Node.Denials(ctx, now.Add(-denialsWindow)) }()
 	wg.Wait()
 
 	data := map[string]any{}
@@ -80,11 +107,47 @@ func (s *Server) monitor(w http.ResponseWriter, r *http.Request) {
 		_, tx := s.nodeErr(sessErr)
 		data["SessionsErr"] = "сессии недоступны: " + tx
 	} else {
+		var flap map[string]bool
+		if s.Collector != nil {
+			flap = s.Collector.Flapping()
+		}
 		rows := make([]liveSession, 0, len(sess))
 		for _, x := range sess {
-			rows = append(rows, liveSession{sessionRow: newSessionRow(x), Name: x.Name, Href: clientHref(x.Name)})
+			city, isp := s.Geo.Lookup(x.Addr)
+			rows = append(rows, liveSession{sessionRow: newSessionRow(x), Name: x.Name, Href: clientHref(x.Name),
+				City: city, ISP: isp, Flapping: x.Kind == nodeapi.KindWireGuard && flap[x.Name]})
 		}
 		data["Sessions"] = rows
+	}
+	data["HasGeo"] = s.Geo != nil
+	var ne *nodeapi.Error
+	switch {
+	case denErr == nil:
+		sort.SliceStable(dens, func(i, j int) bool { return dens[i].Time.After(dens[j].Time) })
+		if len(dens) > maxDenials {
+			dens = dens[:maxDenials]
+		}
+		rows := make([]denialRow, 0, len(dens))
+		for _, d := range dens {
+			rows = append(rows, denialRow{Time: d.Time.Local().Format("2006-01-02 15:04:05"), Name: d.Name,
+				Href: clientHref(d.Name), Instance: d.Instance, Addr: d.Addr, Reason: denialReason(d)})
+		}
+		data["Denials"] = rows
+	case errors.As(denErr, &ne) && ne.Status == http.StatusNotFound:
+		data["DenialsNote"] = "агент не поддерживает журнал отказов"
+	default:
+		_, tx := s.nodeErr(denErr)
+		data["DenialsErr"] = "отказы недоступны: " + tx
+	}
+	if s.Store != nil {
+		h := parseRange(r)
+		data["Ranges"] = rangeLinks("/monitor", h)
+		if ch, err := s.resourceCharts(r.Context(), h, now); err != nil {
+			s.Log.Warn("история ресурсов не прочитана", "err", err)
+			data["HistoryErr"] = "история ресурсов недоступна"
+		} else {
+			data["Charts"] = ch
+		}
 	}
 	s.render(w, r, http.StatusOK, "monitor", data)
 }

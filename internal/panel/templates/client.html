@@ -7,6 +7,44 @@
   <p>Состояние: {{if .Client.Blocked}}<span class="bad">заблокирован</span>{{if .WGOnlyBlock}} <small class="muted">({{.NotOnlyOVPN}})</small>{{end}}{{else}}<span class="ok">активен</span>{{end}}</p>
 </div>
 
+{{if .AutoBlockText}}
+<div class="error">{{.AutoBlockText}}. Блокировка снимается сама, когда срок или лимит трафика продлены; можно и разблокировать вручную.</div>
+{{end}}
+{{if .HasStore}}
+<h2>Трафик</h2>
+<p class="ranges">{{range .Ranges}}{{if .Current}}<b>{{.Name}}</b>{{else}}<a href="{{.Href}}">{{.Name}}</a>{{end}} {{end}}</p>
+{{if .HistoryErr}}<div class="error">{{.HistoryErr}}</div>{{else}}
+<div class="card">
+  {{.TrafficChart}}
+  <p>За период: ↓ {{.TrafficDown}}, ↑ {{.TrafficUp}}</p>
+</div>
+{{end}}
+
+<h2>Карточка</h2>
+<div class="card">
+  <form method="post" action="{{.Href}}/card">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label>Заметка (до 500 символов)
+      <input type="text" name="note" maxlength="500" value="{{.CardForm.Note}}">
+    </label>
+    <label>Доступ до (ГГГГ-ММ-ДД, конец дня по UTC; пусто — без срока)
+      <input type="text" name="until" placeholder="2026-12-31" value="{{.CardForm.Until}}">
+    </label>
+    <label>Лимит трафика, ГБ (0 — без лимита)
+      <input type="text" name="limit_gb" inputmode="decimal" value="{{.CardForm.LimitGB}}">
+    </label>
+    <label>Период лимита
+      <select name="period">
+        <option value="day"{{if eq .CardForm.Period "day"}} selected{{end}}>сутки</option>
+        <option value="week"{{if eq .CardForm.Period "week"}} selected{{end}}>неделя</option>
+        <option value="month"{{if eq .CardForm.Period "month"}} selected{{end}}>месяц</option>
+      </select>
+    </label>
+    <button type="submit">Сохранить карточку</button>
+  </form>
+</div>
+{{end}}
+
 <h2>Сессии</h2>
 {{if .SessionsErr}}<div class="error">{{.SessionsErr}}</div>{{end}}
 <div class="table-wrap">

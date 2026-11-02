@@ -71,3 +71,23 @@ func TestSetAutoBlockTouchesOnlyMarks(t *testing.T) {
 		t.Fatalf("создана лишняя карточка: %+v", all)
 	}
 }
+
+func TestSaveCardFieldsKeepsMarks(t *testing.T) {
+	s := open(t)
+	s.SaveCard(ctx, Card{Node: 1, Name: "a", AutoBlock: AutoBlockTraffic, AutoSkip: "x"})
+	until := int64(5)
+	if err := s.SaveCardFields(ctx, Card{Node: 1, Name: "a", Note: "н", AccessUntil: &until, TrafficLimit: 9, TrafficPeriod: PeriodWeek}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.Card(ctx, 1, "a")
+	if got.Note != "н" || *got.AccessUntil != 5 || got.TrafficLimit != 9 || got.TrafficPeriod != PeriodWeek ||
+		got.AutoBlock != AutoBlockTraffic || got.AutoSkip != "x" {
+		t.Fatalf("%+v", got)
+	}
+	if err := s.SaveCardFields(ctx, Card{Node: 1, Name: "new", Note: "z"}); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := s.Card(ctx, 1, "new"); c.Note != "z" || c.TrafficPeriod != PeriodMonth {
+		t.Fatalf("%+v", c)
+	}
+}

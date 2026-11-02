@@ -9,7 +9,7 @@
 </div>
 <div class="table-wrap">
 <table>
-  <thead><tr><th>Имя</th><th>Тип</th><th>Сертификат</th><th>Онлайн</th><th>Лимит</th><th>Состояние</th></tr></thead>
+  <thead><tr><th><a href="/?sort=name&q={{.Q}}">Имя</a></th><th>Тип</th><th>Сертификат</th><th><a href="/?sort=online&q={{.Q}}">Онлайн</a></th><th>Лимит</th>{{if .HasStore}}<th><a href="/?sort=traffic&q={{.Q}}">Трафик 30 дн.</a></th><th><a href="/?sort=until&q={{.Q}}">Доступ до</a></th>{{end}}<th>Состояние</th></tr></thead>
   <tbody>
   {{range .Rows}}
   <tr>
@@ -18,10 +18,11 @@
     <td>{{if .CertSoon}}<span class="warn">{{.Cert}}</span>{{else}}{{.Cert}}{{end}}</td>
     <td class="online">{{if $.NoOnline}}—{{else}}{{.Online}}{{end}}</td>
     <td class="limit">{{.Limit}}</td>
-    <td>{{if .Blocked}}<span class="bad">заблокирован</span>{{if .WGOnly}} <small class="muted">({{$.NotOnlyOVPN}})</small>{{end}}{{end}}</td>
+    {{if $.HasStore}}<td class="traffic">{{.Traffic}}</td><td class="until">{{.Until}}</td>{{end}}
+    <td>{{if .Blocked}}<span class="bad">заблокирован{{if .Auto}} автоматически{{end}}</span>{{if .WGOnly}} <small class="muted">({{$.NotOnlyOVPN}})</small>{{end}}{{end}}</td>
   </tr>
   {{else}}
-  <tr><td colspan="6" class="muted">Клиентов нет.</td></tr>
+  <tr><td colspan="{{if .HasStore}}8{{else}}6{{end}}" class="muted">Клиентов нет.</td></tr>
   {{end}}
   </tbody>
 </table>

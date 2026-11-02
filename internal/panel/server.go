@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/syava842/azpanel/internal/nodeapi"
+	"github.com/syava842/azpanel/internal/store"
 )
 
 //go:embed templates/*.html
@@ -67,6 +68,13 @@ type Server struct {
 	// CheckPassword — проверка входа; по умолчанию CheckPassword пакета,
 	// в тестах подменяется счётчиком.
 	CheckPassword func(wantUser, hash, user, pw string) bool
+	// Store — база панели (карточки, история, журнал); nil — работа без неё.
+	Store  *store.Store
+	NodeID int64
+	// Collector нужен ради пометки частой смены адреса; nil — без пометок.
+	Collector *Collector
+	// Geo — город и провайдер по адресу; nil — без этих столбцов.
+	Geo *Geo
 
 	pages map[string]*template.Template
 
@@ -113,6 +121,7 @@ func (s *Server) Handler() http.Handler {
 	// Всё остальное — за входом; новые страницы добавляются выше
 	// этих двух строк.
 	mux.Handle("GET /monitor", s.protect(s.monitor))
+	mux.Handle("GET /audit", s.protect(s.auditPage))
 	mux.Handle("GET /clients/new", s.protect(s.newForm))
 	mux.Handle("POST /clients", s.protect(s.createClient))
 	mux.Handle("GET /clients/{name}", s.protect(s.clientCard))
@@ -120,6 +129,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /clients/{name}/qr/{kind}/{variant}/{file}", s.protect(s.profileQR))
 	mux.Handle("POST /clients/{name}/renew", s.protect(s.renew))
 	mux.Handle("POST /clients/{name}/limit", s.protect(s.setLimit))
+	mux.Handle("POST /clients/{name}/card", s.protect(s.saveCard))
 	mux.Handle("POST /clients/{name}/block", s.protect(s.block))
 	mux.Handle("POST /clients/{name}/delete", s.protect(s.deleteClient))
 	mux.Handle("GET /{$}", s.protect(s.clientsList))
@@ -286,6 +296,7 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		s.Sleep(loginDelay)
 		s.Log.Warn("неверный вход", "user", truncateRunes(user, maxLoggedName), "remote", host)
+		s.auditAs(r, "", "login_failed", truncateRunes(user, maxLoggedName), "", "")
 		s.renderLogin(w, r, http.StatusUnauthorized, user, "неверное имя или пароль")
 		return
 	}
@@ -304,6 +315,7 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: isHTTPS(r),
 	})
 	s.Log.Info("вход", "user", truncateRunes(user, maxLoggedName), "remote", host)
+	s.auditAs(r, truncateRunes(user, maxLoggedName), "login", "", "", "")
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
@@ -359,5 +371,6 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	s.Sessions.Delete(sess.ID)
 	clearSessionCookie(w, r)
 	s.Log.Info("выход", "user", truncateRunes(sess.User, maxLoggedName), "remote", remoteHost(r))
+	s.auditAs(r, truncateRunes(sess.User, maxLoggedName), "logout", "", "", "")
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }

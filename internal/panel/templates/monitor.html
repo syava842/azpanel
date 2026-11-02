@@ -32,16 +32,45 @@
 </div>
 {{end}}
 
+{{if .Ranges}}
+<h2>История</h2>
+<p class="ranges">{{range .Ranges}}{{if .Current}}<b>{{.Name}}</b>{{else}}<a href="{{.Href}}">{{.Name}}</a>{{end}} {{end}}</p>
+{{if .HistoryErr}}<div class="error">{{.HistoryErr}}</div>{{else}}
+<div class="charts">
+  <figure><figcaption>Процессор</figcaption>{{.Charts.CPU}}</figure>
+  <figure><figcaption>Память</figcaption>{{.Charts.Memory}}</figure>
+  <figure><figcaption>Сеть</figcaption>{{.Charts.Net}}</figure>
+  <figure><figcaption>Онлайн</figcaption>{{.Charts.Online}}</figure>
+</div>
+{{end}}
+{{end}}
+
 <h2>Сессии</h2>
 {{if .SessionsErr}}<div class="error">{{.SessionsErr}}</div>{{else}}
 <div class="table-wrap">
 <table>
-  <thead><tr><th>Тип</th><th>Экземпляр</th><th>Клиент</th><th>Адрес</th><th>↓</th><th>↑</th><th>Время</th></tr></thead>
+  <thead><tr><th>Тип</th><th>Экземпляр</th><th>Клиент</th><th>Адрес</th>{{if .HasGeo}}<th>Город</th><th>Провайдер</th>{{end}}<th>↓</th><th>↑</th><th>Время</th></tr></thead>
   <tbody>
   {{range .Sessions}}
-  <tr><td>{{.Kind}}</td><td>{{.Instance}}</td><td><a href="{{.Href}}">{{.Name}}</a></td><td>{{.Addr}}</td><td>{{.Down}}</td><td>{{.Up}}</td><td>{{.Time}}</td></tr>
+  <tr><td>{{.Kind}}</td><td>{{.Instance}}</td><td><a href="{{.Href}}">{{.Name}}</a></td><td>{{.Addr}}{{if .Flapping}} <span class="warn" title="адрес меняется часто">⚠ адрес меняется часто — возможно, один ключ на двух устройствах</span>{{end}}</td>{{if $.HasGeo}}<td>{{.City}}</td><td>{{.ISP}}</td>{{end}}<td>{{.Down}}</td><td>{{.Up}}</td><td>{{.Time}}</td></tr>
   {{else}}
-  <tr><td colspan="7" class="muted">Подключений нет.</td></tr>
+  <tr><td colspan="{{if $.HasGeo}}9{{else}}7{{end}}" class="muted">Подключений нет.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{end}}
+
+<h2>Отказы за сутки</h2>
+{{if .DenialsNote}}<p class="muted">{{.DenialsNote}}</p>{{else if .DenialsErr}}<div class="error">{{.DenialsErr}}</div>{{else}}
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Время</th><th>Клиент</th><th>Экземпляр</th><th>Адрес</th><th>Причина</th></tr></thead>
+  <tbody>
+  {{range .Denials}}
+  <tr><td>{{.Time}}</td><td><a href="{{.Href}}">{{.Name}}</a></td><td>{{.Instance}}</td><td>{{.Addr}}</td><td>{{.Reason}}</td></tr>
+  {{else}}
+  <tr><td colspan="5" class="muted">Отказов нет.</td></tr>
   {{end}}
   </tbody>
 </table>

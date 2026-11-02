@@ -111,3 +111,23 @@ form.inline { display: inline; margin: 0; }
 .actions form { padding: .75rem 0; border-bottom: 1px solid var(--line); }
 .actions form:last-child { border-bottom: 0; }
 .actions input[type=number], .actions input[type=text] { max-width: 16rem; }
+
+.ranges { margin: .25rem 0 .75rem; }
+.ranges a, .ranges b { margin-right: .75rem; }
+.pager a { margin-right: 1rem; }
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1rem; }
+.charts figure { margin: 0; background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: .5rem; }
+.charts figcaption { color: var(--muted); font-size: .85rem; font-weight: 600; margin-bottom: .25rem; }
+
+svg.chart { width: 100%; height: auto; display: block; }
+.chart { --c1: #2459d6; --c2: #1b7f3b; --c3: #b26a00; }
+.chart .grid { stroke: var(--line); stroke-width: 1; }
+.chart .axis, .chart .empty { fill: var(--muted); font-size: 11px; }
+.chart .empty { font-size: 14px; }
+.chart .line { fill: none; stroke-width: 1.5; stroke-linejoin: round; }
+.chart .line.s1 { stroke: var(--c1); }
+.chart .line.s2 { stroke: var(--c2); }
+.chart .line.s3 { stroke: var(--c3); }
+.chart .key.s1 { fill: var(--c1); }
+.chart .key.s2 { fill: var(--c2); }
+.chart .key.s3 { fill: var(--c3); }

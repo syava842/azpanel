@@ -5,6 +5,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/skip2/go-qrcode"
 
 	"github.com/syava842/azpanel/internal/nodeapi"
+	"github.com/syava842/azpanel/internal/store"
 )
 
 const (
@@ -33,6 +35,12 @@ type clientRow struct {
 	Limit    string
 	Blocked  bool
 	WGOnly   bool // заблокирован, но блокировка к нему не применима
+	Auto     bool // блокировку поставила панель
+	Traffic  string
+	Until    string
+
+	trafficBytes int64 // для сортировки
+	untilTS      int64 // 0 — без срока
 }
 
 type sessionRow struct {
@@ -104,6 +112,17 @@ func (s *Server) clientsList(w http.ResponseWriter, r *http.Request) {
 			online[x.Name]++
 		}
 	}
+	var cards map[string]store.Card
+	var traffic map[string]store.Bytes
+	if s.Store != nil {
+		var cerr, terr error
+		cards, cerr = s.Store.Cards(r.Context(), s.NodeID)
+		traffic, terr = s.traffic30(r.Context(), s.now())
+		if cerr != nil || terr != nil {
+			s.Log.Warn("история клиентов не прочитана", "cards", cerr, "traffic", terr)
+			cards, traffic = nil, nil
+		}
+	}
 	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
 	rows := []clientRow{}
 	for _, c := range list {
@@ -116,13 +135,57 @@ func (s *Server) clientsList(w http.ResponseWriter, r *http.Request) {
 		if c.Limit > 0 {
 			row.Limit = strconv.Itoa(c.Limit)
 		}
+		row.Traffic, row.Until = "—", "—"
+		if card, ok := cards[c.Name]; ok {
+			row.Until = untilText(card.AccessUntil)
+			if card.AccessUntil != nil {
+				row.untilTS = *card.AccessUntil
+			}
+			row.Auto = c.Blocked && card.AutoBlock != ""
+		}
+		if traffic != nil {
+			b := traffic[c.Name]
+			row.trafficBytes = b.Rx + b.Tx
+			row.Traffic = humanBytes(uint64(max(row.trafficBytes, 0)))
+		}
 		rows = append(rows, row)
 	}
-	data := map[string]any{"Rows": rows, "Q": r.URL.Query().Get("q"), "NoOnline": sessErr != "", "NotOnlyOVPN": notOnlyOVPN}
+	sortKey := r.URL.Query().Get("sort")
+	sortRows(rows, sortKey)
+	data := map[string]any{"Rows": rows, "Q": r.URL.Query().Get("q"), "NoOnline": sessErr != "", "NotOnlyOVPN": notOnlyOVPN,
+		"Sort": sortKey, "HasStore": s.Store != nil}
 	if sessErr != "" {
 		data["Error"] = sessErr
 	}
 	s.render(w, r, http.StatusOK, "clients", data)
+}
+
+// sortRows: name (по умолчанию), traffic — по убыванию, until — ближайший
+// срок первым, клиенты без срока в конце, online — по убыванию. Равные —
+// по имени.
+func sortRows(rows []clientRow, key string) {
+	byName := func(a, b clientRow) bool { return strings.ToLower(a.Name) < strings.ToLower(b.Name) }
+	sort.SliceStable(rows, func(i, j int) bool {
+		a, b := rows[i], rows[j]
+		switch key {
+		case "traffic":
+			if a.trafficBytes != b.trafficBytes {
+				return a.trafficBytes > b.trafficBytes
+			}
+		case "until":
+			if (a.untilTS == 0) != (b.untilTS == 0) {
+				return a.untilTS != 0
+			}
+			if a.untilTS != b.untilTS {
+				return a.untilTS < b.untilTS
+			}
+		case "online":
+			if a.Online != b.Online {
+				return a.Online > b.Online
+			}
+		}
+		return byName(a, b)
+	})
 }
 
 func (s *Server) newForm(w http.ResponseWriter, r *http.Request) {
@@ -170,6 +233,7 @@ func (s *Server) createClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Log.Info("действие", "user", s.user(r), "op", "create", "client", name, "detail", kind)
+	s.audit(r, "create", name, "", kind)
 	redirectMsg(w, r, clientHref(name), "created")
 }
 
@@ -182,13 +246,14 @@ func (s *Server) user(r *http.Request) string {
 // отсюда: произвольная строка из адреса на странице не показывается.
 // %d подставляется из числового параметра n.
 var msgTexts = map[string]string{
-	"created":   "создан",
-	"deleted":   "удалён",
-	"renewed":   "продлён на %d дн.",
-	"limit_set": "лимит: %d",
-	"limit_off": "лимит снят",
-	"blocked":   "заблокирован, разорвано сессий: %d",
-	"unblocked": "разблокирован",
+	"created":    "создан",
+	"deleted":    "удалён",
+	"renewed":    "продлён на %d дн.",
+	"limit_set":  "лимит: %d",
+	"limit_off":  "лимит снят",
+	"blocked":    "заблокирован, разорвано сессий: %d",
+	"unblocked":  "разблокирован",
+	"card_saved": "карточка сохранена",
 }
 
 // redirectMsg ведёт на страницу с уведомлением по коду; n — число для
@@ -258,6 +323,7 @@ func (s *Server) card(w http.ResponseWriter, r *http.Request, c nodeapi.Client, 
 		}
 	}
 	data["Profiles"] = profiles
+	s.addHistory(r, c, data)
 	s.render(w, r, status, "client", data)
 }
 
@@ -317,8 +383,9 @@ func (s *Server) profileQR(w http.ResponseWriter, r *http.Request) {
 }
 
 // done пишет успешное действие в журнал и возвращает на карточку.
-func (s *Server) done(w http.ResponseWriter, r *http.Request, c nodeapi.Client, op, detail, code string, n ...int) {
+func (s *Server) done(w http.ResponseWriter, r *http.Request, c nodeapi.Client, op, before, detail, code string, n ...int) {
 	s.Log.Info("действие", "user", s.user(r), "op", op, "client", c.Name, "detail", detail)
+	s.audit(r, op, c.Name, before, detail)
 	redirectMsg(w, r, clientHref(c.Name), code, n...)
 }
 
@@ -343,7 +410,8 @@ func (s *Server) renew(w http.ResponseWriter, r *http.Request) {
 		s.failed(w, r, c, "renew", err)
 		return
 	}
-	s.done(w, r, c, "renew", fmt.Sprintf("%d дн.", days), "renewed", days)
+	before, _ := certText(c.CertExpires)
+	s.done(w, r, c, "renew", before, fmt.Sprintf("продлён на %d дн.", days), "renewed", days)
 }
 
 func (s *Server) setLimit(w http.ResponseWriter, r *http.Request) {
@@ -360,11 +428,15 @@ func (s *Server) setLimit(w http.ResponseWriter, r *http.Request) {
 		s.failed(w, r, c, "limit", err)
 		return
 	}
+	before := "—"
+	if c.Limit > 0 {
+		before = strconv.Itoa(c.Limit)
+	}
 	if limit == 0 {
-		s.done(w, r, c, "limit", "0", "limit_off")
+		s.done(w, r, c, "limit", before, "—", "limit_off")
 		return
 	}
-	s.done(w, r, c, "limit", strconv.Itoa(limit), "limit_set", limit)
+	s.done(w, r, c, "limit", before, strconv.Itoa(limit), "limit_set", limit)
 }
 
 func (s *Server) block(w http.ResponseWriter, r *http.Request) {
@@ -387,10 +459,11 @@ func (s *Server) block(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if blocked {
-		s.done(w, r, c, "block", fmt.Sprintf("разорвано сессий: %d", res.Killed), "blocked", res.Killed)
+		s.done(w, r, c, "block", "не заблокирован", fmt.Sprintf("заблокирован, разорвано сессий: %d", res.Killed), "blocked", res.Killed)
 		return
 	}
-	s.done(w, r, c, "unblock", "", "unblocked")
+	s.forgetAutoBlock(r, c)
+	s.done(w, r, c, "unblock", "заблокирован", "не заблокирован", "unblocked")
 }
 
 func (s *Server) deleteClient(w http.ResponseWriter, r *http.Request) {
@@ -412,5 +485,12 @@ func (s *Server) deleteClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Log.Info("действие", "user", s.user(r), "op", "delete", "client", c.Name, "detail", kind)
+	s.audit(r, "delete", c.Name, kind, "удалён")
+	// карточка уходит вместе с клиентом; пока остался другой тип — она нужна
+	if s.Store != nil && !(kind == nodeapi.KindOpenVPN && c.WireGuard) && !(kind == nodeapi.KindWireGuard && c.OpenVPN) {
+		if err := s.Store.DeleteCard(r.Context(), s.NodeID, c.Name); err != nil {
+			s.Log.Warn("карточка клиента не удалена", "client", c.Name, "err", err)
+		}
+	}
 	redirectMsg(w, r, "/", "deleted")
 }

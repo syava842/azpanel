@@ -73,6 +73,25 @@ func (s *Store) SaveCard(ctx context.Context, c Card) error {
 	return err
 }
 
+// SaveCardFields создаёт карточку или обновляет в ней note, access_until,
+// traffic_limit и traffic_period, не трогая auto_block и auto_skip: правка из
+// интерфейса не затирает пометку, которую в это же время ставит сборщик.
+func (s *Store) SaveCardFields(ctx context.Context, c Card) error {
+	if c.TrafficPeriod == "" {
+		c.TrafficPeriod = PeriodMonth
+	}
+	var until any
+	if c.AccessUntil != nil {
+		until = *c.AccessUntil
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO client_cards (node_id, name, note, access_until, traffic_limit, traffic_period)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(node_id, name) DO UPDATE SET note = excluded.note, access_until = excluded.access_until,
+		  traffic_limit = excluded.traffic_limit, traffic_period = excluded.traffic_period`,
+		c.Node, c.Name, c.Note, until, c.TrafficLimit, c.TrafficPeriod)
+	return err
+}
+
 // SetAutoBlock точечно меняет только auto_block и auto_skip существующей
 // карточки, не трогая остальные поля: сборщик и ручная разблокировка не
 // затирают правку карточки из интерфейса. Нет карточки — ничего не делает.
