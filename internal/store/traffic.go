@@ -103,3 +103,16 @@ func (s *Store) TrafficTotals(ctx context.Context, node int64, from, to int64) (
 	}
 	return out, rows.Err()
 }
+
+// DeleteTraffic стирает всю историю трафика имени: новый клиент с именем
+// удалённого не наследует его байты в лимите.
+func (s *Store) DeleteTraffic(ctx context.Context, node int64, name string) error {
+	return s.tx(ctx, func(t *sql.Tx) error {
+		for _, tbl := range []string{"traffic_minute", "traffic_hour"} {
+			if _, err := t.ExecContext(ctx, `DELETE FROM `+tbl+` WHERE node_id = ? AND name = ?`, node, name); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}

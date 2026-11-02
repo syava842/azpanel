@@ -71,14 +71,26 @@ const resHourAgg = `m.ts / 3600 * 3600, avg(m.cpu), avg(m.load1),
 	CAST(round(avg(m.disk_free)) AS INTEGER), CAST(round(avg(m.disk_total)) AS INTEGER),
 	max(m.net_rx), max(m.net_tx), max(m.online)`
 
+const (
+	// MinTrafficDays — сколько суток хранить часовой трафик независимо от
+	// history_days: лимиты «неделя» и «месяц» считаются по нему, и усечение
+	// истории не должно снимать блок посреди периода.
+	MinTrafficDays = 35
+	// AuditKeepDays — сколько суток хранить журнал действий.
+	AuditKeepDays = 365
+)
+
 // Rollup сворачивает минуты законченных часов в часовые точки и удаляет
 // старое: минуты — старше суток (целыми часами, чтобы повторный вызов не
-// пересчитал час по неполным данным), часовые — старше historyDays.
+// пересчитал час по неполным данным), часовые ресурсы — старше historyDays, часовой трафик — старше
+// max(historyDays, MinTrafficDays), журнал действий — старше AuditKeepDays.
 // Повторный вызов результат не меняет: час перезаписывается целиком.
 func (s *Store) Rollup(ctx context.Context, now int64, historyDays int) error {
 	cur := hourOf(now)
 	minCut := hourOf(now - 86400)
 	hourCut := now - int64(historyDays)*86400
+	trafficCut := now - int64(max(historyDays, MinTrafficDays))*86400
+	auditCut := now - AuditKeepDays*86400
 	return s.tx(ctx, func(t *sql.Tx) error {
 		stmts := []struct {
 			q    string
@@ -92,8 +104,9 @@ func (s *Store) Rollup(ctx context.Context, now int64, historyDays int) error {
 				WHERE m.ts < ? GROUP BY m.node_id, m.ts / 3600`, []any{cur}},
 			{`DELETE FROM traffic_minute WHERE ts < ?`, []any{minCut}},
 			{`DELETE FROM resource_minute WHERE ts < ?`, []any{minCut}},
-			{`DELETE FROM traffic_hour WHERE ts < ?`, []any{hourCut}},
+			{`DELETE FROM traffic_hour WHERE ts < ?`, []any{trafficCut}},
 			{`DELETE FROM resource_hour WHERE ts < ?`, []any{hourCut}},
+			{`DELETE FROM audit WHERE ts < ?`, []any{auditCut}},
 		}
 		for _, st := range stmts {
 			if _, err := t.ExecContext(ctx, st.q, st.args...); err != nil {

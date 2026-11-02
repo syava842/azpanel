@@ -2,8 +2,26 @@ package store
 
 import (
 	"context"
+	"database/sql/driver"
 	"strings"
+
+	sqlite "modernc.org/sqlite"
 )
+
+// ulower — нижний регистр по Unicode: встроенный lower() в SQLite понимает
+// только ASCII, и «Вход» не нашёлся бы по запросу «вход».
+func init() {
+	sqlite.MustRegisterDeterministicScalarFunction("ulower", 1,
+		func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+			switch v := args[0].(type) {
+			case string:
+				return strings.ToLower(v), nil
+			case []byte:
+				return strings.ToLower(string(v)), nil
+			}
+			return args[0], nil
+		})
+}
 
 // AuditEntry — запись журнала действий. Секретов в ней быть не должно.
 type AuditEntry struct {
@@ -33,7 +51,7 @@ var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 func (s *Store) AuditList(ctx context.Context, limit, offset int, q string) ([]AuditEntry, int, error) {
 	where, args := "", []any{}
 	if q != "" {
-		where = ` WHERE lower(user) LIKE ? ESCAPE '\' OR lower(action) LIKE ? ESCAPE '\' OR lower(target) LIKE ? ESCAPE '\'`
+		where = ` WHERE ulower(user) LIKE ? ESCAPE '\' OR ulower(action) LIKE ? ESCAPE '\' OR ulower(target) LIKE ? ESCAPE '\'`
 		pat := "%" + likeEscaper.Replace(strings.ToLower(q)) + "%"
 		args = append(args, pat, pat, pat)
 	}

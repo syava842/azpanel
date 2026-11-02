@@ -49,7 +49,7 @@ func TestRollupTrafficIdempotentAndCleans(t *testing.T) {
 	s.AddTraffic(ctx, 1, old, map[string]Bytes{"a": {Rx: 1, Tx: 1}})                // минута старше суток
 	s.AddTraffic(ctx, 1, now-5*3600, map[string]Bytes{"a": {Rx: 4, Tx: 5}})         // свежая законченная
 	s.AddTraffic(ctx, 1, now-5*3600+120, map[string]Bytes{"a": {Rx: 6, Tx: 7}})     // тот же час
-	s.AddTraffic(ctx, 1, now-35*day, map[string]Bytes{"a": {Rx: 9, Tx: 9}})         // уйдёт при чистке часовых
+	s.AddTraffic(ctx, 1, now-36*day, map[string]Bytes{"a": {Rx: 9, Tx: 9}})         // старше 35 суток — уйдёт при чистке
 	s.AddTraffic(ctx, 1, hourOf(now)+10, map[string]Bytes{"a": {Rx: 100, Tx: 100}}) // текущий час не сворачивается
 	for i := 0; i < 3; i++ {
 		if err := s.Rollup(ctx, now, 30); err != nil {
