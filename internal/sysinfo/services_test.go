@@ -1,6 +1,8 @@
 package sysinfo
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -27,5 +29,14 @@ func TestParseIsActive(t *testing.T) {
 	got := ParseIsActive([]string{"a", "b", "c"}, "active\nfailed\n")
 	if len(got) != 3 || got[0].State != "active" || got[1].State != "failed" || got[2].State != "unknown" {
 		t.Fatalf("%+v", got)
+	}
+}
+
+func TestServicesCancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	// Отменённый контекст — ошибка, а не молчаливое «unknown».
+	if _, err := Services(ctx, []string{"a"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v", err)
 	}
 }

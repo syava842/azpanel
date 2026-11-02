@@ -140,6 +140,9 @@ func startAPI(cfg config.Config, version string, tr *Tracker, log *slog.Logger) 
 		Now:           time.Now,
 	}
 	api.Services = func(ctx context.Context) ([]sysinfo.Service, error) {
+		// systemctl может зависнуть (например, при перегруженном dbus).
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
 		kresd, err := sysinfo.KresdUnits(ctx)
 		if err != nil {
 			return nil, err
@@ -154,9 +157,10 @@ func startAPI(cfg config.Config, version string, tr *Tracker, log *slog.Logger) 
 		Handler:           api.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      time.Duration(n.ClientShTimeoutS)*time.Second + time.Minute,
-		IdleTimeout:       time.Minute,
-		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
+		// Второй запрос ждёт мьютекс первого целый таймаут client.sh, поэтому 2×.
+		WriteTimeout: 2*time.Duration(n.ClientShTimeoutS)*time.Second + time.Minute,
+		IdleTimeout:  time.Minute,
+		ErrorLog:     slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 	}
 	go func() {
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {

@@ -3951,14 +3951,14 @@ Expected: первый запрос `201`; повтор — `409`; клиент 
 ssh root@192.0.2.94 'T=$(sed -n "s/^NODE_TOKEN=//p" /opt/azpanel/etc/secrets.env); A="http://127.0.0.1:9100"; H="Authorization: Bearer $T"; cd /root/azpanel-probe
   curl -s -X PUT -H "$H" -d "{\"blocked\":true}" $A/v1/clients/azpanel-test-a1/blocked; echo
   tr -d "\n " < /opt/azpanel/data/limits.json; echo
-  sleep 25; grep -c "AUTH_FAILED" a.log; grep "azpanel-test-a1" /opt/azpanel/log/hook.log | grep -c "клиент заблокирован"
+  sleep 45; grep -c "AUTH_FAILED" a.log; grep "azpanel-test-a1" /opt/azpanel/log/hook.log | grep -c "клиент заблокирован"
   kill $(cat a.pid); sleep 2
   curl -s -X PUT -H "$H" -d "{\"blocked\":false}" $A/v1/clients/azpanel-test-a1/blocked; echo
   : > a.log; openvpn --config a1-udp.ovpn --route-nopull --ifconfig-noexec --route-noexec --disable-dco --log a.log --writepid a.pid --daemon azt-a
   sleep 12; grep -c "Initialization Sequence Completed" a.log'
 ```
 
-Expected: `{"killed":1}`; в `limits.json` — `"blocked":["azpanel-test-a1"]`; клиент после разрыва переподключается и получает `AUTH_FAILED` (≥1), в `hook.log` — `отказ: клиент заблокирован` (≥1); после разблокировки — `{}` и снова `1`.
+Expected (UDP-клиент переподключается только после ping-restart, около 45 с, поэтому `sleep 45`): `{"killed":1}`; в `limits.json` — `"blocked":["azpanel-test-a1"]`; клиент после разрыва переподключается и получает `AUTH_FAILED` (≥1), в `hook.log` — `отказ: клиент заблокирован` (≥1); после разблокировки — `{}` и снова `1`.
 
 - [ ] **Step 5: Лимит через API**
 

@@ -60,6 +60,10 @@ func ParseIsActive(units []string, out string) []Service {
 // хоть один юнит не active, — это не ошибка: состояние в выводе.
 func Services(ctx context.Context, units []string) ([]Service, error) {
 	out, err := exec.CommandContext(ctx, "systemctl", append([]string{"is-active"}, units...)...).Output()
+	if cerr := ctx.Err(); cerr != nil {
+		// Таймаут или отмена: ответ systemctl неполный, «unknown» был бы ложью.
+		return nil, cerr
+	}
 	var ee *exec.ExitError
 	if err != nil && !errors.As(err, &ee) {
 		return nil, err
@@ -70,6 +74,9 @@ func Services(ctx context.Context, units []string) ([]Service, error) {
 // KresdUnits — экземпляры kresd@*, сколько их запустил AntiZapret.
 func KresdUnits(ctx context.Context) ([]string, error) {
 	out, err := exec.CommandContext(ctx, "systemctl", "list-units", "--plain", "--no-legend", "--all", "kresd@*").Output()
+	if cerr := ctx.Err(); cerr != nil {
+		return nil, cerr
+	}
 	if err != nil {
 		return nil, err
 	}
