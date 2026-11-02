@@ -17,8 +17,9 @@ type Key struct {
 }
 
 type snapshot struct {
-	taken time.Time
-	keys  map[Key]struct{}
+	taken    time.Time
+	keys     map[Key]struct{}
+	sessions []antizapret.Session // для показа; лимит считается по keys
 }
 
 // Tracker считает сессии по снимкам управляющих сокетов и событиям хуков
@@ -44,7 +45,7 @@ func (t *Tracker) ApplySnapshot(instance string, taken time.Time, sessions []ant
 	for _, s := range sessions {
 		keys[Key{Instance: instance, CN: s.CommonName, Addr: s.RealAddr}] = struct{}{}
 	}
-	t.snaps[instance] = snapshot{taken: taken, keys: keys}
+	t.snaps[instance] = snapshot{taken: taken, keys: keys, sessions: append([]antizapret.Session(nil), sessions...)}
 	for k, ev := range t.conns {
 		if k.Instance == instance && !ev.After(taken) {
 			delete(t.conns, k)
@@ -131,6 +132,29 @@ func (t *Tracker) Instances() []string {
 		out = append(out, inst)
 	}
 	sort.Strings(out)
+	return out
+}
+
+// Sessions — сессии из последних снимков всех экземпляров, для показа.
+// События хуков между снимками сюда не входят: список отстаёт от учёта
+// лимита не больше чем на один опрос.
+func (t *Tracker) Sessions() []antizapret.Session {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var out []antizapret.Session
+	for _, s := range t.snaps {
+		out = append(out, s.sessions...)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.Instance != b.Instance {
+			return a.Instance < b.Instance
+		}
+		if a.CommonName != b.CommonName {
+			return a.CommonName < b.CommonName
+		}
+		return a.RealAddr < b.RealAddr
+	})
 	return out
 }
 

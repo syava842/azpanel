@@ -2,6 +2,7 @@ package node
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -118,5 +119,32 @@ func TestConnectAfterDisconnectOfSameKey(t *testing.T) {
 	tr.Admit(k, at(3), 0)
 	if n := tr.Count("alice"); n != 1 {
 		t.Fatalf("alice = %d", n)
+	}
+}
+
+func TestTrackerSessions(t *testing.T) {
+	tr := NewTracker()
+	at := time.Unix(1000, 0)
+	tr.ApplySnapshot("vpn-udp", at, []antizapret.Session{
+		{Instance: "vpn-udp", CommonName: "bob", RealAddr: "5.6.7.8:1", BytesRx: 10},
+	})
+	tr.ApplySnapshot("antizapret-udp", at, []antizapret.Session{
+		{Instance: "antizapret-udp", CommonName: "bob", RealAddr: "1.1.1.1:2"},
+		{Instance: "antizapret-udp", CommonName: "alice", RealAddr: "1.1.1.1:1"},
+	})
+	got := tr.Sessions()
+	var keys []string
+	for _, s := range got {
+		keys = append(keys, s.Instance+"/"+s.CommonName)
+	}
+	if strings.Join(keys, ",") != "antizapret-udp/alice,antizapret-udp/bob,vpn-udp/bob" {
+		t.Fatalf("порядок %v", keys)
+	}
+	if got[2].BytesRx != 10 {
+		t.Fatalf("подробности потеряны: %+v", got[2])
+	}
+	tr.Forget("vpn-udp")
+	if n := len(tr.Sessions()); n != 2 {
+		t.Fatalf("после Forget осталось %d", n)
 	}
 }
