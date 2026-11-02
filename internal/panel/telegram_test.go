@@ -7,8 +7,10 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/syava842/azpanel/internal/nodeapi"
+	"github.com/syava842/azpanel/internal/panel/bot"
 	"github.com/syava842/azpanel/internal/store"
 )
 
@@ -151,5 +153,21 @@ func TestBotBackendActions(t *testing.T) {
 	}
 	if _, ok := b.QR([]byte("x")); !ok {
 		t.Fatal("QR не нарисован")
+	}
+}
+
+func TestBotBackendRedeemMapsManualBlock(t *testing.T) {
+	e, _, _, _, bob := userEnv(t)
+	b := e.srv.BotBackend()
+	until := e.srv.now().Add(24 * time.Hour).Unix()
+	if err := e.st.SaveCard(context.Background(), store.Card{Node: store.LocalNode, Name: ownClient, AccessUntil: &until}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := b.Redeem(context.Background(), nodeapi.Client{Name: ownClient, Blocked: true}, &bob.ID, "AAAA-BBBB-CCCC-DDDD")
+	if !errors.Is(err, bot.ErrBlocked) {
+		t.Fatalf("ручная блокировка: %v", err)
+	}
+	if _, err := b.Redeem(context.Background(), nodeapi.Client{Name: ownClient}, &bob.ID, "AAAA-BBBB-CCCC-DDDD"); !errors.Is(err, store.ErrCodeInvalid) && !errors.Is(err, store.ErrNoLimit) {
+		t.Fatalf("неверный код или клиент без срока: %v", err)
 	}
 }

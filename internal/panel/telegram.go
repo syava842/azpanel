@@ -2,13 +2,20 @@ package panel
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
+	"sync"
+	"time"
 
+	"github.com/syava842/azpanel/internal/config"
 	"github.com/syava842/azpanel/internal/nodeapi"
 	"github.com/syava842/azpanel/internal/panel/bot"
+	"github.com/syava842/azpanel/internal/paths"
 	"github.com/syava842/azpanel/internal/store"
+	"github.com/syava842/azpanel/internal/telegram"
 )
 
 // botName — имя бота для ссылки привязки; пусто — бот не запущен.
@@ -147,6 +154,9 @@ type botBackend struct{ s *Server }
 
 func (b botBackend) Redeem(ctx context.Context, c nodeapi.Client, owner *int64, code string) (bot.Extend, error) {
 	res, err := b.s.redeemForClient(ctx, c, owner, code)
+	if errors.Is(err, errManualBlock) {
+		return bot.Extend{}, bot.ErrBlocked
+	}
 	if err != nil {
 		return bot.Extend{}, err
 	}
@@ -198,3 +208,46 @@ func (b botBackend) NewUser(ctx context.Context, login string) (store.User, erro
 }
 
 func (b botBackend) QR(data []byte) ([]byte, bool) { return profileQRPNG(data) }
+
+// telegramBaseURL — адрес Bot API; пусто — api.telegram.org. Подменяется в тестах.
+var telegramBaseURL = ""
+
+// botRetryBase — первая пауза перед повтором getMe при неудачном старте бота
+// (дальше удваивается до botRetryMax).
+var (
+	botRetryBase = time.Minute
+	botRetryMax  = 15 * time.Minute
+)
+
+// startBot запускает бота в фоне: getMe даёт имя для ссылок привязки. Ошибка
+// getMe — предупреждение в журнале и повтор позже; панель работает без бота.
+// Токен в журнал не попадает: клиент Bot API вырезает его из всех ошибок.
+func (s *Server) startBot(ctx context.Context, wg *sync.WaitGroup, cfg config.Config, token string, node bot.Node, log *slog.Logger) {
+	b := &bot.Bot{
+		TG: telegram.New(token, telegramBaseURL), Node: node, Store: s.Store, Back: s.BotBackend(),
+		Cfg: cfg.Telegram, NodeID: s.NodeID, Log: log, BackupDir: paths.Backup(),
+	}
+	s.BotName = b.Username
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		wait := botRetryBase
+		for {
+			ictx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			err := b.Init(ictx)
+			cancel()
+			if err == nil {
+				break
+			}
+			log.Warn("бот не запущен: getMe не удался, панель работает без бота", "err", err, "повтор_через", wait.String())
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wait):
+			}
+			wait = min(wait*2, botRetryMax)
+		}
+		log.Info("Telegram-бот запущен", "бот", b.Username())
+		b.Run(ctx)
+	}()
+}

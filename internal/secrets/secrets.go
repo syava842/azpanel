@@ -19,6 +19,9 @@ import (
 // NodeToken — токен, которым панель подписывает запросы к агенту.
 const NodeToken = "NODE_TOKEN"
 
+// TelegramBotToken — токен Telegram-бота панели; в журналы и ошибки не попадает.
+const TelegramBotToken = "TELEGRAM_BOT_TOKEN"
+
 var keyRe = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 
 // Load читает файл; нет файла — пустая карта. Пустые строки и строки с #

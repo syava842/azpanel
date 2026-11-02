@@ -68,6 +68,13 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		HistoryDays: cfg.Panel.HistoryDays,
 		Log:         log,
 	}
+	tgToken := sec[secrets.TelegramBotToken]
+	botOn := cfg.Telegram.Enabled && tgToken != ""
+	if botOn {
+		col.Alerts = &cfg.Telegram
+	} else if cfg.Telegram.Enabled {
+		log.Warn("telegram.enabled включён, но в secrets.env нет TELEGRAM_BOT_TOKEN — бот не запущен")
+	}
 	s := &Server{
 		Node:      node,
 		Store:     st,
@@ -106,6 +113,9 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	go func() { defer colDone.Done(); purgeSessionsLoop(cctx, st, purgeEvery, log) }()
 	colDone.Add(1)
 	go func() { defer colDone.Done(); s.PendingLoop(cctx, pendingCheckEvery) }()
+	if botOn {
+		s.startBot(cctx, &colDone, cfg, tgToken, node, log)
+	}
 	defer func() { stopCollector(); colDone.Wait() }()
 	srv := &http.Server{
 		Handler:           s.Handler(),
