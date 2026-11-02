@@ -36,6 +36,12 @@ const (
 	TaskDoall    = "doall"
 	TaskRestart  = "restart"
 	TaskProfiles = "profiles"
+	// TaskAZUpdate — обновление AntiZapret: бэкап и setup.sh (переживает перезагрузку).
+	TaskAZUpdate = "azupdate"
+	// TaskAZRestore — восстановление из бэкапа: client.sh 9.
+	TaskAZRestore = "azrestore"
+	// TaskWarperResync — warper resync после обновления AntiZapret.
+	TaskWarperResync = "warper-resync"
 )
 
 // DefaultTaskTimeouts — предел времени задачи по виду (RuntimeMaxSec юнита).
@@ -44,6 +50,10 @@ var DefaultTaskTimeouts = map[string]time.Duration{
 	TaskDoall:    1800 * time.Second,
 	TaskRestart:  300 * time.Second,
 	TaskProfiles: 1800 * time.Second,
+	// setup.sh обновляет систему и ставит пакеты; при недоступных зеркалах долго ждёт.
+	TaskAZUpdate:     7200 * time.Second,
+	TaskAZRestore:    3600 * time.Second,
+	TaskWarperResync: 600 * time.Second,
 }
 
 // fallbackTaskTimeout — предел для вида, которого нет в таблице: задача без
@@ -306,10 +316,25 @@ func (t *Tasks) waitOrphan(id string) {
 	t.finish(id, nil, true, false)
 }
 
+// StartOpts — окружение задачи сверх умолчаний systemd-run.
+type StartOpts struct {
+	// Env — пары KEY=VALUE для окружения юнита. В журнал и tasks.json не
+	// попадают, но видны в systemctl show, пока юнит жив: секретов не передавать.
+	Env []string
+	// StdinFile — файл, который станет стандартным вводом команды; без него
+	// ввод — /dev/null.
+	StdinFile string
+}
+
 // Start запускает задачу в фоне. argv — команда и аргументы; запрет на
 // одновременный запуск проверяется здесь, под тем же замком, что и
 // регистрация задачи.
 func (t *Tasks) Start(kind string, argv []string) (Task, error) {
+	return t.StartWith(kind, argv, StartOpts{})
+}
+
+// StartWith — Start с окружением и вводом.
+func (t *Tasks) StartWith(kind string, argv []string, opts StartOpts) (Task, error) {
 	if !taskKindRe.MatchString(kind) || len(argv) == 0 {
 		return Task{}, errors.New("неверный вид задачи или пустая команда")
 	}
@@ -338,7 +363,7 @@ func (t *Tasks) Start(kind string, argv []string) (Task, error) {
 	}
 	t.running = id
 	t.saveLocked()
-	go t.run(task, argv)
+	go t.run(task, argv, opts)
 	return task, nil
 }
 
@@ -350,15 +375,21 @@ func newTaskID() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-func (t *Tasks) run(task Task, argv []string) {
+func (t *Tasks) run(task Task, argv []string, opts StartOpts) {
 	args := []string{
 		"--unit=" + Unit(task.ID), "--collect", "--quiet", "--wait",
 		"--property=StandardOutput=append:" + task.Log,
 		"--property=StandardError=append:" + task.Log,
 		"--property=RuntimeMaxSec=" + strconv.Itoa(int(t.timeout(task.Kind)/time.Second)),
 		"--working-directory=" + t.Dir,
-		"--", "/bin/sh", "-c", exitWrapper, "sh", t.exitPath(task),
 	}
+	if opts.StdinFile != "" {
+		args = append(args, "--property=StandardInput=file:"+opts.StdinFile)
+	}
+	for _, e := range opts.Env {
+		args = append(args, "--setenv="+e)
+	}
+	args = append(args, "--", "/bin/sh", "-c", exitWrapper, "sh", t.exitPath(task))
 	args = append(args, argv...)
 	run := t.Exec
 	if run == nil {
@@ -586,6 +617,10 @@ func taskKindName(kind string) string {
 		return "doall (применение списков)"
 	case TaskRestart:
 		return "restart (перезапуск antizapret)"
+	case TaskAZUpdate:
+		return "azupdate (обновление AntiZapret)"
+	case TaskAZRestore:
+		return "azrestore (восстановление из бэкапа)"
 	}
 	return kind
 }

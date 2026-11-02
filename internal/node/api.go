@@ -45,6 +45,7 @@ type API struct {
 	Tasks         *Tasks                     // фоновые задачи AntiZapret
 	Routing       *antizapret.Routing        // списки config/*.txt; nil — не настроены
 	Setup         *antizapret.SetupFile      // ключи setup; nil — не настроены
+	AZ            *AZUpdater                 // обновление AntiZapret; nil — не настроено
 	AZVersion     *antizapret.VersionService // версия AntiZapret по коммитам; nil — не настроена
 	Services      func(ctx context.Context) ([]sysinfo.Service, error)
 	WGShow        func(ctx context.Context, iface string) ([]antizapret.WGPeer, error)
@@ -89,6 +90,10 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/setup", a.getSetup)
 	mux.HandleFunc("PUT /v1/setup", a.putSetup)
 	mux.HandleFunc("GET /v1/antizapret/version", a.azVersion)
+	mux.HandleFunc("GET /v1/antizapret/update", a.azState)
+	mux.HandleFunc("GET /v1/antizapret/update/preflight", a.azPreflight)
+	mux.HandleFunc("POST /v1/antizapret/update", a.azUpdate)
+	mux.HandleFunc("POST /v1/antizapret/restore", a.azRestore)
 	return a.auth(mux)
 }
 

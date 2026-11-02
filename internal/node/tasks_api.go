@@ -16,6 +16,9 @@ var taskIDRe = regexp.MustCompile(`^[0-9a-f]{12}$`)
 // те же файлы. Вызывается под a.ops: задача profiles стартует тоже под ops,
 // поэтому гонки между проверкой и стартом нет.
 func (a *API) profilesBusy(w http.ResponseWriter) bool {
+	if a.azActive(w) {
+		return true
+	}
 	if a.Tasks == nil {
 		return false
 	}
@@ -70,6 +73,9 @@ func (a *API) rebuildProfiles(w http.ResponseWriter, r *http.Request) {
 func (a *API) startTask(w http.ResponseWriter, kind string, argv []string, withClientOps bool) {
 	if a.Tasks == nil {
 		writeErr(w, http.StatusServiceUnavailable, "фоновые задачи не настроены")
+		return
+	}
+	if a.azActive(w) {
 		return
 	}
 	if withClientOps {

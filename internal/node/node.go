@@ -87,7 +87,7 @@ func Run(ctx context.Context, cfg config.Config, version string, ensureHook func
 	}
 	go p.Run(ctx, time.Duration(cfg.Node.PollSeconds)*time.Second)
 	if cfg.Node.APIListen != "" {
-		stop, err := startAPI(ctx, cfg, version, tr, denials, log)
+		stop, err := startAPI(ctx, cfg, version, tr, denials, log, ensureHook)
 		if err != nil {
 			log.Error("API агента не запущен — панель узел не увидит, хук работает", "err", err)
 		} else {
@@ -116,7 +116,7 @@ func Run(ctx context.Context, cfg config.Config, version string, ensureHook func
 // startAPI запускает HTTP API для панели. Его сбой не трогает хук: лимиты
 // и блокировки работают и без API. При остановке службы systemd гасит и
 // дочерние процессы — client.sh, запущенный в эту секунду, оборвётся.
-func startAPI(ctx context.Context, cfg config.Config, version string, tr *Tracker, denials *Denials, log *slog.Logger) (func(), error) {
+func startAPI(ctx context.Context, cfg config.Config, version string, tr *Tracker, denials *Denials, log *slog.Logger, ensureHook func() (bool, error)) (func(), error) {
 	sec, err := secrets.Load(paths.SecretsFile())
 	if err != nil {
 		return nil, err
@@ -141,21 +141,26 @@ func startAPI(ctx context.Context, cfg config.Config, version string, tr *Tracke
 		ConfigDir: filepath.Join(n.AntiZapretDir, "config"),
 		Backups:   &antizapret.Backups{Dir: filepath.Join(paths.Backup(), "antizapret")},
 	}
-	// Пока идёт doall, parse.sh переписывает config/*.txt (sed -i) и может
-	// затереть правку; setup читают doall и restart.
-	routing.Busy = busyDuring(tasks, TaskDoall)
-	azVer := &antizapret.VersionService{
-		GitHub: &antizapret.GitHub{}, Dir: n.AntiZapretDir,
-		Record: antizapret.InstalledFile{Path: filepath.Join(paths.Data(), "antizapret.json")},
+	az := &AZUpdater{
+		Tasks: tasks, Dir: n.AntiZapretDir, RootDir: filepath.Dir(n.AntiZapretDir),
+		DataDir: paths.Data(), BackupDir: paths.Backup(), Record: antizapret.InstalledFile{Path: filepath.Join(paths.Data(), "antizapret.json")},
+		Inventory:  antizapret.Inventory{PKI: n.EasyRSAPKI, WireGuardDir: n.WireGuardDir},
+		EnsureHook: ensureHook, Log: log, Now: time.Now,
 	}
+	az.GitHub = &antizapret.GitHub{}
+	az.Version = &antizapret.VersionService{GitHub: az.GitHub, Dir: n.AntiZapretDir, Record: az.Record}
+	// Пока идёт doall, parse.sh переписывает config/*.txt (sed -i) и может
+	// затереть правку; setup читают doall и restart. Во время обновления
+	// AntiZapret не правится ничего.
+	routing.Busy = anyBusy(busyDuring(tasks, TaskDoall), azBusy(az))
 	api := &API{
-		Tasks:     tasks,
-		Routing:   routing,
-		AZVersion: azVer,
+		Tasks:   tasks,
+		Routing: routing,
+		AZ:      az, AZVersion: az.Version,
 		Setup: &antizapret.SetupFile{
 			Path:    filepath.Join(n.AntiZapretDir, "setup"),
 			Backups: routing.Backups,
-			Busy:    busyDuring(tasks, TaskDoall, TaskRestart),
+			Busy:    anyBusy(busyDuring(tasks, TaskDoall, TaskRestart), azBusy(az)),
 		},
 		Token: token, Version: version, Tracker: tr, LimitsPath: paths.LimitsFile(),
 		Inventory:     antizapret.Inventory{PKI: n.EasyRSAPKI, WireGuardDir: n.WireGuardDir},
@@ -180,6 +185,12 @@ func startAPI(ctx context.Context, cfg config.Config, version string, tr *Tracke
 		}
 		return sysinfo.Services(ctx, sysinfo.ServiceUnits(kresd, api.WireGuardEnabled()))
 	}
+	az.Services = api.Services
+	// Обновление, начатое до перезагрузки, получает итог здесь.
+	if err := az.Load(); err != nil {
+		log.Error("azupdate.json не прочитан", "err", err)
+	}
+	az.Resume()
 	ln, err := net.Listen("tcp", n.APIListen)
 	if err != nil {
 		return nil, err
