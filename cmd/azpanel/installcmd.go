@@ -15,6 +15,8 @@ func installOptions(args []string) (install.Options, error) {
 		switch a {
 		case "--yes", "-y":
 			o.Yes = true
+		case "--panel":
+			o.Panel = true
 		case "--purge":
 			o.Purge = true
 		default:

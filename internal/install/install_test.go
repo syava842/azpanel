@@ -173,3 +173,72 @@ func TestUninstall(t *testing.T) {
 		t.Fatal("--purge не удалил корень")
 	}
 }
+
+func TestPanelUnit(t *testing.T) {
+	u := PanelUnit("/x")
+	for _, s := range []string{"ExecStart=/x panel", "ProtectSystem=strict", "ProtectHome=true", "ReadWritePaths=/opt/azpanel", "After=network-online.target azpanel-node.service", "Description=azpanel: веб-панель", "PrivateTmp=true", "NoNewPrivileges=true"} {
+		if !strings.Contains(u, s) {
+			t.Errorf("в юните панели нет %q:\n%s", s, u)
+		}
+	}
+	if strings.Contains(u, "RuntimeDirectory") {
+		t.Errorf("у панели не должно быть RuntimeDirectory:\n%s", u)
+	}
+}
+
+func TestInstallNodeWithPanel(t *testing.T) {
+	o, calls := setup(t)
+	o.Panel = true
+	out := &bytes.Buffer{}
+	o.Out = out
+	if err := InstallNode(o); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(o.UnitDir, "azpanel-panel.service")); !strings.Contains(string(b), "ExecStart="+paths.Binary()+" panel") {
+		t.Fatalf("юнит панели:\n%s", b)
+	}
+	if _, err := os.Stat(filepath.Join(o.UnitDir, "azpanel-node.service")); err != nil {
+		t.Fatal("юнита агента нет")
+	}
+	want := []string{"systemctl daemon-reload", "systemctl enable azpanel-node", "systemctl restart azpanel-node", "systemctl enable azpanel-panel", "systemctl restart azpanel-panel"}
+	if strings.Join(*calls, "|") != strings.Join(want, "|") {
+		t.Fatalf("вызовы: %v", *calls)
+	}
+	if !strings.Contains(out.String(), "azpanel panel passwd") || !strings.Contains(out.String(), "ssh -L") {
+		t.Fatalf("нет подсказки про пароль и туннель:\n%s", out)
+	}
+}
+
+func TestInstallNodeWithoutPanel(t *testing.T) {
+	o, calls := setup(t)
+	if err := InstallNode(o); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(o.UnitDir, "azpanel-panel.service")); !os.IsNotExist(err) {
+		t.Fatal("юнит панели создан без --panel")
+	}
+	for _, c := range *calls {
+		if strings.Contains(c, "azpanel-panel") {
+			t.Fatalf("вызов про панель без --panel: %s", c)
+		}
+	}
+}
+
+func TestUninstallRemovesPanelUnit(t *testing.T) {
+	o, calls := setup(t)
+	o.Panel = true
+	if err := InstallNode(o); err != nil {
+		t.Fatal(err)
+	}
+	*calls = nil
+	o.Panel = false
+	if err := Uninstall(o); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(o.UnitDir, "azpanel-panel.service")); !os.IsNotExist(err) {
+		t.Fatal("юнит панели остался")
+	}
+	if (*calls)[0] != "systemctl disable --now azpanel-panel" || (*calls)[1] != "systemctl disable --now azpanel-node" {
+		t.Fatalf("порядок остановки: %v", *calls)
+	}
+}

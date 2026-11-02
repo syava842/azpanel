@@ -21,11 +21,15 @@ import (
 	"github.com/syava842/azpanel/internal/secrets"
 )
 
-const nodeUnitName = "azpanel-node.service"
+const (
+	nodeUnitName  = "azpanel-node.service"
+	panelUnitName = "azpanel-panel.service"
+)
 
 type Options struct {
 	Yes           bool
 	Purge         bool
+	Panel         bool // поставить и службу веб-панели (--panel)
 	In            io.Reader
 	Out           io.Writer
 	Run           func(name string, args ...string) error
@@ -81,6 +85,29 @@ WantedBy=multi-user.target
 `
 }
 
+// PanelUnit — юнит веб-панели. Панель пишет только в /opt/azpanel (журнал),
+// с агентом говорит по HTTP, поэтому остальные пути ей закрыты.
+func PanelUnit(bin string) string {
+	return `[Unit]
+Description=azpanel: веб-панель
+After=network-online.target azpanel-node.service
+Wants=network-online.target
+
+[Service]
+ExecStart=` + bin + ` panel
+Restart=on-failure
+RestartSec=3
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/azpanel
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+`
+}
+
 type dirMode struct {
 	path string
 	mode os.FileMode
@@ -101,14 +128,19 @@ func InstallNode(o Options) error {
 		return fmt.Errorf("нет каталога скриптов OpenVPN %s", o.ScriptsDir)
 	}
 	unit := filepath.Join(o.UnitDir, nodeUnitName)
+	panelLine := ""
+	if o.Panel {
+		panelLine = fmt.Sprintf("  %s — служба azpanel-panel (веб-панель на %s из конфига; включится и перезапустится)\n",
+			filepath.Join(o.UnitDir, panelUnitName), panelListen())
+	}
 	fmt.Fprintf(o.Out, `Будет установлено:
   %s — каталоги bin, etc, log, data, backup
   %s — служба azpanel-node (включится и перезапустится)
   %s — токен API агента (если его ещё нет); API — только с этого сервера
-  хук лимита в %s: custom-client-connect.sh, custom-client-disconnect.sh
+%s  хук лимита в %s: custom-client-connect.sh, custom-client-disconnect.sh
     (перед первой правкой — копии .bak-azpanel)
 Лимитов после установки нет: все клиенты подключаются как раньше.
-`, paths.Root(), unit, paths.SecretsFile(), o.ScriptsDir)
+`, paths.Root(), unit, paths.SecretsFile(), panelLine, o.ScriptsDir)
 	if !o.Yes && !confirm(o.In, o.Out, "Продолжить? [y/N]: ") {
 		return errors.New("установка отменена")
 	}
@@ -134,10 +166,19 @@ func InstallNode(o Options) error {
 	if err := fsutil.WriteFileAtomic(unit, []byte(NodeUnit(paths.Binary())), 0o644); err != nil {
 		return err
 	}
+	if o.Panel {
+		if err := fsutil.WriteFileAtomic(filepath.Join(o.UnitDir, panelUnitName), []byte(PanelUnit(paths.Binary())), 0o644); err != nil {
+			return err
+		}
+	}
 	if _, err := (antizapret.HookFiles{ScriptsDir: o.ScriptsDir, Binary: paths.Binary()}).Ensure(); err != nil {
 		return fmt.Errorf("хук: %w", err)
 	}
-	for _, args := range [][]string{{"daemon-reload"}, {"enable", "azpanel-node"}, {"restart", "azpanel-node"}} {
+	cmds := [][]string{{"daemon-reload"}, {"enable", "azpanel-node"}, {"restart", "azpanel-node"}}
+	if o.Panel {
+		cmds = append(cmds, []string{"enable", "azpanel-panel"})
+	}
+	for _, args := range cmds {
 		if err := o.Run("systemctl", args...); err != nil {
 			return err
 		}
@@ -145,14 +186,33 @@ func InstallNode(o Options) error {
 	if err := o.Wait(); err != nil {
 		return fmt.Errorf("агент не ответил: %w; журнал — %s", err, filepath.Join(paths.Log(), "node.log"))
 	}
+	if o.Panel {
+		// Панель стартует после агента: ей нужен его API.
+		if err := o.Run("systemctl", "restart", "azpanel-panel"); err != nil {
+			return err
+		}
+	}
 	fmt.Fprintln(o.Out, "Готово. Лимит: azpanel limit set <клиент> <число>; состояние: azpanel sessions")
+	if o.Panel {
+		fmt.Fprintf(o.Out, `Панель: задайте пароль администратора и перезапустите её:
+  azpanel panel passwd
+  systemctl restart azpanel-panel
+Открыть — SSH-туннелем с вашего компьютера:
+  ssh -L 8080:%s root@<сервер>
+  затем http://127.0.0.1:8080
+`, panelListen())
+	}
 	return nil
 }
 
 // Uninstall: сначала служба (иначе агент вернёт хук), потом хук и юнит.
 func Uninstall(o Options) error {
 	unit := filepath.Join(o.UnitDir, nodeUnitName)
+	panelUnit := filepath.Join(o.UnitDir, panelUnitName)
 	what := "служба azpanel-node, хук лимита, " + unit
+	if _, err := os.Stat(panelUnit); err == nil {
+		what += ", служба azpanel-panel, " + panelUnit
+	}
 	if o.Purge {
 		// Корень можно переопределить переменной: не дать ей превратить
 		// --purge в удаление чужого каталога.
@@ -165,6 +225,11 @@ func Uninstall(o Options) error {
 	if !o.Yes && !confirm(o.In, o.Out, "Продолжить? [y/N]: ") {
 		return errors.New("удаление отменено")
 	}
+	if _, err := os.Stat(panelUnit); err == nil {
+		if err := o.Run("systemctl", "disable", "--now", "azpanel-panel"); err != nil {
+			fmt.Fprintln(o.Out, "служба панели не остановлена:", err)
+		}
+	}
 	if err := o.Run("systemctl", "disable", "--now", "azpanel-node"); err != nil {
 		fmt.Fprintln(o.Out, "служба не остановлена (возможно, её нет):", err)
 	}
@@ -172,6 +237,9 @@ func Uninstall(o Options) error {
 		return fmt.Errorf("хук: %w", err)
 	}
 	if err := os.Remove(unit); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if err := os.Remove(panelUnit); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
 	if err := o.Run("systemctl", "daemon-reload"); err != nil {
@@ -182,6 +250,14 @@ func Uninstall(o Options) error {
 	}
 	fmt.Fprintf(o.Out, "Настройки, лимиты и журналы оставлены в %s\n", paths.Root())
 	return nil
+}
+
+// panelListen — адрес панели из установленного конфига, иначе умолчание.
+func panelListen() string {
+	if cfg, err := config.Load(paths.ConfigFile()); err == nil {
+		return cfg.Panel.Listen
+	}
+	return config.Default().Panel.Listen
 }
 
 func copyBinary(src, dst string) error {
