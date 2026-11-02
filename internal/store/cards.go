@@ -1,0 +1,94 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+)
+
+// Значения Card.AutoBlock и Card.TrafficPeriod.
+const (
+	AutoBlockExpired = "expired"
+	AutoBlockTraffic = "traffic"
+
+	PeriodDay   = "day"
+	PeriodWeek  = "week"
+	PeriodMonth = "month"
+)
+
+// Card — карточка клиента. AccessUntil nil — без срока; TrafficLimit 0 — без
+// лимита. AutoBlock непуст, когда блокировку поставила панель.
+type Card struct {
+	Node          int64
+	Name          string
+	Note          string
+	AccessUntil   *int64
+	TrafficLimit  int64
+	TrafficPeriod string
+	AutoBlock     string
+}
+
+func defaultCard(node int64, name string) Card {
+	return Card{Node: node, Name: name, TrafficPeriod: PeriodMonth}
+}
+
+const cardCols = `node_id, name, note, access_until, traffic_limit, traffic_period, auto_block`
+
+func scanCard(sc interface{ Scan(...any) error }) (Card, error) {
+	var c Card
+	var until sql.NullInt64
+	if err := sc.Scan(&c.Node, &c.Name, &c.Note, &until, &c.TrafficLimit, &c.TrafficPeriod, &c.AutoBlock); err != nil {
+		return Card{}, err
+	}
+	if until.Valid {
+		v := until.Int64
+		c.AccessUntil = &v
+	}
+	return c, nil
+}
+
+// Card — карточка клиента; нет строки — карточка по умолчанию, не ошибка.
+func (s *Store) Card(ctx context.Context, node int64, name string) (Card, error) {
+	c, err := scanCard(s.db.QueryRowContext(ctx, `SELECT `+cardCols+` FROM client_cards WHERE node_id = ? AND name = ?`, node, name))
+	if errors.Is(err, sql.ErrNoRows) {
+		return defaultCard(node, name), nil
+	}
+	return c, err
+}
+
+// SaveCard создаёт или заменяет карточку.
+func (s *Store) SaveCard(ctx context.Context, c Card) error {
+	if c.TrafficPeriod == "" {
+		c.TrafficPeriod = PeriodMonth
+	}
+	var until any
+	if c.AccessUntil != nil {
+		until = *c.AccessUntil
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT OR REPLACE INTO client_cards (`+cardCols+`) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		c.Node, c.Name, c.Note, until, c.TrafficLimit, c.TrafficPeriod, c.AutoBlock)
+	return err
+}
+
+// Cards — все карточки узла по имени клиента.
+func (s *Store) Cards(ctx context.Context, node int64) (map[string]Card, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+cardCols+` FROM client_cards WHERE node_id = ?`, node)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]Card{}
+	for rows.Next() {
+		c, err := scanCard(rows)
+		if err != nil {
+			return nil, err
+		}
+		out[c.Name] = c
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) DeleteCard(ctx context.Context, node int64, name string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM client_cards WHERE node_id = ? AND name = ?`, node, name)
+	return err
+}
