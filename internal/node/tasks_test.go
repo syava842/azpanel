@@ -2,7 +2,9 @@ package node
 
 import (
 	"context"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -94,7 +96,9 @@ func TestTasksExitCodeAndSystemdRunArgv(t *testing.T) {
 	want := []string{
 		"systemd-run", "--unit=azpanel-task-" + task.ID, "--collect", "--quiet", "--wait",
 		"--property=StandardOutput=append:" + task.Log, "--property=StandardError=append:" + task.Log,
-		"--working-directory=/root/antizapret", "--", "/root/antizapret/doall.sh", "x",
+		"--property=RuntimeMaxSec=1800",
+		"--working-directory=/root/antizapret", "--", "/bin/sh", "-c", exitWrapper, "sh", task.Log + ".exit",
+		"/root/antizapret/doall.sh", "x",
 	}
 	if strings.Join(f.calls[0], "\n") != strings.Join(want, "\n") {
 		t.Fatalf("argv:\n%v\nожидалось:\n%v", f.calls[0], want)
@@ -458,5 +462,131 @@ func TestAPITasksRequireToken(t *testing.T) {
 	}
 	if _, err := bad.ApplyRouting(context.Background()); status(err) != 401 {
 		t.Fatalf("%v", err)
+	}
+}
+
+// --- предел времени и код выхода в файле ---
+
+func TestTasksRuntimeMaxSecByKind(t *testing.T) {
+	for kind, want := range map[string]string{
+		TaskDoall: "1800", TaskRestart: "300", TaskProfiles: "1800", "novyj-vid": "1800",
+	} {
+		f := newFakeExec()
+		tk := newTasks(t, f)
+		task, err := tk.Start(kind, []string{"x"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.done()
+		waitFinished(t, tk, task.ID)
+		if !strings.Contains(strings.Join(f.calls[0], " "), "--property=RuntimeMaxSec="+want+" ") {
+			t.Fatalf("%s: ожидался RuntimeMaxSec=%s, получено %v", kind, want, f.calls[0])
+		}
+	}
+	// Настраиваемая таблица.
+	f := newFakeExec()
+	tk := newTasks(t, f)
+	tk.Timeouts = map[string]time.Duration{"update": 7200 * time.Second}
+	task, _ := tk.Start("update", []string{"x"})
+	f.done()
+	waitFinished(t, tk, task.ID)
+	if !strings.Contains(strings.Join(f.calls[0], " "), "RuntimeMaxSec=7200 ") {
+		t.Fatalf("%v", f.calls[0])
+	}
+}
+
+func TestTasksExitFileOverridesSystemdRunCode(t *testing.T) {
+	f := newFakeExec()
+	f.code = 1 // systemd-run мог сообщить другое
+	tk := newTasks(t, f)
+	task, _ := tk.Start(TaskDoall, []string{"x"})
+	os.MkdirAll(tk.LogDir, 0o750)
+	os.WriteFile(task.Log+".exit", []byte("5\n"), 0o640)
+	f.done()
+	got := waitFinished(t, tk, task.ID)
+	if got.ExitCode == nil || *got.ExitCode != 5 {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestTasksOrphanExitCodeFromFile(t *testing.T) {
+	root := t.TempDir()
+	state := filepath.Join(root, "tasks.json")
+	os.WriteFile(state, []byte(`[{"id":"cccccccccccc","kind":"doall","started":"2026-11-02T10:00:00Z","log":"/x/c.log"}]`), 0o640)
+	var mu sync.Mutex
+	active := true
+	tk := &Tasks{
+		LogDir: root, StatePath: state, PollEvery: 5 * time.Millisecond,
+		Active: func(context.Context, string) bool { mu.Lock(); defer mu.Unlock(); return active },
+	}
+	if err := tk.Load(); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(root, "c.log.exit"), []byte("0\n"), 0o640)
+	mu.Lock()
+	active = false
+	mu.Unlock()
+	got := waitFinished(t, tk, "cccccccccccc")
+	if got.Interrupted || got.ExitCode == nil || *got.ExitCode != 0 {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestTasksLoadFinishedWhileAgentDown(t *testing.T) {
+	root := t.TempDir()
+	state := filepath.Join(root, "tasks.json")
+	os.WriteFile(state, []byte(`[{"id":"dddddddddddd","kind":"restart","started":"2026-11-02T10:00:00Z","log":"/x/d.log"}]`), 0o640)
+	os.WriteFile(filepath.Join(root, "d.log.exit"), []byte("2\n"), 0o640)
+	tk := &Tasks{LogDir: root, StatePath: state, Active: func(context.Context, string) bool { return false }}
+	if err := tk.Load(); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := tk.Get("dddddddddddd")
+	if got.Finished == nil || got.Interrupted || got.ExitCode == nil || *got.ExitCode != 2 {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestTasksRotateRemovesExitFiles(t *testing.T) {
+	root := t.TempDir()
+	tk := &Tasks{LogDir: root, Now: time.Now}
+	old := filepath.Join(root, "2026-09-01-doall-aaaaaaaaaaaa.log.exit")
+	os.WriteFile(old, []byte("0\n"), 0o640)
+	ago := time.Now().Add(-31 * 24 * time.Hour)
+	os.Chtimes(old, ago, ago)
+	tk.Rotate(taskLogMaxAge)
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Fatal("старый файл кода выхода должен быть удалён")
+	}
+}
+
+// Обёртка на настоящем sh: код выхода пишется в файл, аргументы с кавычками и
+// пробелами доходят как есть и ничего не исполняют.
+func TestExitWrapperRealShell(t *testing.T) {
+	shell, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh не найден")
+	}
+	dir := t.TempDir()
+	exitFile := filepath.Join(dir, "t.log.exit")
+	marker := filepath.Join(dir, "pwned")
+	evil := "a b'; touch " + marker + "; '"
+	out, err := exec.Command(shell, "-c", exitWrapper, "sh", exitFile, "sh", "-c", `echo "$1"; exit 7`, "x", evil).CombinedOutput()
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 7 {
+		t.Fatalf("ожидался код 7: %v %s", err, out)
+	}
+	if strings.TrimSpace(string(out)) != evil {
+		t.Fatalf("аргумент искажён: %q", out)
+	}
+	data, _ := os.ReadFile(exitFile)
+	if strings.TrimSpace(string(data)) != "7" {
+		t.Fatalf("файл кода: %q", data)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("инъекция сработала")
+	}
+	if _, err := os.Stat(exitFile + ".tmp"); err == nil {
+		t.Fatal("временный файл остался")
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +36,23 @@ const (
 	TaskRestart  = "restart"
 	TaskProfiles = "profiles"
 )
+
+// DefaultTaskTimeouts — предел времени задачи по виду (RuntimeMaxSec юнита).
+// Новый вид (этапы 5, 10, 11) добавляется сюда или в Tasks.Timeouts.
+var DefaultTaskTimeouts = map[string]time.Duration{
+	TaskDoall:    1800 * time.Second,
+	TaskRestart:  300 * time.Second,
+	TaskProfiles: 1800 * time.Second,
+}
+
+// fallbackTaskTimeout — предел для вида, которого нет в таблице: задача без
+// предела держала бы очередь, пока её не остановят вручную.
+const fallbackTaskTimeout = 1800 * time.Second
+
+// exitWrapper запускает команду и пишет её код выхода в файл. Всё передаётся
+// позиционно ($1 — файл, дальше команда), в текст скрипта ничего не вставляется.
+// Запись через временный файл и mv: читатель не увидит половину числа.
+const exitWrapper = `f=$1; shift; "$@"; c=$?; echo "$c" > "$f.tmp" && mv -f "$f.tmp" "$f"; exit "$c"`
 
 // Task — фоновая задача AntiZapret; тип общий с клиентом API.
 type Task = nodeapi.Task
@@ -66,6 +84,8 @@ type Tasks struct {
 	Active func(ctx context.Context, unit string) bool
 	// PollEvery — как часто проверять юнит задачи, оставшейся с прошлого запуска агента.
 	PollEvery time.Duration
+	// Timeouts — предел времени по виду задачи; nil — DefaultTaskTimeouts.
+	Timeouts map[string]time.Duration
 
 	mu      sync.Mutex
 	tasks   []Task // от старых к новым
@@ -118,6 +138,13 @@ func (t *Tasks) Load() error {
 			continue
 		}
 		changed = true
+		// Задача могла кончиться, пока агент был остановлен: код — в файле.
+		if code, ok := t.readExit(*tk); ok {
+			now := t.now()
+			tk.Finished = &now
+			tk.ExitCode = &code
+			continue
+		}
 		if t.running == "" && t.isActive(Unit(tk.ID)) {
 			t.running = tk.ID
 			go t.waitOrphan(tk.ID)
@@ -142,8 +169,40 @@ func (t *Tasks) isActive(unit string) bool {
 	return exec.CommandContext(ctx, "systemctl", "is-active", "--quiet", unit).Run() == nil
 }
 
+// exitPath — файл с кодом выхода задачи рядом с её журналом. Берётся из
+// своего каталога по имени журнала, а не по пути из tasks.json.
+func (t *Tasks) exitPath(task Task) string {
+	return filepath.Join(t.LogDir, filepath.Base(task.Log)+".exit")
+}
+
+// readExit читает код выхода из файла обёртки. Нет файла или в нём не число —
+// кода нет.
+func (t *Tasks) readExit(task Task) (int, bool) {
+	data, err := os.ReadFile(t.exitPath(task))
+	if err != nil {
+		return 0, false
+	}
+	code, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return 0, false
+	}
+	return code, true
+}
+
+func (t *Tasks) timeout(kind string) time.Duration {
+	table := t.Timeouts
+	if table == nil {
+		table = DefaultTaskTimeouts
+	}
+	if d, ok := table[kind]; ok && d > 0 {
+		return d
+	}
+	return fallbackTaskTimeout
+}
+
 // waitOrphan ждёт юнит задачи, начатой до перезапуска агента. Код выхода
-// тогда неизвестен: --collect уже убрал юнит вместе с результатом.
+// берётся из файла обёртки; если файла нет (юнит убит по пределу времени или
+// сломан), код неизвестен — --collect уже убрал юнит вместе с результатом.
 func (t *Tasks) waitOrphan(id string) {
 	every := t.PollEvery
 	if every <= 0 {
@@ -151,6 +210,12 @@ func (t *Tasks) waitOrphan(id string) {
 	}
 	for t.isActive(Unit(id)) {
 		time.Sleep(every)
+	}
+	if task, ok := t.Get(id); ok {
+		if code, ok := t.readExit(task); ok {
+			t.finish(id, &code, false)
+			return
+		}
 	}
 	t.finish(id, nil, true)
 }
@@ -204,8 +269,9 @@ func (t *Tasks) run(task Task, argv []string) {
 		"--unit=" + Unit(task.ID), "--collect", "--quiet", "--wait",
 		"--property=StandardOutput=append:" + task.Log,
 		"--property=StandardError=append:" + task.Log,
+		"--property=RuntimeMaxSec=" + strconv.Itoa(int(t.timeout(task.Kind)/time.Second)),
 		"--working-directory=" + t.Dir,
-		"--",
+		"--", "/bin/sh", "-c", exitWrapper, "sh", t.exitPath(task),
 	}
 	args = append(args, argv...)
 	run := t.Exec
@@ -220,6 +286,8 @@ func (t *Tasks) run(task Task, argv []string) {
 	if err != nil {
 		appendLog(task.Log, "systemd-run не запущен: "+err.Error()+"\n")
 		code = -1
+	} else if c, ok := t.readExit(task); ok {
+		code = c // файл надёжнее: код самой команды, а не systemd-run
 	}
 	t.logger().Info("задача завершена", "id", task.ID, "kind", task.Kind, "exit_code", code)
 	t.finish(task.ID, &code, false)
@@ -341,10 +409,10 @@ func (t *Tasks) Rotate(maxAge time.Duration) {
 	cur, busy := t.Running()
 	cutoff := t.now().Add(-maxAge)
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".log") {
+		if e.IsDir() || !(strings.HasSuffix(e.Name(), ".log") || strings.HasSuffix(e.Name(), ".log.exit")) {
 			continue
 		}
-		if busy && e.Name() == filepath.Base(cur.Log) {
+		if busy && (e.Name() == filepath.Base(cur.Log) || e.Name() == filepath.Base(cur.Log)+".exit") {
 			continue
 		}
 		info, err := e.Info()
