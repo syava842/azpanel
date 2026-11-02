@@ -160,6 +160,7 @@ func usage() {
   azpanel install                      мастер установки (вопросы 1-12, Enter — умолчание)
   azpanel install --non-interactive    без вопросов: ответы в AZPANEL_MODE, AZPANEL_ACCESS, AZPANEL_DOMAIN,
                                        AZPANEL_TLS, AZPANEL_ADMIN, ... или флагами --mode, --access, ...
+                                       пароль — только в AZPANEL_ADMIN_PASSWORD: флаг --admin-password виден в ps и истории shell
   azpanel install --yes [--panel]      по-старому: агент узла (--panel — и веб-панель на 127.0.0.1)
   azpanel uninstall [--yes] [--purge] [--skip-backup]
                                        удалить (бэкап AntiZapret, юниты, хук, nginx; --purge — и /opt/azpanel)

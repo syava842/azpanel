@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -72,5 +74,46 @@ func TestPanelCreateAdmin(t *testing.T) {
 	}
 	if err := panelCreateAdmin("admin", "GoodPass12345", true); !errors.Is(err, install.ErrAdminExists) {
 		t.Fatalf("повтор: %v", err)
+	}
+}
+
+// Вопрос «есть ли администратор» задаётся до подтверждения: база старой версии
+// от него меняться не должна (миграции — только после «да»).
+func TestPanelAdminExistsDoesNotMigrate(t *testing.T) {
+	t.Setenv("AZPANEL_ROOT", filepath.Join(t.TempDir(), "azpanel"))
+	if err := os.MkdirAll(filepath.Dir(panelDBPath()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := panelCreateAdmin("admin", "GoodPass12345", true); err != nil {
+		t.Fatal(err)
+	}
+	// Делаем базу «старой»: версия схемы ниже текущей.
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(panelDBPath()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE meta SET value = '1' WHERE key = 'schema_version'`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	before, err := os.ReadFile(panelDBPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !panelAdminExists("admin") || panelAdminExists("nobody") {
+		t.Fatal("проверка логина неверна")
+	}
+	after, _ := os.ReadFile(panelDBPath())
+	if !bytes.Equal(before, after) {
+		t.Fatal("файл базы изменился от проверки логина")
+	}
+	db, err = sql.Open("sqlite", "file:"+filepath.ToSlash(panelDBPath()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var v string
+	if err := db.QueryRow(`SELECT value FROM meta WHERE key = 'schema_version'`).Scan(&v); err != nil || v != "1" {
+		t.Fatalf("версия схемы %q: %v", v, err)
 	}
 }

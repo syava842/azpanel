@@ -174,11 +174,15 @@ func (w *Wizard) Run() error {
 			return errors.New("установка отменена, ничего не изменено")
 		}
 	}
+	var done []string
 	for _, s := range p.steps {
 		w.printf("→ %s\n", s.name)
 		if err := s.do(); err != nil {
+			w.printf("\nУстановка прервана на шаге «%s». Уже выполнено: %s.\n", s.name, doneList(done))
+			w.printf("Исправьте причину и повторите azpanel install (шаги идемпотентны) или уберите сделанное: azpanel uninstall.\n")
 			return fmt.Errorf("%s: %w", s.name, err)
 		}
+		done = append(done, s.name)
 	}
 	w.report(a, p)
 	return nil
@@ -575,6 +579,7 @@ func (w *Wizard) askAdmin(a *Answers, p *plan) error {
 				return err
 			}
 			a.AdminPassword = pw
+			p.generated = true
 			w.printf("  Пароль администратора: %s\n  Запишите его: он будет показан ещё раз в итоге и нигде не сохраняется.\n", pw)
 			break
 		}
@@ -713,7 +718,9 @@ func (w *Wizard) plan(a *Answers, servers []NginxServer) (*plan, error) {
 		return nil, fmt.Errorf("текущий конфиг: %w", err)
 	}
 	p.listen = cfg.Panel.Listen
-	cfg.Panel.BasePath, cfg.Panel.PublicURL = "", ""
+	if a.Access == AccessPath || a.Access == AccessPort {
+		cfg.Panel.BasePath, cfg.Panel.PublicURL = "", ""
+	}
 	host := a.Domain
 	if host == "" {
 		host = a.Address
@@ -751,8 +758,8 @@ func (w *Wizard) plan(a *Answers, servers []NginxServer) (*plan, error) {
 		cfg.Panel.PublicURL = "https://" + a.Domain
 		p.url = "https://" + a.Domain + DefaultBasePath
 		p.lines = append(p.lines,
-			fmt.Sprintf("nginx: в %s (блок %s) одна строка include; фрагмент %s; копия %s.bak-ГГГГММДД; после nginx -t — reload",
-				p.server.File, strings.Join(p.server.ServerName, " "), SnippetPath, filepath.Base(p.server.File)))
+			fmt.Sprintf("nginx: в %s (блок %s) одна строка include; фрагмент %s; копия файла в %s; после nginx -t — reload",
+				p.server.File, strings.Join(p.server.ServerName, " "), SnippetPath, w.Nginx.backupDir()))
 	case AccessPort:
 		if a.TLS == "" {
 			return nil, errors.New("не выбран тип HTTPS")
@@ -770,7 +777,9 @@ func (w *Wizard) plan(a *Answers, servers []NginxServer) (*plan, error) {
 		}
 	default:
 		a.Access = AccessLocal
-		p.url = "http://" + cfg.Panel.Listen + "/"
+		// public_url и base_path, заданные в «Настройках», повторная
+		// установка в режиме local не стирает.
+		p.url = "http://" + cfg.Panel.Listen + normalizeBase(cfg.Panel.BasePath)
 		p.lines = append(p.lines, "панель слушает только "+cfg.Panel.Listen+" (доступ через SSH-туннель), nginx не меняется")
 	}
 
@@ -968,8 +977,10 @@ func (w *Wizard) summary(a Answers, p *plan) {
 		w.printf("  администратор %s уже есть: не меняется\n", a.Admin)
 	default:
 		w.printf("  администратор %s (смена пароля при первом входе: %s)\n", a.Admin, yn(a.MustChange))
-		if a.AdminPassword != "" {
-			w.printf("  пароль администратора: %s\n", a.AdminPassword)
+		// Свой пароль не печатается нигде; созданный показан на шаге
+		// вопросов (интерактивно) или здесь, и ещё раз в конце.
+		if p.generated && !w.Interactive {
+			w.printf("  пароль администратора (создан): %s\n", a.AdminPassword)
 		}
 	}
 	if a.Telegram {
@@ -980,6 +991,13 @@ func (w *Wizard) summary(a Answers, p *plan) {
 		w.printf("  правило iptables для TCP %d\n", a.Port)
 	}
 	w.printf("  адрес панели после установки: %s\n\n", p.url)
+}
+
+func doneList(done []string) string {
+	if len(done) == 0 {
+		return "ничего"
+	}
+	return strings.Join(done, "; ")
 }
 
 func (w *Wizard) unitDirNote() string { return "/etc/systemd/system" }
@@ -995,7 +1013,7 @@ func (w *Wizard) report(a Answers, p *plan) {
 	w.printf("\nГотово. Панель: %s\n", p.url)
 	if !p.adminExists {
 		w.printf("Администратор: %s", a.Admin)
-		if a.AdminPassword != "" {
+		if p.generated {
 			w.printf(", пароль: %s", a.AdminPassword)
 		}
 		w.printf("\n")

@@ -164,6 +164,18 @@ func atoiRange(v string, lo, hi int) (int, error) {
 	return n, nil
 }
 
+// checkNginxPath: путь идёт в директиву nginx и в install.env, поэтому ни
+// пробелов, ни знаков, которые закончат директиву или откроют блок, ни кавычек.
+func checkNginxPath(v string) error {
+	if !strings.HasPrefix(v, "/") {
+		return fmt.Errorf("%q: нужен абсолютный путь", v)
+	}
+	if strings.ContainsAny(v, " \t\r\n;{}\"'`$#\\") {
+		return fmt.Errorf("%q: в пути не должно быть пробелов и знаков ; { } кавычек $ # \\", v)
+	}
+	return nil
+}
+
 func (a *Answers) set(key, v string) (err error) {
 	switch key {
 	case KeyMode:
@@ -187,10 +199,15 @@ func (a *Answers) set(key, v string) (err error) {
 		a.Port, err = atoiRange(v, 1, 65535)
 	case KeyTLS:
 		a.TLS, err = oneOf(v, TLSExisting, TLSLetsEncrypt, TLSOwn, TLSSelfSigned)
-	case KeyCert:
-		a.CertPath = v
-	case KeyKey:
-		a.KeyPath = v
+	case KeyCert, KeyKey:
+		if err := checkNginxPath(v); err != nil {
+			return err
+		}
+		if key == KeyCert {
+			a.CertPath = v
+		} else {
+			a.KeyPath = v
+		}
 	case KeyEmail:
 		if !strings.Contains(v, "@") || strings.ContainsAny(v, " \t\r\n") {
 			return fmt.Errorf("%q: неверный адрес почты", v)

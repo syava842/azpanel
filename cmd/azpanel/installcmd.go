@@ -116,11 +116,11 @@ func runInstall(args []string) error {
 }
 
 // panelAdminExists: есть ли логин в базе панели (нет базы — нет логина).
+// База открывается только на чтение, без миграций: вопрос задаётся до
+// подтверждения, и ответ «n» ничего не должен менять (иначе установленная
+// старая панель откажется стартовать на базе новой версии).
 func panelAdminExists(login string) bool {
-	if _, err := os.Stat(panelDBPath()); err != nil {
-		return false
-	}
-	st, err := store.Open(panelDBPath())
+	st, err := store.OpenReadOnly(panelDBPath())
 	if err != nil {
 		return false
 	}

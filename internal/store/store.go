@@ -47,6 +47,21 @@ func Open(path string) (*Store, error) {
 	return s, nil
 }
 
+// OpenReadOnly открывает существующую базу только на чтение: без создания
+// файла, без прав, без WAL-прагмы и без миграций. Годится для проверок до
+// подтверждения (мастер установки): база более старой версии остаётся как была.
+func OpenReadOnly(path string) (*Store, error) {
+	if _, err := os.Stat(path); err != nil {
+		return nil, fmt.Errorf("файл базы: %w", err)
+	}
+	dsn := "file:" + filepath.ToSlash(path) + "?mode=ro&_pragma=busy_timeout(5000)"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	return &Store{db: db}, nil
+}
+
 func (s *Store) Close() error { return s.db.Close() }
 
 // tx выполняет f в транзакции; ошибка f откатывает её.

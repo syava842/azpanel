@@ -504,3 +504,89 @@ func TestWizardInteractiveDefaultsToFoundNginx(t *testing.T) {
 		t.Fatal("include не вставлен")
 	}
 }
+
+// Свой пароль не печатается нигде (I6): ни в итоге, ни в конце.
+func TestWizardOwnPasswordNeverPrinted(t *testing.T) {
+	const own = "OwnSecret12345"
+	e := newWizEnv(t, "", false, map[string]string{
+		"AZPANEL_MODE": "panel+node", "AZPANEL_ACCESS": "local", "AZPANEL_ADMIN": "boss",
+		"AZPANEL_ADMIN_PASSWORD": own,
+	})
+	if err := e.w.Run(); err != nil {
+		t.Fatalf("%v\n%s", err, e.out)
+	}
+	if strings.Contains(e.out.String(), own) {
+		t.Fatalf("свой пароль напечатан:\n%s", e.out)
+	}
+	if e.admin.pw != own {
+		t.Fatalf("пароль не передан в создание администратора: %q", e.admin.pw)
+	}
+}
+
+// Созданный пароль показан дважды: на шаге вопросов и в конце (не трижды).
+func TestWizardGeneratedPasswordShownTwice(t *testing.T) {
+	e := newWizEnv(t, defaultScript+"y\n", true, nil)
+	if err := e.w.Run(); err != nil {
+		t.Fatalf("%v\n%s", err, e.out)
+	}
+	if n := strings.Count(e.out.String(), fakePassword); n != 2 {
+		t.Fatalf("пароль показан %d раз, нужно 2:\n%s", n, e.out)
+	}
+	e = newWizEnv(t, "", false, map[string]string{
+		"AZPANEL_MODE": "panel+node", "AZPANEL_ACCESS": "local", "AZPANEL_ADMIN": "boss",
+	})
+	if err := e.w.Run(); err != nil {
+		t.Fatalf("%v\n%s", err, e.out)
+	}
+	if n := strings.Count(e.out.String(), fakePassword); n != 2 {
+		t.Fatalf("без вопросов пароль показан %d раз, нужно 2:\n%s", n, e.out)
+	}
+}
+
+// Повторная установка в режиме local не стирает public_url из настроек (M7).
+func TestWizardLocalKeepsPublicURL(t *testing.T) {
+	e := newWizEnv(t, "", false, map[string]string{
+		"AZPANEL_MODE": "panel+node", "AZPANEL_ACCESS": "local", "AZPANEL_ADMIN": "boss",
+	})
+	e.cfg.Panel.PublicURL = "https://panel.example"
+	e.cfg.Panel.BasePath = "/azpanel/"
+	if err := e.w.Run(); err != nil {
+		t.Fatalf("%v\n%s", err, e.out)
+	}
+	if e.written.Panel.PublicURL != "https://panel.example" || e.written.Panel.BasePath != "/azpanel/" {
+		t.Fatalf("настройки стёрты: %+v", e.written.Panel)
+	}
+}
+
+// Сбой шага: мастер называет сделанное и подсказывает, что дальше (M6).
+func TestWizardStepFailureListsDone(t *testing.T) {
+	e := newWizEnv(t, "", false, map[string]string{
+		"AZPANEL_MODE": "panel+node", "AZPANEL_ACCESS": "local", "AZPANEL_ADMIN": "boss",
+	})
+	e.w.Host.InstallHook = func() error { return errors.New("нет скриптов") }
+	err := e.w.Run()
+	if err == nil {
+		t.Fatal("ожидался сбой")
+	}
+	out := e.out.String()
+	if !strings.Contains(out, "Установка прервана") || !strings.Contains(out, "Уже выполнено") || !strings.Contains(out, "azpanel uninstall") {
+		t.Fatalf("нет сводки сделанного:\n%s", out)
+	}
+}
+
+// Пути сертификата идут в директивы nginx: лишние знаки отвергаются (M10).
+func TestCertPathRejectsNginxSyntax(t *testing.T) {
+	for _, bad := range []string{"cert.pem", "/etc/x;y", "/etc/x{", "/etc/a b", "/etc/x\ny", "/etc/\"x"} {
+		var a Answers
+		if err := a.set(KeyCert, bad); err == nil {
+			t.Errorf("%q принят", bad)
+		}
+		if err := a.set(KeyKey, bad); err == nil {
+			t.Errorf("ключ %q принят", bad)
+		}
+	}
+	var a Answers
+	if err := a.set(KeyCert, "/etc/letsencrypt/live/x.ru/fullchain.pem"); err != nil {
+		t.Fatal(err)
+	}
+}
