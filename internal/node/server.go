@@ -37,18 +37,22 @@ func (s *Server) Handle(req agentproto.Request) agentproto.Response {
 	}
 	switch req.Op {
 	case agentproto.OpConnect:
-		limit, err := s.Limits.Get(req.CN)
+		e, err := s.Limits.Get(req.CN)
 		if err != nil {
-			// limit — из последней прочитанной версии; не было её — 0, без ограничения.
-			s.HookLog.Error("limits.json не прочитан, действуют последние прочитанные лимиты", "cn", req.CN, "limit", limit, "err", err)
+			// e — из последней прочитанной версии; не было её — без ограничений.
+			s.HookLog.Error("limits.json не прочитан, действуют последние прочитанные лимиты", "cn", req.CN, "limit", e.Limit, "blocked", e.Blocked, "err", err)
 		}
-		ok, n := s.Tracker.Admit(k, s.Now(), limit)
+		if e.Blocked {
+			s.HookLog.Warn("отказ: клиент заблокирован", "cn", req.CN, "instance", req.Instance, "addr", req.Addr)
+			return agentproto.Response{Allow: false, Blocked: true}
+		}
+		ok, n := s.Tracker.Admit(k, s.Now(), e.Limit)
 		if !ok {
-			s.HookLog.Warn("отказ: лимит подключений", "cn", req.CN, "instance", req.Instance, "addr", req.Addr, "sessions", n, "limit", limit)
-			return agentproto.Response{Allow: false, Count: n, Limit: limit}
+			s.HookLog.Warn("отказ: лимит подключений", "cn", req.CN, "instance", req.Instance, "addr", req.Addr, "sessions", n, "limit", e.Limit)
+			return agentproto.Response{Allow: false, Count: n, Limit: e.Limit}
 		}
-		s.HookLog.Info("подключение", "cn", req.CN, "instance", req.Instance, "addr", req.Addr, "sessions", n, "limit", limit)
-		return agentproto.Response{Allow: true, Count: n, Limit: limit}
+		s.HookLog.Info("подключение", "cn", req.CN, "instance", req.Instance, "addr", req.Addr, "sessions", n, "limit", e.Limit)
+		return agentproto.Response{Allow: true, Count: n, Limit: e.Limit}
 	case agentproto.OpDisconnect:
 		s.Tracker.Disconnect(k, s.Now())
 		s.HookLog.Info("отключение", "cn", req.CN, "instance", req.Instance, "addr", req.Addr)

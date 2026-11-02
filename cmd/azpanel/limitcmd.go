@@ -21,18 +21,18 @@ func cmdLimit(args []string, out io.Writer) error {
 		return errUsage
 	}
 	path := paths.LimitsFile()
-	m, err := limits.Load(path)
+	d, err := limits.Load(path)
 	if err != nil {
 		return err
 	}
 	switch {
 	case args[0] == "list" && len(args) == 1:
-		for _, n := range sortedKeys(m) {
-			fmt.Fprintf(out, "%s\t%d\n", n, m[n])
+		for _, n := range sortedKeys(d.Limits) {
+			fmt.Fprintf(out, "%s\t%d\n", n, d.Limits[n])
 		}
 		return nil
 	case args[0] == "get" && len(args) == 2:
-		if n, ok := m[args[1]]; ok {
+		if n, ok := d.Limits[args[1]]; ok {
 			fmt.Fprintf(out, "%d\n", n)
 		} else {
 			fmt.Fprintln(out, "без ограничения")
@@ -46,16 +46,16 @@ func cmdLimit(args []string, out io.Writer) error {
 		if err != nil || n < 1 {
 			return fmt.Errorf("лимит — целое число от 1, получено %q", args[2])
 		}
-		m[args[1]] = n
+		d.Limits[args[1]] = n
 	case args[0] == "unset" && len(args) == 2:
-		delete(m, args[1])
+		delete(d.Limits, args[1])
 	default:
 		return errUsage
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	return limits.Save(path, m)
+	return limits.Save(path, d)
 }
 
 // formatSessions печатает клиентов с сессиями или лимитом; «-» — без ограничения.

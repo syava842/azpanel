@@ -28,7 +28,7 @@ func TestRunAnswersHook(t *testing.T) {
 	for _, d := range []string{paths.Log(), paths.Data(), filepath.Dir(paths.NodeSocket())} {
 		os.MkdirAll(d, 0o755)
 	}
-	limits.Save(paths.LimitsFile(), map[string]int{"alice": 1})
+	limits.Save(paths.LimitsFile(), limits.Data{Limits: map[string]int{"alice": 1}})
 
 	mgmtDir := filepath.Join(root, "ovpn")
 	os.MkdirAll(mgmtDir, 0o755)

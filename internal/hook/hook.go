@@ -49,7 +49,11 @@ func Run(op string, env func(string) string, call Caller, stderr io.Writer) int 
 		return 0
 	}
 	if req.Op == agentproto.OpConnect && !resp.Allow {
-		fmt.Fprintf(stderr, "azpanel hook: отказ %q — подключений %d из %d\n", cn, resp.Count, resp.Limit)
+		if resp.Blocked {
+			fmt.Fprintf(stderr, "azpanel hook: отказ %q — клиент заблокирован\n", cn)
+		} else {
+			fmt.Fprintf(stderr, "azpanel hook: отказ %q — подключений %d из %d\n", cn, resp.Count, resp.Limit)
+		}
 		return ExitDeny
 	}
 	return 0

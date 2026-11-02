@@ -22,11 +22,12 @@ type Request struct {
 }
 
 type Response struct {
-	Allow  bool           `json:"allow"`
-	Count  int            `json:"count,omitempty"`
-	Limit  int            `json:"limit,omitempty"`
-	Counts map[string]int `json:"counts,omitempty"`
-	Error  string         `json:"error,omitempty"`
+	Allow   bool           `json:"allow"`
+	Count   int            `json:"count,omitempty"`
+	Limit   int            `json:"limit,omitempty"`
+	Blocked bool           `json:"blocked,omitempty"`
+	Counts  map[string]int `json:"counts,omitempty"`
+	Error   string         `json:"error,omitempty"`
 }
 
 // Call отправляет один запрос и ждёт ответ; timeout — на всё вместе,

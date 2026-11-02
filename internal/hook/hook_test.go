@@ -47,6 +47,17 @@ func TestConnectDenied(t *testing.T) {
 	}
 }
 
+func TestRunBlockedDenies(t *testing.T) {
+	var stderr bytes.Buffer
+	call := func(agentproto.Request) (agentproto.Response, error) {
+		return agentproto.Response{Allow: false, Blocked: true}, nil
+	}
+	code := Run("connect", aliceEnv, call, &stderr)
+	if code != ExitDeny || !strings.Contains(stderr.String(), "заблокирован") {
+		t.Fatalf("код %d, stderr %q", code, stderr.String())
+	}
+}
+
 func TestAgentDownFailsOpen(t *testing.T) {
 	var stderr bytes.Buffer
 	call := func(agentproto.Request) (agentproto.Response, error) {

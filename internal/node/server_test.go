@@ -20,7 +20,7 @@ func newServer(t *testing.T, lim map[string]int) (*Server, *bytes.Buffer) {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "limits.json")
 	if lim != nil {
-		if err := limits.Save(p, lim); err != nil {
+		if err := limits.Save(p, limits.Data{Limits: lim}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -80,6 +80,25 @@ func TestHandleConnectWithinAndOverLimit(t *testing.T) {
 	}
 	if !strings.Contains(hookLog.String(), "отказ") {
 		t.Fatalf("в hook.log нет отказа:\n%s", hookLog.String())
+	}
+}
+
+func TestHandleBlockedDenied(t *testing.T) {
+	s, hookLog := newServer(t, nil)
+	p := filepath.Join(t.TempDir(), "limits.json")
+	if err := limits.Save(p, limits.Data{Blocked: map[string]bool{"bob": true}}); err != nil {
+		t.Fatal(err)
+	}
+	s.Limits = limits.NewStore(p)
+	r := s.Handle(connect("bob", "1.2.3.4:5"))
+	if r.Allow || !r.Blocked {
+		t.Fatalf("ответ %+v", r)
+	}
+	if n := s.Tracker.Count("bob"); n != 0 {
+		t.Fatalf("заблокированное подключение засчитано: %d", n)
+	}
+	if !strings.Contains(hookLog.String(), "клиент заблокирован") {
+		t.Fatalf("журнал:\n%s", hookLog)
 	}
 }
 

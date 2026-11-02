@@ -137,7 +137,7 @@ func runSessions() error {
 	if err != nil {
 		return err
 	}
-	formatSessions(resp.Counts, lim, os.Stdout)
+	formatSessions(resp.Counts, lim.Limits, os.Stdout)
 	return nil
 }
 
