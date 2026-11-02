@@ -160,6 +160,9 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		colDone.Add(1)
 		go func() { defer colDone.Done(); wt.Run(cctx) }()
 	}
+	// Сверка групп синхронизации (после запуска бота: уведомления берут его настройки).
+	colDone.Add(1)
+	go func() { defer colDone.Done(); s.RunGroupWatch(cctx) }()
 	if update.IsDev(version) {
 		log.Info("проверка обновлений выключена: сборка без версии (dev)")
 	} else if s.UpdateToken() == "" {

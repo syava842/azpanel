@@ -353,6 +353,7 @@ func (s *Server) portalProfile(w http.ResponseWriter, r *http.Request) {
 		s.portalError(w, r, http.StatusNotFound, "профиль не найден")
 		return
 	}
+	data = s.fixProfile(r.Context(), s.NodeID, r.PathValue("kind"), r.PathValue("file"), data)
 	writeProfile(w, r.PathValue("file"), data)
 }
 
@@ -596,6 +597,7 @@ func (s *Server) dlDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.auditAs(r, "портал", "download", l.Client, "", l.PKind+"/"+l.Variant+"/"+l.File)
+	data = s.fixProfile(r.Context(), l.Node, l.PKind, l.File, data)
 	writeProfile(w, l.File, data)
 }
 

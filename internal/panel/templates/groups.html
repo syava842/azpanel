@@ -1,0 +1,37 @@
+{{define "content"}}
+<h1>Группы синхронизации</h1>
+<p>Группа — основной узел и реплики. Клиенты, списки маршрутизации и настройки AntiZapret меняются только на основном и копируются на реплики; ключи WARP, история трафика и мониторинг у каждого сервера свои.</p>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Группа</th><th>Основной</th><th>Реплик</th><th>Состояние</th></tr></thead>
+  <tbody>
+  {{range .Rows}}
+  <tr>
+    <td><a href="{{url .Href}}">{{.Name}}</a></td>
+    <td>{{.Primary}}</td>
+    <td>{{.Replicas}}</td>
+    <td class="{{if .Bad}}bad{{end}}">{{.State}}</td>
+  </tr>
+  {{else}}
+  <tr><td colspan="4" class="muted">Групп нет.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+
+<h2>Новая группа</h2>
+{{if .Free}}
+<form method="post" action="{{url "/groups"}}" class="card narrow">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label>Имя группы
+    <input type="text" name="name" value="{{.Name}}" maxlength="40" required>
+  </label>
+  <label>Основной узел
+    <select name="primary">{{range .Free}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select>
+  </label>
+  <button type="submit">Создать группу</button>
+</form>
+{{else}}
+<p class="muted">Нет подключённых узлов вне групп. Узлы добавляются в разделе «<a href="{{url "/nodes"}}">Узлы</a>».</p>
+{{end}}
+{{end}}

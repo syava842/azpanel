@@ -314,6 +314,19 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /nodes/{id}/check", s.nodeCheck)
 	s.route(mux, "POST /nodes/{id}/delete", s.nodeDelete)
 
+	// Группы синхронизации: только администратор.
+	s.route(mux, "GET /groups", s.groupsPage)
+	s.route(mux, "POST /groups", s.groupCreate)
+	s.route(mux, "GET /groups/{id}", s.groupPage)
+	s.route(mux, "POST /groups/{id}/verify", s.groupVerify)
+	s.route(mux, "POST /groups/{id}/members", s.groupAddMember)
+	s.route(mux, "POST /groups/{id}/members/{nid}/remove", s.groupRemoveMember)
+	s.route(mux, "POST /groups/{id}/align/{nid}", s.groupAlign)
+	s.route(mux, "POST /groups/{id}/promote/{nid}", s.groupPromote)
+	s.route(mux, "POST /groups/{id}/addrs", s.groupAddrs)
+	s.route(mux, "POST /groups/{id}/update", s.groupUpdateAZ)
+	s.route(mux, "POST /groups/{id}/delete", s.groupDelete)
+
 	// Обновление AntiZapret: только администратор.
 	s.route(mux, "GET /antizapret/update", s.azUpdatePage)
 	s.route(mux, "POST /antizapret/update", s.azStart)

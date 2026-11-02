@@ -447,6 +447,7 @@ func (s *Server) profileFile(w http.ResponseWriter, r *http.Request) {
 		s.errorPage(w, r, st, tx)
 		return
 	}
+	data = s.fixProfile(r.Context(), s.nodeIDFor(r), r.PathValue("kind"), r.PathValue("file"), data)
 	writeProfile(w, r.PathValue("file"), data)
 }
 

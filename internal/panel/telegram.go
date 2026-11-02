@@ -359,6 +359,7 @@ func (b botBackend) Block(ctx context.Context, c nodeapi.Client, blocked bool) (
 	} else {
 		b.s.forgetAutoBlock(ctx, c)
 	}
+	b.s.syncAfterLocal()
 	return res.Killed, nil
 }
 
@@ -367,6 +368,7 @@ func (b botBackend) Delete(ctx context.Context, c nodeapi.Client, kind string) e
 		return err
 	}
 	b.s.dropDeletedRecords(ctx, c, kind)
+	b.s.syncAfterLocal()
 	return nil
 }
 
@@ -375,6 +377,7 @@ func (b botBackend) Create(ctx context.Context, name, kind string, days int) err
 	if _, err := b.s.Node.CreateClient(ctx, nodeapi.CreateClient{Name: name, Kind: kind, Days: days}); err != nil {
 		return err
 	}
+	b.s.syncAfterLocal()
 	if known && !existed {
 		b.s.dropStaleHistory(ctx, name)
 	}

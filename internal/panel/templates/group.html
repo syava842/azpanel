@@ -1,0 +1,109 @@
+{{define "head"}}{{if .Refresh}}<meta http-equiv="refresh" content="5">{{end}}{{end}}
+{{define "content"}}
+<h1>Группа «{{.Group.Name}}»</h1>
+{{if .Mark}}<div class="error">{{.Mark}}</div>{{end}}
+
+{{if .Job}}
+<h2>{{.Job.Title}}</h2>
+<div class="card">
+  <p>{{if .Job.Running}}<b>идёт</b>{{else if .Job.Err}}<span class="bad">не удалось: {{.Job.Err}}</span>{{else}}<span class="ok">выполнено</span>{{end}}</p>
+  <ol>
+  {{range .Job.Steps}}<li class="{{if eq .State "fail"}}bad{{else if eq .State "ok"}}ok{{end}}">{{.Text}} — {{if eq .State "run"}}идёт{{else if eq .State "ok"}}готово{{else}}ошибка: {{.Err}}{{end}}</li>{{end}}
+  </ol>
+</div>
+{{end}}
+
+<h2>Узлы группы</h2>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Узел</th><th>Роль</th><th>Связь</th><th>Сверка</th><th></th></tr></thead>
+  <tbody>
+  {{range .Members}}
+  <tr>
+    <td><a href="{{url "/nodes/" .ID}}">{{.Name}}</a></td>
+    <td>{{.Role}}</td>
+    <td class="{{if .Online}}ok{{else}}bad{{end}}">{{.Status}}</td>
+    <td>
+      {{if .Replica}}{{if .Reported}}
+        {{if .InSyncNow}}<span class="ok">совпадает с основным</span>{{else}}
+          {{if .Err}}<span class="bad">{{.Err}}</span><br>{{end}}
+          {{if .RoleBad}}<span class="bad">{{.RoleBad}}</span><br>{{end}}
+          {{range .Diffs}}{{.}}<br>{{end}}
+          {{if .Missing}}Нет клиентов: {{range .Missing}}{{.}} {{end}}<br>{{end}}
+          {{if .Extra}}Лишние клиенты: {{range .Extra}}{{.}} {{end}}{{end}}
+        {{end}}
+      {{else}}<span class="muted">не сверялась</span>{{end}}{{end}}
+    </td>
+    <td>
+      {{if .Replica}}
+      <form method="post" action="{{url $.Href "/align/" .ID}}" class="inline">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+        <label><input type="checkbox" name="confirm" value="1"> подтверждаю</label>
+        <button type="submit" class="danger">Выровнять</button>
+      </form>
+      <form method="post" action="{{url $.Href "/promote/" .ID}}" class="inline">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+        <label><input type="checkbox" name="confirm" value="1"> подтверждаю</label>
+        <button type="submit">Назначить основным</button>
+      </form>
+      <form method="post" action="{{url $.Href "/members/" .ID "/remove"}}" class="inline">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+        <label><input type="checkbox" name="confirm" value="1"> подтверждаю</label>
+        <button type="submit">Вывести из группы</button>
+      </form>
+      {{end}}
+    </td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{if .PrimaryErr}}<div class="error">{{.PrimaryErr}}</div>{{end}}
+<form method="post" action="{{url .Href "/verify"}}" class="inline">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <button type="submit">Сверить</button>
+  {{if .ReportAt}}<small class="muted">последняя сверка {{.ReportAt}}</small>{{end}}
+</form>
+
+<h2>Добавить реплику</h2>
+{{if .Free}}
+<form method="post" action="{{url .Href "/members"}}" class="card narrow">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label>Узел
+    <select name="node">{{range .Free}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select>
+  </label>
+  <button type="submit">Добавить</button>
+</form>
+{{else}}<p class="muted">Нет подключённых узлов вне групп.</p>{{end}}
+
+<h2>Адреса для клиентов</h2>
+<form method="post" action="{{url .Href "/addrs"}}" class="card narrow">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label>Общий домен (вписывается в OPENVPN_HOST и WIREGUARD_HOST основного, профили пересоздаются; DNS панель не настраивает)
+    <input type="text" name="domain" value="{{.Group.Domain}}">
+  </label>
+  <label>Адреса remote в .ovpn, по одному в строке, по порядку (может быть адрес прокси)
+    <textarea name="remotes" rows="4">{{.Remotes}}</textarea>
+  </label>
+  <button type="submit">Сохранить</button>
+</form>
+
+{{template "groupextra" .}}
+
+<h2>Обновление AntiZapret по группе</h2>
+<form method="post" action="{{url .Href "/update"}}" class="card narrow">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <p>Серверы обновляются по одному: сначала реплики, основной последним. Следующий — только после успешного предыдущего. Каждый сервер перезагружается.</p>
+  <label><input type="checkbox" name="confirm" value="1"> Серверы будут перезагружены, VPN на каждом прервётся</label>
+  <button type="submit" class="danger">Обновить по группе</button>
+</form>
+
+<h2>Удаление группы</h2>
+<form method="post" action="{{url .Href "/delete"}}" class="card narrow">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label><input type="checkbox" name="confirm" value="1"> Распустить группу (узлы остаются автономными, файлы не трогаются)</label>
+  <button type="submit" class="danger">Удалить группу</button>
+</form>
+<p><a href="{{url "/groups"}}">К списку групп</a></p>
+{{end}}
+{{define "groupextra"}}{{end}}

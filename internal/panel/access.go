@@ -101,6 +101,18 @@ var routes = map[string]access{
 	"POST /nodes/{id}/check":   accAdmin,
 	"POST /nodes/{id}/delete":  accAdmin,
 
+	"GET /groups":                            accAdmin,
+	"POST /groups":                           accAdmin,
+	"GET /groups/{id}":                       accAdmin,
+	"POST /groups/{id}/verify":               accAdmin,
+	"POST /groups/{id}/members":              accAdmin,
+	"POST /groups/{id}/members/{nid}/remove": accAdmin,
+	"POST /groups/{id}/align/{nid}":          accAdmin,
+	"POST /groups/{id}/promote/{nid}":        accAdmin,
+	"POST /groups/{id}/addrs":                accAdmin,
+	"POST /groups/{id}/update":               accAdmin,
+	"POST /groups/{id}/delete":               accAdmin,
+
 	"GET /antizapret/update":          accAdmin,
 	"POST /antizapret/update":         accAdmin,
 	"POST /antizapret/update/restore": accAdmin,
@@ -162,7 +174,7 @@ func (s *Server) route(mux *http.ServeMux, pattern string, h http.HandlerFunc) {
 		panic(fmt.Sprintf("panel: маршрут %q не внесён в таблицу прав", pattern))
 	}
 	s.registered = append(s.registered, pattern)
-	mux.Handle(pattern, s.require(a, s.scoped(pattern, h)))
+	mux.Handle(pattern, s.require(a, s.scoped(pattern, s.propagating(pattern, h))))
 }
 
 // require оборачивает обработчик проверкой права a. Не администратор на

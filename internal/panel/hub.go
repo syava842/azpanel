@@ -56,6 +56,8 @@ type hubState struct {
 	probe   func(ctx context.Context, addr string) (string, error)
 	cols    map[int64]*Collector
 	groupMu keyedMutex // одна операция группы за раз
+	groups  map[int64]*groupRuntime
+	inline  bool // операции групп выполняются на месте (тесты)
 }
 
 // dialNode — настоящее подключение: узел по https с закреплённым отпечатком,
