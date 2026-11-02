@@ -187,6 +187,8 @@ type fakeNode struct {
 	backupData  map[string]string
 	taskExit    int
 	backupCalls int
+	// onBackups — если задан, вызывается при выдаче списка бэкапов (середина построения)
+	onBackups func()
 }
 
 func (n *fakeNode) Info(context.Context) (nodeapi.Info, error) {
@@ -243,6 +245,9 @@ func (n *fakeNode) Task(_ context.Context, id string) (nodeapi.TaskDetail, error
 	return d, nil
 }
 func (n *fakeNode) Backups(context.Context) ([]nodeapi.Backup, error) {
+	if n.onBackups != nil {
+		n.onBackups() // тест: что-то происходит, пока строится бэкап
+	}
 	return n.backupFiles, nil
 }
 func (n *fakeNode) Backup(_ context.Context, name string) (io.ReadCloser, error) {

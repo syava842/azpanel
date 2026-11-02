@@ -95,6 +95,45 @@ func TestAdminPasswordResetUnlinksTelegram(t *testing.T) {
 	}
 }
 
+// Невыпущенный код привязки гаснет вместе с привязкой: иначе тот, кто успел
+// получить ссылку, привяжет свой Telegram после смены пароля.
+func TestPasswordChangeKillsUnusedLinkCodes(t *testing.T) {
+	e, c, csrf := accEnv(t)
+	code, err := e.st.CreateLinkCode(context.Background(), e.admin.ID, e.srv.now().Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := post(e, c, "/account/password", form(csrf, "old", testPassword, "new", "newpassw0rd1", "new2", "newpassw0rd1")); rec.Code != 303 {
+		t.Fatalf("смена пароля: %d", rec.Code)
+	}
+	if _, err := e.st.RedeemLinkCode(context.Background(), code, e.srv.now().Unix()); err == nil {
+		t.Fatal("код привязки пережил смену пароля")
+	}
+}
+
+func TestLogoutAllKillsUnusedLinkCodes(t *testing.T) {
+	e, c, csrf := accEnv(t)
+	code, _ := e.st.CreateLinkCode(context.Background(), e.admin.ID, e.srv.now().Unix())
+	if rec := post(e, c, "/account/sessions/all", form(csrf)); rec.Code != 303 {
+		t.Fatalf("выход везде: %d", rec.Code)
+	}
+	if _, err := e.st.RedeemLinkCode(context.Background(), code, e.srv.now().Unix()); err == nil {
+		t.Fatal("код привязки пережил «выйти везде»")
+	}
+}
+
+func TestAdminPasswordResetKillsUnusedLinkCodes(t *testing.T) {
+	e, admin, _, _, bob := userEnv(t)
+	code, _ := e.st.CreateLinkCode(context.Background(), bob.ID, e.srv.now().Unix())
+	asess, _ := e.lookup(admin.Value)
+	if rec := post(e, admin, "/users/"+itoa(bob.ID)+"/password", url.Values{"csrf": {asess.CSRF}}); rec.Code != 303 {
+		t.Fatalf("сброс пароля: %d", rec.Code)
+	}
+	if _, err := e.st.RedeemLinkCode(context.Background(), code, e.srv.now().Unix()); err == nil {
+		t.Fatal("код привязки пережил сброс пароля")
+	}
+}
+
 // --- M1: счётчик кодов бота — общий с вебом ---
 
 func TestBotBackendAttemptsSharedWithWeb(t *testing.T) {

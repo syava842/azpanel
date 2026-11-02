@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -513,5 +514,123 @@ func TestBotSendsNoUpdatesFromBotsOrGroupsToBackend(t *testing.T) {
 	}})
 	if len(e.tg.of("sendMessage")) != 0 {
 		t.Fatal("бот ответил боту")
+	}
+}
+
+// --- повторная проверка: права могут измениться, пока строится бэкап ---
+
+func TestScheduledBackupDemotedDuringBuildIsNotSent(t *testing.T) {
+	e := newEnv(t)
+	e.b.Cfg.BackupEveryDays = 1
+	e.b.Cfg.BackupChats = []int64{555}
+	owner := e.user("owner", store.RoleAdmin, 555)
+	e.node.backupFiles = []nodeapi.Backup{{Name: "backup-x.tar.gz", Size: 4, Modified: time.Now().Add(time.Hour)}}
+	e.node.backupData["backup-x.tar.gz"] = "DATA"
+	e.node.onBackups = func() { // разжалование между построением и отправкой
+		if err := e.st.SetRole(context.Background(), owner.ID, store.RoleUser); err != nil {
+			t.Error(err)
+		}
+	}
+	e.b.scheduleTick(context.Background(), time.Unix(1_800_000_000, 0))
+	if e.node.backupCalls != 1 {
+		t.Fatalf("бэкап не строился: %d", e.node.backupCalls)
+	}
+	if n := len(e.tg.of("sendDocument")); n != 0 {
+		t.Fatalf("архив ушёл разжалованному: %d", n)
+	}
+	if _, found, _ := e.st.Meta(context.Background(), backupLastKey); found {
+		t.Fatal("недоставленный бэкап отмечен как сделанный")
+	}
+}
+
+func TestBackupButtonDemotedDuringBuildIsNotSent(t *testing.T) {
+	e := newEnv(t)
+	root := e.user("root", store.RoleAdmin, adminTG)
+	e.user("keeper", store.RoleAdmin, 3003)
+	e.node.backupFiles = []nodeapi.Backup{{Name: "backup-x.tar.gz", Size: 4, Modified: time.Now().Add(time.Hour)}}
+	e.node.backupData["backup-x.tar.gz"] = "DATA"
+	e.node.onBackups = func() {
+		if err := e.st.SetRole(context.Background(), root.ID, store.RoleUser); err != nil {
+			t.Error(err)
+		}
+	}
+	e.press(adminTG, "u")
+	if n := len(e.tg.of("sendDocument")); n != 0 {
+		t.Fatalf("архив ушёл разжалованному: %d", n)
+	}
+	if txt := strings.Join(e.tg.texts(), "|"); !strings.Contains(txt, "Бэкап не отправлен") {
+		t.Fatalf("нажавшего не предупредили: %q", txt)
+	}
+}
+
+// --- диалог создания клиента: двойное нажатие не создаёт двух клиентов ---
+
+func TestCreateDialogDoubleTapCreatesOnce(t *testing.T) {
+	for _, tc := range []struct{ name, first, second string }{
+		{"WireGuard", "t:wireguard", "t:wireguard"},
+		{"срок OpenVPN", "g:90", "g:90"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.user("root", store.RoleAdmin, adminTG)
+			e.press(adminTG, "n")
+			e.msg(adminTG, "carol")
+			if tc.first == "g:90" {
+				e.press(adminTG, "t:openvpn")
+			}
+			e.press(adminTG, tc.first)
+			e.press(adminTG, tc.second)
+			if len(e.back.created) != 1 {
+				t.Fatalf("Create вызван %d раз: %v", len(e.back.created), e.back.created)
+			}
+		})
+	}
+}
+
+func TestCreateDialogParallelTapsCreateOnce(t *testing.T) {
+	e := newEnv(t)
+	e.user("root", store.RoleAdmin, adminTG)
+	e.press(adminTG, "n")
+	e.msg(adminTG, "carol")
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			e.press(adminTG, "t:wireguard")
+		}()
+	}
+	wg.Wait()
+	if len(e.back.created) != 1 {
+		t.Fatalf("Create вызван %d раз", len(e.back.created))
+	}
+}
+
+// --- сообщение об отказе в получателях — не чаще раза в сутки ---
+
+func TestRejectedRecipientsNoticeOncePerDay(t *testing.T) {
+	e := newEnv(t)
+	e.b.Cfg.BackupEveryDays = 1
+	e.b.Cfg.BackupChats = []int64{-100} // группа не подтверждена
+	e.user("root", store.RoleAdmin, adminTG)
+	count := func() int {
+		n := 0
+		for _, tx := range e.tg.texts() {
+			if strings.Contains(tx, "не отправлен в чаты") {
+				n++
+			}
+		}
+		return n
+	}
+	t0 := time.Unix(1_800_000_000, 0) // 08:00 UTC
+	e.b.scheduleTick(context.Background(), t0)
+	e.b.scheduleTick(context.Background(), t0.Add(2*time.Hour)) // попытка повторилась, сутки те же
+	e.b.scheduleTick(context.Background(), t0.Add(4*time.Hour))
+	if n := count(); n != 1 {
+		t.Fatalf("за сутки сообщений %d, ждали 1", n)
+	}
+	e.b.scheduleTick(context.Background(), t0.Add(25*time.Hour)) // следующие сутки
+	if n := count(); n != 2 {
+		t.Fatalf("на следующие сутки сообщений %d, ждали 2", n)
 	}
 }

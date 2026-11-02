@@ -281,8 +281,13 @@ func (s *Server) userResetPassword(w http.ResponseWriter, r *http.Request) {
 		if err := s.Store.SetPassword(r.Context(), u.ID, hash, true); err != nil {
 			return u, err
 		}
-		s.dropTelegram(r, u, "отвязан при сбросе пароля администратором")
-		return u, s.Store.DeleteUserSessions(r.Context(), u.ID, "")
+		if err := s.Store.DeleteUserSessions(r.Context(), u.ID, ""); err != nil {
+			return u, err
+		}
+		if err := s.dropTelegram(r, u, "отвязан при сбросе пароля администратором"); err != nil {
+			return u, errors.New("пароль сброшен и сессии завершены, но " + err.Error() + "; снимите привязку вручную и повторите сброс")
+		}
+		return u, nil
 	})
 	if !ok {
 		return

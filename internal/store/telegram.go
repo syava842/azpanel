@@ -81,6 +81,12 @@ func (s *Store) ClearTelegramID(ctx context.Context, userID int64) error {
 	return s.setFields(ctx, `UPDATE users SET telegram_id = NULL WHERE id = ?`, userID)
 }
 
+// DeleteLinkCodes гасит невыпущенные коды привязки пользователя.
+func (s *Store) DeleteLinkCodes(ctx context.Context, userID int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM tg_link_codes WHERE user_id = ?`, userID)
+	return err
+}
+
 // UserByTelegramID — пользователь по привязанному Telegram ID; ErrNotFound, если нет.
 func (s *Store) UserByTelegramID(ctx context.Context, tgID int64) (User, error) {
 	u, err := scanUser(s.db.QueryRowContext(ctx, `SELECT `+userCols+` FROM users WHERE telegram_id = ?`, tgID))

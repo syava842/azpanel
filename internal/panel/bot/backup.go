@@ -124,11 +124,34 @@ func (b *Bot) startBackup(ctx context.Context, a actor) string {
 			return
 		}
 		defer bf.cleanup()
+		// Бэкап строится минуты: за это время администратора могли разжаловать
+		// или отвязать, а в файле ключи всех клиентов.
+		if !b.stillBackupAdmin(ctx, a) {
+			b.log().Warn("бот: бэкап не отправлен: нажавший больше не действующий администратор", "tg", a.tg)
+			b.send(ctx, a.chat, "Бэкап не отправлен: права администратора больше не действуют.", nil)
+			return
+		}
 		if err := b.sendBackup(ctx, a.chat, bf); err != nil {
 			b.send(ctx, a.chat, "Бэкап создан, но не отправлен: "+err.Error(), nil)
 		}
 	})
 	return "Бэкап запущен, это займёт несколько минут."
+}
+
+// stillBackupAdmin — нажавший и сейчас привязанный действующий администратор;
+// роль читается из базы заново. Сбой чтения — отказ.
+func (b *Bot) stillBackupAdmin(ctx context.Context, a actor) bool {
+	admins, err := b.adminsErr(ctx)
+	if err != nil {
+		b.log().Warn("бот: роль перед отправкой бэкапа не прочитана", "err", err)
+		return false
+	}
+	for _, u := range admins {
+		if u.ID == a.user.ID && *u.TelegramID == a.tg {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *Bot) pollEvery() time.Duration {

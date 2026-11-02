@@ -442,13 +442,17 @@ func (b *Bot) confirmed(ctx context.Context, a actor, msgID int64, tok string) s
 }
 
 func (b *Bot) createType(ctx context.Context, a actor, msgID int64, args []string) string {
-	d := b.getDialog(a.tg)
-	if d == nil || d.kind != "create" || d.step != "type" || len(args) < 1 {
-		return "Диалог устарел: начните заново."
+	if len(args) < 1 || (args[0] != nodeapi.KindOpenVPN && args[0] != nodeapi.KindWireGuard) {
+		if d := b.getDialog(a.tg); d == nil || d.kind != "create" || d.step != "type" {
+			return "Диалог устарел: начните заново."
+		}
+		return "Неизвестный тип."
 	}
 	kind := args[0]
-	if kind != nodeapi.KindOpenVPN && kind != nodeapi.KindWireGuard {
-		return "Неизвестный тип."
+	// Диалог забирается атомарно: двойное нажатие «WireGuard» не запустит два Create.
+	d := b.takeDialog(a.tg, "create", "type")
+	if d == nil {
+		return "Диалог устарел: начните заново."
 	}
 	d.ckind = kind
 	if kind == nodeapi.KindWireGuard {
@@ -464,16 +468,19 @@ func (b *Bot) createType(ctx context.Context, a actor, msgID int64, args []strin
 }
 
 func (b *Bot) createDays(ctx context.Context, a actor, msgID int64, args []string) string {
-	d := b.getDialog(a.tg)
 	n, ok := argInt(args, 0)
-	if d == nil || d.kind != "create" || d.step != "days" || !ok || n < 1 || n > 3650 {
+	if !ok || n < 1 || n > 3650 {
+		return "Диалог устарел: начните заново."
+	}
+	d := b.takeDialog(a.tg, "create", "days")
+	if d == nil {
 		return "Диалог устарел: начните заново."
 	}
 	return b.finishCreate(ctx, a, msgID, d, n)
 }
 
+// finishCreate вызывается только с диалогом, уже забранным takeDialog.
 func (b *Bot) finishCreate(ctx context.Context, a actor, msgID int64, d *dialog, days int) string {
-	b.setDialog(a.tg, nil)
 	list, err := b.Node.Clients(ctx)
 	if err != nil {
 		return b.agentErr(err)

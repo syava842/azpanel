@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,13 +14,14 @@ import (
 )
 
 const (
-	summaryDayKey    = "tg_summary_day" // сутки последней сводки (UTC, ГГГГ-ММ-ДД)
-	backupLastKey    = "tg_backup_last" // Unix-время последнего удачного бэкапа по расписанию
-	backupTryKey     = "tg_backup_try"  // Unix-время последней попытки
-	summaryWindow    = 10 * time.Minute // сводка уходит, если бот проснулся не позже чем через столько после времени
-	backupRetryAfter = time.Hour        // не чаще раза в час при сбоях
-	summaryTop       = 10               // клиентов в топе трафика
-	scheduleEvery    = 30 * time.Second // период проверки расписания
+	summaryDayKey    = "tg_summary_day"       // сутки последней сводки (UTC, ГГГГ-ММ-ДД)
+	rejectDayKey     = "tg_backup_reject_day" // сутки последнего сообщения «бэкап не отправлен» (UTC)
+	backupLastKey    = "tg_backup_last"       // Unix-время последнего удачного бэкапа по расписанию
+	backupTryKey     = "tg_backup_try"        // Unix-время последней попытки
+	summaryWindow    = 10 * time.Minute       // сводка уходит, если бот проснулся не позже чем через столько после времени
+	backupRetryAfter = time.Hour              // не чаще раза в час при сбоях
+	summaryTop       = 10                     // клиентов в топе трафика
+	scheduleEvery    = 30 * time.Second       // период проверки расписания
 )
 
 func (b *Bot) scheduleLoop(ctx context.Context) {
@@ -184,7 +186,7 @@ func (b *Bot) maybeBackup(ctx context.Context, now time.Time) {
 	for _, chat := range rejected {
 		b.log().Warn("бот: бэкап не отправляется в чат из backup_chats: это не действующий администратор и не подтверждённая группа", "chat", chat)
 	}
-	if len(rejected) > 0 {
+	if len(rejected) > 0 && b.rejectNoticeDue(ctx, now) {
 		b.notifyAdmins(ctx, fmt.Sprintf("Бэкап по расписанию не отправлен в чаты %v: личный чат должен принадлежать действующему администратору с привязанным Telegram, группу нужно подтвердить на странице «Telegram-бот» в панели. Файл не передавался.", rejected))
 	}
 	if len(ok) == 0 {
@@ -202,8 +204,18 @@ func (b *Bot) maybeBackup(ctx context.Context, now time.Time) {
 			return
 		}
 		defer bf.cleanup()
+		// Получатели пересчитываются ещё раз: пока строился бэкап (минуты),
+		// администратора могли разжаловать, отвязать или снять группу.
+		final, _, err := b.BackupRecipients(ctx)
+		if err != nil {
+			b.log().Warn("бот: получатели бэкапа перед отправкой не определены, файл не передаётся", "err", err)
+			return
+		}
 		delivered := false
-		for _, chat := range ok {
+		for _, chat := range final {
+			if !slices.Contains(ok, chat) {
+				continue // появился после первой проверки: расписание его не знало
+			}
 			if err := b.sendBackup(ctx, chat, bf); err != nil {
 				b.send(ctx, chat, "Бэкап создан, но не отправлен: "+err.Error()+". Копия осталась на сервере панели.", nil)
 				continue
@@ -217,6 +229,23 @@ func (b *Bot) maybeBackup(ctx context.Context, now time.Time) {
 			b.log().Warn("бот: время бэкапа не записано", "err", err)
 		}
 	})
+}
+
+// rejectNoticeDue — сообщение об отказе в получателях уходит не чаще раза в
+// сутки (UTC): попытки бэкапа идут каждый час. Сутки отмечаются до отправки.
+func (b *Bot) rejectNoticeDue(ctx context.Context, now time.Time) bool {
+	today := now.UTC().Format("2006-01-02")
+	if v, found, err := b.Store.Meta(ctx, rejectDayKey); err != nil {
+		b.log().Warn("бот: сутки сообщения об отказе не прочитаны", "err", err)
+		return false
+	} else if found && v == today {
+		return false
+	}
+	if err := b.Store.SetMeta(ctx, rejectDayKey, today); err != nil {
+		b.log().Warn("бот: сутки сообщения об отказе не записаны", "err", err)
+		return false
+	}
+	return true
 }
 
 // notifyAdmins шлёт текст всем привязанным действующим администраторам.

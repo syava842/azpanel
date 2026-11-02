@@ -277,3 +277,21 @@ func TestLinkTelegramIDAllowsAdminButNotBound(t *testing.T) {
 		t.Fatal("привязка затёрта")
 	}
 }
+
+func TestDeleteLinkCodesKillsUnusedCodes(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	u := tgUser(t, s, "a")
+	other := tgUser(t, s, "b")
+	mine, _ := s.CreateLinkCode(ctx, u.ID, 1000)
+	theirs, _ := s.CreateLinkCode(ctx, other.ID, 1000)
+	if err := s.DeleteLinkCodes(ctx, u.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RedeemLinkCode(ctx, mine, 1001); !errors.Is(err, ErrCodeInvalid) {
+		t.Fatalf("код пережил гашение: %v", err)
+	}
+	if id, err := s.RedeemLinkCode(ctx, theirs, 1001); err != nil || id != other.ID {
+		t.Fatalf("чужой код задет: %d, %v", id, err)
+	}
+}

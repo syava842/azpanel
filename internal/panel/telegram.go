@@ -94,17 +94,25 @@ func (s *Server) accountTelegram(w http.ResponseWriter, r *http.Request) {
 		"/account", "К аккаунту", []string{"https://t.me/" + name + "?start=" + code})
 }
 
-// dropTelegram снимает привязку Telegram: смена пароля, сброс пароля и «выйти
-// везде» означают потерю доверия к входам, а привязка — отдельный вход в бота.
-func (s *Server) dropTelegram(r *http.Request, u store.User, why string) {
+// dropTelegram снимает привязку Telegram и гасит невыпущенные коды привязки:
+// смена пароля, сброс пароля и «выйти везде» означают потерю доверия к входам,
+// а привязка — отдельный вход в бота. Ошибка возвращается вызывающему: он
+// показывает её человеку, молча привязка не остаётся.
+func (s *Server) dropTelegram(r *http.Request, u store.User, why string) error {
+	if err := s.Store.DeleteLinkCodes(r.Context(), u.ID); err != nil {
+		s.Log.Warn("коды привязки Telegram не погашены", "user", u.Login, "err", err)
+		return errors.New("коды привязки Telegram не погашены")
+	}
 	if u.TelegramID == nil {
-		return
+		return nil
 	}
 	if err := s.Store.ClearTelegramID(r.Context(), u.ID); err != nil {
 		s.Log.Warn("привязка Telegram не снята", "user", u.Login, "err", err)
-		return
+		s.audit(r, "tg_unlink_failed", u.Login, tgText(u), "не снята: "+why)
+		return errors.New("привязка Telegram не снята")
 	}
 	s.audit(r, "tg_unlink", u.Login, tgText(u), why)
+	return nil
 }
 
 // accountTelegramUnlink отвязывает Telegram от своего аккаунта.

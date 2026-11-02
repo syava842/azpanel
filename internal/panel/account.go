@@ -248,8 +248,12 @@ func (s *Server) accountPassword(w http.ResponseWriter, r *http.Request) {
 	if err := s.Store.DeleteUserSessions(r.Context(), u.ID, sess.IDHash); err != nil {
 		s.Log.Warn("прочие сессии не завершены", "err", err)
 	}
-	s.dropTelegram(r, u, "отвязан при смене пароля")
+	dropErr := s.dropTelegram(r, u, "отвязан при смене пароля")
 	s.audit(r, "password_change", u.Login, "", "пароль изменён, прочие сессии завершены")
+	if dropErr != nil {
+		s.accountView(w, r, http.StatusInternalServerError, "Пароль изменён, но "+dropErr.Error()+": отвяжите Telegram вручную и повторите при необходимости.")
+		return
+	}
 	s.redirectMsg(w, r, "/account", "password_changed")
 }
 
@@ -519,8 +523,13 @@ func (s *Server) accountLogoutAll(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, "сессии не завершены", err)
 		return
 	}
-	s.dropTelegram(r, u, "отвязан при выходе со всех устройств")
+	dropErr := s.dropTelegram(r, u, "отвязан при выходе со всех устройств")
 	s.audit(r, "logout_all", u.Login, "", "завершены все сессии")
 	s.clearSessionCookie(w, r)
+	if dropErr != nil {
+		// Сессий уже нет: войти заново можно, а привязку нужно снять вручную.
+		s.errorPage(w, r, http.StatusInternalServerError, "Сессии завершены, но "+dropErr.Error()+". Войдите снова и отвяжите Telegram вручную.")
+		return
+	}
 	s.redirect(w, r, "/login", http.StatusSeeOther)
 }

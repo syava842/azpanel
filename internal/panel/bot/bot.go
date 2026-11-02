@@ -419,6 +419,27 @@ func (b *Bot) setDialog(tg int64, d *dialog) {
 	b.dialogs[tg] = d
 }
 
+// takeDialog забирает диалог одной операцией под замком: проверка вида и шага,
+// срока и удаление неразделимы, поэтому двойное нажатие кнопки получит диалог
+// только в первый раз. Диалог другого вида или шага остаётся на месте.
+func (b *Bot) takeDialog(tg int64, kind, step string) *dialog {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	d := b.dialogs[tg]
+	if d == nil {
+		return nil
+	}
+	if !d.exp.After(b.now()) {
+		delete(b.dialogs, tg)
+		return nil
+	}
+	if d.kind != kind || d.step != step {
+		return nil
+	}
+	delete(b.dialogs, tg)
+	return d
+}
+
 func (b *Bot) getDialog(tg int64) *dialog {
 	b.mu.Lock()
 	defer b.mu.Unlock()
