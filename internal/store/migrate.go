@@ -36,6 +36,27 @@ CREATE TABLE audit (id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, user TEXT NOT N
 CREATE INDEX audit_ts ON audit(ts);`,
 	// 2: отпечаток причины, по которой админ вручную снял автоблокировку.
 	`ALTER TABLE client_cards ADD COLUMN auto_skip TEXT NOT NULL DEFAULT '';`,
+	// 3: пользователи, резервные коды 2FA, сессии и владелец клиента.
+	`CREATE TABLE users (
+  id INTEGER PRIMARY KEY,
+  login TEXT NOT NULL UNIQUE,
+  hash TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('admin','user')),
+  disabled INTEGER NOT NULL DEFAULT 0,
+  must_change INTEGER NOT NULL DEFAULT 0,
+  totp_secret BLOB,
+  totp_last_step INTEGER NOT NULL DEFAULT 0,
+  created INTEGER NOT NULL);
+CREATE TABLE backup_codes (user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  hash TEXT NOT NULL, used INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE sessions (
+  id_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  csrf TEXT NOT NULL, ip TEXT NOT NULL, agent TEXT NOT NULL,
+  created INTEGER NOT NULL, seen INTEGER NOT NULL, expires INTEGER NOT NULL,
+  mfa_pending INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX sessions_user ON sessions(user_id);
+CREATE INDEX backup_codes_user ON backup_codes(user_id);
+ALTER TABLE client_cards ADD COLUMN owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL;`,
 }
 
 // SchemaVersion — версия схемы в базе; 0 у пустой.

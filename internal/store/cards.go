@@ -59,7 +59,7 @@ func (s *Store) Card(ctx context.Context, node int64, name string) (Card, error)
 	return c, err
 }
 
-// SaveCard создаёт или заменяет карточку.
+// SaveCard создаёт или заменяет карточку; владельца (owner_id) не трогает.
 func (s *Store) SaveCard(ctx context.Context, c Card) error {
 	if c.TrafficPeriod == "" {
 		c.TrafficPeriod = PeriodMonth
@@ -68,7 +68,11 @@ func (s *Store) SaveCard(ctx context.Context, c Card) error {
 	if c.AccessUntil != nil {
 		until = *c.AccessUntil
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT OR REPLACE INTO client_cards (`+cardCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+	// Upsert, а не REPLACE: замена строки стёрла бы owner_id.
+	_, err := s.db.ExecContext(ctx, `INSERT INTO client_cards (`+cardCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(node_id, name) DO UPDATE SET note = excluded.note, access_until = excluded.access_until,
+		  traffic_limit = excluded.traffic_limit, traffic_period = excluded.traffic_period,
+		  auto_block = excluded.auto_block, auto_skip = excluded.auto_skip`,
 		c.Node, c.Name, c.Note, until, c.TrafficLimit, c.TrafficPeriod, c.AutoBlock, c.AutoSkip)
 	return err
 }
