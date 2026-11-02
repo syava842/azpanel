@@ -3,6 +3,7 @@ package install
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -38,6 +39,12 @@ type Options struct {
 	AntiZapretDir string
 	ScriptsDir    string
 	Self          string // путь к запущенному бинарнику
+	// Uninstall: Nginx — уборка строки include и фрагмента (nil — не трогать
+	// nginx); Backup — бэкап AntiZapret перед удалением (nil — без него);
+	// SkipBackup — не делать его, даже если Backup задан.
+	Nginx      *Nginx
+	Backup     func() error
+	SkipBackup bool
 }
 
 func Defaults() Options {
@@ -57,6 +64,8 @@ func Defaults() Options {
 		AntiZapretDir: "/root/antizapret",
 		ScriptsDir:    config.Default().Node.OpenVPNScriptsDir,
 		Self:          self,
+		Nginx:         NewNginx(),
+		Backup:        func() error { return AntiZapretBackup("/root/antizapret") },
 	}
 }
 
@@ -238,9 +247,40 @@ func Uninstall(o Options) error {
 		}
 		what += ", " + paths.Root() + " целиком"
 	}
+	var includeFiles []string
+	nginxOwn := false
+	if o.Nginx != nil {
+		includeFiles = o.Nginx.IncludeFiles()
+		_, serr := o.Nginx.ReadFile(SnippetPath)
+		nginxOwn = serr == nil || len(includeFiles) > 0
+		if nginxOwn {
+			what += ", строка include и фрагмент " + SnippetPath + " в nginx (nginx -t, reload)"
+		}
+	}
+	doBackup := o.Backup != nil && !o.SkipBackup
+	if doBackup {
+		what = "сначала бэкап AntiZapret (client.sh 8) в " + filepath.Join(paths.Backup(), "antizapret") + "; затем " + what
+	}
 	fmt.Fprintf(o.Out, "Будет удалено: %s\n", what)
 	if !o.Yes && !confirm(o.In, o.Out, "Продолжить? [y/N]: ") {
 		return errors.New("удаление отменено")
+	}
+	if doBackup {
+		if err := o.Backup(); err != nil {
+			return fmt.Errorf("бэкап AntiZapret не сделан, ничего не удалено (пропустить — --skip-backup): %w", err)
+		}
+	}
+	if nginxOwn {
+		// Сначала nginx: пока панель жива, сбой уборки не оставляет
+		// висящий proxy_pass в пустоту.
+		if len(includeFiles) == 0 {
+			includeFiles = []string{""}
+		}
+		for _, f := range includeFiles {
+			if err := o.Nginx.Disable(f); err != nil {
+				return fmt.Errorf("nginx: %w", err)
+			}
+		}
 	}
 	if _, err := os.Stat(panelUnit); err == nil {
 		if err := o.Run("systemctl", "disable", "--now", "azpanel-panel"); err != nil {
@@ -275,6 +315,56 @@ func panelListen() string {
 		return cfg.Panel.Listen
 	}
 	return config.Default().Panel.Listen
+}
+
+// IncludeFiles — файлы nginx, где стоит строка include нашего фрагмента.
+func (n *Nginx) IncludeFiles() []string {
+	servers, _ := FindServers(n.dir())
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range servers {
+		if seen[s.File] {
+			continue
+		}
+		seen[s.File] = true
+		if data, err := n.ReadFile(s.File); err == nil && strings.Contains(string(data), includeLine(SnippetPath)) {
+			out = append(out, s.File)
+		}
+	}
+	return out
+}
+
+// AntiZapretBackup — бэкап AntiZapret перед удалением: client.sh 8, свежий
+// архив копируется в backup/antizapret.
+func AntiZapretBackup(azDir string) error {
+	started := time.Now().Add(-2 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, filepath.Join(azDir, "client.sh"), "8")
+	cmd.Dir = azDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("client.sh 8: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	matches, _ := filepath.Glob(filepath.Join(azDir, "backup*.tar.gz"))
+	var newest string
+	var newestTime time.Time
+	for _, m := range matches {
+		if fi, err := os.Stat(m); err == nil && fi.ModTime().After(started) && fi.ModTime().After(newestTime) {
+			newest, newestTime = m, fi.ModTime()
+		}
+	}
+	if newest == "" {
+		return fmt.Errorf("client.sh 8 завершился, но свежего архива backup*.tar.gz в %s нет", azDir)
+	}
+	data, err := os.ReadFile(newest)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(paths.Backup(), "antizapret")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return fsutil.WriteFileAtomic(filepath.Join(dir, "uninstall-"+time.Now().Format("20060102-150405")+".tar.gz"), data, 0o600)
 }
 
 func copyBinary(src, dst string) error {

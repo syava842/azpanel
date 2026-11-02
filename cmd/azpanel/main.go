@@ -60,6 +60,8 @@ func run(args []string) int {
 		return report(runInstall(args[1:]))
 	case "uninstall":
 		return report(runUninstall(args[1:]))
+	case "doctor":
+		return report(cmdDoctor(args[1:], os.Stdout))
 	default:
 		usage()
 		return 2
@@ -155,8 +157,13 @@ func runSessions() error {
 func usage() {
 	fmt.Fprint(os.Stderr, `Использование:
   azpanel version
-  azpanel install [--yes] [--panel]    установить агент узла (--panel — и веб-панель)
-  azpanel uninstall [--yes] [--purge]  удалить (--purge — вместе с /opt/azpanel)
+  azpanel install                      мастер установки (вопросы 1-12, Enter — умолчание)
+  azpanel install --non-interactive    без вопросов: ответы в AZPANEL_MODE, AZPANEL_ACCESS, AZPANEL_DOMAIN,
+                                       AZPANEL_TLS, AZPANEL_ADMIN, ... или флагами --mode, --access, ...
+  azpanel install --yes [--panel]      по-старому: агент узла (--panel — и веб-панель на 127.0.0.1)
+  azpanel uninstall [--yes] [--purge] [--skip-backup]
+                                       удалить (бэкап AntiZapret, юниты, хук, nginx; --purge — и /opt/azpanel)
+  azpanel doctor                       проверка установки (код выхода 1 при проблемах)
   azpanel node                         агент узла (запускает systemd)
   azpanel panel                        веб-панель (запускает systemd)
   azpanel proxy                        агент прокси для VPS с proxy.sh (запускает systemd)
