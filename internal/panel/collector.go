@@ -391,23 +391,38 @@ func (c *Collector) autoBlock(ctx context.Context, now time.Time) error {
 }
 
 // releaseGoneOwners снимает владельца с карточки клиента, которого нет у
-// агента два прохода подряд: иначе клиент, пересозданный на сервере с тем же
-// именем мимо панели, достался бы прежнему владельцу. Один проход не
+// агента два прохода подряд, и гасит его ссылку портала и одноразовые ссылки:
+// иначе клиент, пересозданный на сервере с тем же именем мимо панели, достался
+// бы прежнему владельцу или держателю старой ссылки. Один проход не
 // считается: сбой чтения у агента не должен лишать людей их клиентов.
 func (c *Collector) releaseGoneOwners(ctx context.Context, now time.Time, clients []nodeapi.Client) {
 	rctx, cancel := context.WithTimeout(ctx, stepTimeout)
 	owned, err := c.Store.OwnedClients(rctx, c.NodeID)
+	var linked []string
+	if err == nil {
+		linked, err = c.Store.LinkedClients(rctx, c.NodeID)
+	}
 	cancel()
 	if err != nil {
-		c.log().Warn("сборщик: владельцы клиентов не прочитаны", "err", err)
+		c.log().Warn("сборщик: владельцы и ссылки клиентов не прочитаны", "err", err)
 		return
+	}
+	isOwned := make(map[string]bool, len(owned))
+	for _, name := range owned {
+		isOwned[name] = true
+	}
+	candidates := append([]string(nil), owned...)
+	for _, name := range linked {
+		if !isOwned[name] {
+			candidates = append(candidates, name)
+		}
 	}
 	alive := make(map[string]bool, len(clients))
 	for _, cl := range clients {
 		alive[cl.Name] = true
 	}
 	next := map[string]bool{}
-	for _, name := range owned {
+	for _, name := range candidates {
 		if alive[name] {
 			continue
 		}
@@ -416,16 +431,31 @@ func (c *Collector) releaseGoneOwners(ctx context.Context, now time.Time, client
 			continue
 		}
 		wctx, wcancel := context.WithTimeout(context.WithoutCancel(ctx), dbWriteTimeout)
-		err := c.Store.SetOwner(wctx, c.NodeID, name, nil)
+		err := c.releaseGone(wctx, name, isOwned[name])
 		wcancel()
 		if err != nil {
-			c.log().Warn("сборщик: владелец не снят", "client", name, "err", err)
+			c.log().Warn("сборщик: владелец и ссылки пропавшего клиента не сняты", "client", name, "err", err)
 			next[name] = true
 			continue
 		}
-		c.audit(ctx, now, "owner_cleared", name, "", "владелец снят: клиент пропал")
+		if isOwned[name] {
+			c.audit(ctx, now, "owner_cleared", name, "", "владелец снят: клиент пропал")
+		}
 	}
 	c.goneOwned = next
+}
+
+// releaseGone снимает владельца (если он есть) и все ссылки пропавшего клиента.
+func (c *Collector) releaseGone(ctx context.Context, name string, owned bool) error {
+	if owned {
+		if err := c.Store.SetOwner(ctx, c.NodeID, name, nil); err != nil {
+			return err
+		}
+	}
+	if err := c.Store.DeleteClientLink(ctx, c.NodeID, name); err != nil {
+		return err
+	}
+	return c.Store.DeleteDownloadLinks(ctx, c.NodeID, name)
 }
 
 // agentUnreachable: ошибка — тайм-аут или сбой сети, а не ответ агента

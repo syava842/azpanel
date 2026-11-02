@@ -43,6 +43,18 @@ func issueFor(t *testing.T, st *store.Store, p store.IssueParams) []string {
 	return codes
 }
 
+// unblockAll: тестовый узел отдаёт всех клиентов без блокировки.
+func unblockAll(e *testEnv) {
+	base := e.node.ClientsFn
+	e.node.ClientsFn = func(c context.Context) ([]nodeapi.Client, error) {
+		list, err := base(c)
+		for i := range list {
+			list[i].Blocked = false
+		}
+		return list, err
+	}
+}
+
 func redeem(e *testEnv, c *http.Cookie, csrf, client, code string) *httptest.ResponseRecorder {
 	return post(e, c, "/clients/"+client+"/redeem", url.Values{"csrf": {csrf}, "code": {code}})
 }
@@ -58,6 +70,7 @@ func cardUntil(t *testing.T, st *store.Store, name string) *int64 {
 
 func TestRedeemExtendsFromFutureAndPast(t *testing.T) {
 	e, c, csrf := storeEnv(t)
+	unblockAll(e) // продление работает на клиентах без ручной блокировки
 	ctx := context.Background()
 	st := e.srv.Store
 	st.SaveCard(ctx, store.Card{Node: store.LocalNode, Name: "bob", AccessUntil: ptr(histNow.Unix() + 10*dayS)})
@@ -148,6 +161,7 @@ func TestRedeemCertErrorStillExtends(t *testing.T) {
 
 func TestRedeemUserBoundCodeOnlyForOwnersClients(t *testing.T) {
 	e, c, csrf := storeEnv(t)
+	unblockAll(e) // продление работает на клиентах без ручной блокировки
 	ctx := context.Background()
 	st := e.srv.Store
 	alice, _ := st.CreateUser(ctx, store.User{Login: "alice", Hash: "x", Role: store.RoleUser})
@@ -177,6 +191,7 @@ func TestRedeemUserBoundCodeOnlyForOwnersClients(t *testing.T) {
 
 func TestRedeemOnceAndParallel(t *testing.T) {
 	e, c, csrf := storeEnv(t)
+	unblockAll(e) // продление работает на клиентах без ручной блокировки
 	st := e.srv.Store
 	st.SaveCard(context.Background(), store.Card{Node: store.LocalNode, Name: "bob", AccessUntil: ptr(histNow.Unix() + dayS)})
 	codes := issueFor(t, st, store.IssueParams{Count: 2, Days: 10})
@@ -226,6 +241,7 @@ func TestRedeemClientWithoutLimitKeepsCode(t *testing.T) {
 
 func TestRedeemExtendsOwnerLimit(t *testing.T) {
 	e, _, _, _, bob := userEnv(t)
+	unblockAll(e) // продление работает на клиентах без ручной блокировки
 	st := e.srv.Store
 	e.srv.Now = func() time.Time { return histNow }
 	user, s := e.sessionFor(t, bob, false)

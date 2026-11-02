@@ -115,8 +115,7 @@ type Server struct {
 	pages      map[string]*template.Template
 	registered []string   // шаблоны маршрутов Handler(): сверяются с таблицей прав
 	usersMu    sync.Mutex // действия над пользователями — по одному (защита последнего администратора)
-	redeemMu   sync.Mutex // ввод кодов: проверка срока, гашение и продление — одним куском
-	portalMu   sync.Mutex // ввод кода в портале: счёт попыток и погашение — одним куском
+	attemptMu  keyedMutex // счёт попыток ввода кода: замок на ключ, а не общий на всех
 	access     accessState
 	once       onceStore // секреты «показать один раз»
 
@@ -276,7 +275,14 @@ func (s *Server) headers(next http.Handler) http.Handler {
 		h := w.Header()
 		h.Set("Content-Security-Policy", contentSecurityPolicy)
 		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("Referrer-Policy", "no-referrer")
+		// Портал: форма отправляет свой Origin только при same-origin, иначе
+		// браузеры без Sec-Fetch-Site (Safari до 16.4, адрес без TLS) шлют
+		// Origin: null. Наружу адрес с токеном всё равно не уходит.
+		if isPortalPath(r.URL.Path) {
+			h.Set("Referrer-Policy", "same-origin")
+		} else {
+			h.Set("Referrer-Policy", "no-referrer")
+		}
 		h.Set("Cache-Control", "no-store")
 		next.ServeHTTP(w, r)
 	})

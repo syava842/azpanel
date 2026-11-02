@@ -22,6 +22,7 @@
   </tbody>
 </table>
 </div>
+{{if .BatchesCut}}<p class="muted">Показаны последние 100 пачек.</p>{{end}}
 
 <h2>Коды</h2>
 <form method="get" action="/codes" class="inline">
@@ -53,5 +54,7 @@
   </tbody>
 </table>
 </div>
-{{if .More}}<p class="muted">Показаны первые 500 кодов; сузьте выбор пачкой или состоянием.</p>{{end}}
+{{if or .PrevHref .NextHref}}<p class="muted">Страница {{.Page}}, по {{.PerPage}} кодов.
+  {{if .PrevHref}}<a href="{{.PrevHref}}">← Назад</a>{{end}}
+  {{if .NextHref}}<a href="{{.NextHref}}">Вперёд →</a>{{end}}</p>{{end}}
 {{end}}

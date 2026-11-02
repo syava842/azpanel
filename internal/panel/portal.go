@@ -2,9 +2,11 @@ package panel
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"html/template"
+	"math"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -49,9 +51,28 @@ func (s *Server) publicURLNote() string {
 	return " Адрес панели не задан: укажите panel.public_url в настройках (config.toml), тогда ссылка будет полной."
 }
 
+// sameHostOf: адрес (Origin или Referer) относится к этой же панели: хост
+// запроса или хост panel.public_url (за обратным прокси они различаются).
+func (s *Server) sameHostOf(r *http.Request, raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	if strings.EqualFold(u.Host, r.Host) {
+		return true
+	}
+	if s.PublicURL != "" {
+		p, err := url.Parse(s.PublicURL)
+		return err == nil && p.Host != "" && strings.EqualFold(u.Host, p.Host)
+	}
+	return false
+}
+
 // sameOriginPost: форма портала принимается, только если запрос с этого же
-// сайта (Sec-Fetch-Site same-origin/none) или Origin совпадает с хостом.
-func sameOriginPost(r *http.Request) bool {
+// сайта: Sec-Fetch-Site same-origin/none; без этого заголовка (старые
+// браузеры, адрес без TLS) — Origin этой панели, а если Origin нет вовсе —
+// Referer этой же панели. Origin: null и чужие адреса отклоняются.
+func (s *Server) sameOriginPost(r *http.Request) bool {
 	switch r.Header.Get("Sec-Fetch-Site") {
 	case "same-origin", "none":
 		return true
@@ -59,12 +80,13 @@ func sameOriginPost(r *http.Request) bool {
 	default:
 		return false
 	}
-	o := r.Header.Get("Origin")
-	if o == "" {
-		return false
+	if o := r.Header.Get("Origin"); o != "" {
+		return s.sameHostOf(r, o)
 	}
-	u, err := url.Parse(o)
-	return err == nil && u.Host != "" && strings.EqualFold(u.Host, r.Host)
+	if ref := r.Header.Get("Referer"); ref != "" {
+		return s.sameHostOf(r, ref)
+	}
+	return false
 }
 
 // renderPortal показывает публичную страницу. Сессию панели не трогает: ни
@@ -127,6 +149,18 @@ func (s *Server) portalLinkOf(w http.ResponseWriter, r *http.Request) (store.Por
 		s.Log.Error("ссылка портала не прочитана", "err", err)
 		s.portalError(w, r, http.StatusInternalServerError, "внутренняя ошибка")
 		return store.PortalLink{}, "", false
+	}
+	if link.Kind == store.LinkUser { // отключённый пользователь: портал закрыт той же 404
+		u, err := s.Store.UserByID(r.Context(), link.UserID)
+		if errors.Is(err, store.ErrNotFound) || (err == nil && u.Disabled) {
+			s.portalGone(w, r)
+			return store.PortalLink{}, "", false
+		}
+		if err != nil {
+			s.Log.Error("пользователь ссылки не прочитан", "err", err)
+			s.portalError(w, r, http.StatusInternalServerError, "внутренняя ошибка")
+			return store.PortalLink{}, "", false
+		}
 	}
 	return link, raw, true
 }
@@ -347,10 +381,15 @@ func (s *Server) portalQR(w http.ResponseWriter, r *http.Request) {
 	w.Write(png)
 }
 
+// closedText — сообщение о закрытом вводе с оставшимся временем.
+func closedText(retry time.Duration) string {
+	return fmt.Sprintf("слишком много неверных кодов: ввод закрыт, повторите через %d мин.", int(math.Ceil(retry.Minutes())))
+}
+
 // portalUnlock — POST /p/{token}/unlock: ввод кода продления. Неверные коды
 // считаются по токену портала: пятая ошибка за час закрывает ввод на час.
 func (s *Server) portalUnlock(w http.ResponseWriter, r *http.Request) {
-	if !sameOriginPost(r) {
+	if !s.sameOriginPost(r) {
 		s.portalError(w, r, http.StatusForbidden, "запрос отклонён: отправьте форму со страницы портала")
 		return
 	}
@@ -379,20 +418,25 @@ func (s *Server) portalUnlock(w http.ResponseWriter, r *http.Request) {
 	}
 
 	key := "code:" + link.Hash
-	s.portalMu.Lock()
-	defer s.portalMu.Unlock()
 	now := s.now()
-	n, err := s.Store.Attempts(r.Context(), key, now.Add(-unlockWindow).Unix())
+	ticket, retry, err := s.openAttempt(r.Context(), key, now)
 	if err != nil {
 		s.Log.Error("попытки не прочитаны", "err", err)
 		s.portalError(w, r, http.StatusInternalServerError, "внутренняя ошибка")
 		return
 	}
-	if n >= unlockMax {
-		w.Header().Set("Retry-After", fmt.Sprint(int(unlockWindow.Seconds())))
-		s.portalPage(w, r, link, tokenPath, http.StatusTooManyRequests, "слишком много неверных кодов: ввод закрыт на час")
+	if retry > 0 {
+		w.Header().Set("Retry-After", fmt.Sprint(int(math.Ceil(retry.Seconds()))))
+		s.portalPage(w, r, link, tokenPath, http.StatusTooManyRequests, closedText(retry))
 		return
 	}
+	// дальше замка нет: агент отвечает долго, а резерв попытки уже записан
+	counted := false
+	defer func() {
+		if !counted {
+			s.refundAttempt(context.WithoutCancel(r.Context()), ticket)
+		}
+	}()
 	all, err := s.Node.Clients(r.Context())
 	if err != nil {
 		s.Log.Warn("портал: клиенты агента не получены", "err", err)
@@ -423,13 +467,8 @@ func (s *Server) portalUnlock(w http.ResponseWriter, r *http.Request) {
 	res, err := s.redeemForClient(r.Context(), *cl, owner, r.PostForm.Get("code"))
 	switch {
 	case errors.Is(err, store.ErrCodeInvalid):
-		if aerr := s.Store.Attempt(r.Context(), key, now.Unix()); aerr != nil {
-			s.Log.Warn("попытка не записана", "err", aerr)
-		}
-		if perr := s.Store.PurgeAttempts(r.Context(), now.Add(-attemptsKeep).Unix()); perr != nil {
-			s.Log.Warn("старые попытки не стёрты", "err", perr)
-		}
-		left := unlockMax - (n + 1)
+		counted = true
+		left := s.failAttempt(context.WithoutCancel(r.Context()), ticket, now)
 		msg := fmt.Sprintf("%s. Осталось попыток: %d", store.ErrCodeInvalid.Error(), left)
 		if left == 0 {
 			msg = store.ErrCodeInvalid.Error() + ". Ввод закрыт на час"
@@ -438,6 +477,9 @@ func (s *Server) portalUnlock(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, store.ErrNoLimit):
 		s.portalPage(w, r, link, tokenPath, http.StatusBadRequest, "у клиента нет срока доступа: продлевать нечего")
+		return
+	case errors.Is(err, errManualBlock):
+		s.portalPage(w, r, link, tokenPath, http.StatusBadRequest, errManualBlock.Error())
 		return
 	case err != nil:
 		s.Log.Error("портал: код не применён", "client", name, "err", err)
@@ -504,7 +546,7 @@ func (s *Server) dlPage(w http.ResponseWriter, r *http.Request) {
 // dlDownload — POST /dl/{token}: PIN, погашение и файл. Файл читается у
 // агента до погашения: сбой агента ссылку не сжигает.
 func (s *Server) dlDownload(w http.ResponseWriter, r *http.Request) {
-	if !sameOriginPost(r) {
+	if !s.sameOriginPost(r) {
 		s.portalError(w, r, http.StatusForbidden, "запрос отклонён: отправьте форму со страницы ссылки")
 		return
 	}

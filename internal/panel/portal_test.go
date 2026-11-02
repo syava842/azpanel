@@ -108,7 +108,7 @@ func TestPortalNoSessionNoCookie(t *testing.T) {
 	if sc := rec.Header().Values("Set-Cookie"); len(sc) != 0 {
 		t.Fatalf("портал поставил cookie: %v", sc)
 	}
-	for h, want := range map[string]string{"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"} {
+	for h, want := range map[string]string{"Cache-Control": "no-store", "Referrer-Policy": "same-origin"} {
 		if got := rec.Header().Get(h); got != want {
 			t.Errorf("%s = %q", h, got)
 		}

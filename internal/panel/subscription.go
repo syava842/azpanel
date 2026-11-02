@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"sort"
 	"time"
@@ -62,32 +63,40 @@ type extendResult struct {
 	CertErr       error // сертификат не перевыпущен: срок доступа при этом продлён
 }
 
+// errManualBlock — клиент заблокирован администратором вручную: продление
+// сдвинуло бы срок, но доступа не вернуло, и код не тратится.
+var errManualBlock = errors.New("клиент заблокирован администратором: код не потрачен, обратитесь к администратору")
+
 // redeemForClient гасит код для клиента и продлевает доступ: новый срок =
-// max(сейчас, действующий срок) + дни кода. Сертификат OpenVPN перевыпускается,
-// только если после продления до его конца остаётся меньше 30 дней. owner —
-// владелец клиента (nil — нет): код на конкретного пользователя подходит
-// только его клиентам. Неверный код — store.ErrCodeInvalid; клиент без срока
-// — store.ErrNoLimit, и код при этом не гасится.
+// max(сейчас, действующий срок) + дни кода; гашение и продление — одна
+// транзакция в хранилище. Сертификат OpenVPN перевыпускается, только если
+// после продления до его конца остаётся меньше 30 дней. owner — владелец
+// клиента (nil — нет): код на конкретного пользователя подходит только его
+// клиентам. Неверный код — store.ErrCodeInvalid; клиент без срока —
+// store.ErrNoLimit; клиент под ручной блокировкой — errManualBlock; в обоих
+// последних код не гасится.
 func (s *Server) redeemForClient(ctx context.Context, c nodeapi.Client, owner *int64, code string) (extendResult, error) {
-	s.redeemMu.Lock()
-	defer s.redeemMu.Unlock()
 	now := s.now()
-	eff, err := s.Store.EffectiveUntil(ctx, s.NodeID, c.Name)
+	if c.Blocked {
+		card, err := s.Store.Card(ctx, s.NodeID, c.Name)
+		if err != nil {
+			return extendResult{}, err
+		}
+		if card.AutoBlock == "" {
+			// без срока продлевать нечего — это важнее блокировки
+			if eff, err := s.Store.EffectiveUntil(ctx, s.NodeID, c.Name); err != nil {
+				return extendResult{}, err
+			} else if eff == nil {
+				return extendResult{}, store.ErrNoLimit
+			}
+			return extendResult{}, errManualBlock
+		}
+	}
+	rc, bef, after, err := s.Store.RedeemAndExtend(ctx, code, owner, s.NodeID, c.Name, now.Unix())
 	if err != nil {
 		return extendResult{}, err
 	}
-	if eff == nil {
-		return extendResult{}, store.ErrNoLimit
-	}
-	rc, err := s.Store.RedeemCode(ctx, code, owner, s.NodeID, c.Name, now.Unix())
-	if err != nil {
-		return extendResult{}, err
-	}
-	before, after, err := s.Store.ExtendAccess(ctx, s.NodeID, c.Name, rc.Days, now.Unix())
-	if err != nil {
-		return extendResult{}, fmt.Errorf("код погашен, но срок не продлён: %w", err)
-	}
-	res := extendResult{Before: *before, After: after, Days: rc.Days}
+	res := extendResult{Before: bef, After: after, Days: rc.Days}
 	if c.OpenVPN && c.CertExpires != nil && c.CertExpires.Sub(time.Unix(after, 0)) < certMinRemain {
 		days := int((after-now.Unix())/secondsInDay) + certRenewExtra
 		if _, err := s.Node.Renew(ctx, c.Name, min(days, maxRenewDays)); err != nil {
@@ -195,13 +204,42 @@ func (s *Server) redeemCode(w http.ResponseWriter, r *http.Request) {
 	} else if has {
 		owner = &id
 	}
+	// те же 5 неверных кодов в час, что и в портале, — по пользователю панели
+	sess, _ := session(r)
+	now := s.now()
+	key := fmt.Sprintf("code:user:%d", sess.UserID)
+	ticket, retry, err := s.openAttempt(r.Context(), key, now)
+	if err != nil {
+		s.internalError(w, r, "попытки не прочитаны", err)
+		return
+	}
+	if retry > 0 {
+		w.Header().Set("Retry-After", fmt.Sprint(int(math.Ceil(retry.Seconds()))))
+		s.card(w, r, c, http.StatusTooManyRequests, closedText(retry))
+		return
+	}
+	counted := false
+	defer func() {
+		if !counted {
+			s.refundAttempt(context.WithoutCancel(r.Context()), ticket)
+		}
+	}()
 	res, err := s.redeemForClient(r.Context(), c, owner, r.PostForm.Get("code"))
 	switch {
 	case errors.Is(err, store.ErrCodeInvalid):
-		s.card(w, r, c, http.StatusBadRequest, store.ErrCodeInvalid.Error())
+		counted = true
+		left := s.failAttempt(context.WithoutCancel(r.Context()), ticket, now)
+		msg := fmt.Sprintf("%s. Осталось попыток: %d", store.ErrCodeInvalid.Error(), left)
+		if left == 0 {
+			msg = store.ErrCodeInvalid.Error() + ". Ввод закрыт на час"
+		}
+		s.card(w, r, c, http.StatusBadRequest, msg)
 		return
 	case errors.Is(err, store.ErrNoLimit):
 		s.card(w, r, c, http.StatusBadRequest, "у клиента нет срока доступа: продлевать нечего")
+		return
+	case errors.Is(err, errManualBlock):
+		s.card(w, r, c, http.StatusBadRequest, errManualBlock.Error())
 		return
 	case err != nil:
 		s.Log.Error("код не применён", "client", c.Name, "err", err)

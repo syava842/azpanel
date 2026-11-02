@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -15,7 +16,9 @@ import (
 const (
 	maxIssueCodes = 500  // кодов в одной пачке (в хранилище допустимо больше)
 	maxCodeDays   = 3650 // дней продления в одном коде
-	maxCodeRows   = 500  // строк списка кодов на странице
+	codesPerPage  = 100  // строк списка кодов на странице
+	maxCodePage   = 1000 // дальше этой страницы список не листается (сужайте фильтром)
+	maxBatchRows  = 100  // пачек в сводке
 )
 
 var (
@@ -75,13 +78,10 @@ func whoText(uid *int64, logins map[int64]string) string {
 	return "удалённый пользователь"
 }
 
+// codesPage — список пачек и кодов. Сводки по пачкам считает база, коды
+// читаются постранично (codesPerPage), поэтому страница не дорожает с годами.
 func (s *Server) codesPage(w http.ResponseWriter, r *http.Request) {
 	now := s.now().Unix()
-	all, err := s.Store.Codes(r.Context(), store.CodeFilter{}, now)
-	if err != nil {
-		s.internalError(w, r, "коды не прочитаны", err)
-		return
-	}
 	logins, _, err := s.loginsByID(r)
 	if err != nil {
 		s.internalError(w, r, "пользователи не прочитаны", err)
@@ -92,34 +92,35 @@ func (s *Server) codesPage(w http.ResponseWriter, r *http.Request) {
 	if _, ok := codeStateText[stateFilter]; !ok {
 		stateFilter = ""
 	}
-	batches := map[string]*batchRow{}
-	var order []string
-	rows := []codeRow{}
-	for _, c := range all { // новые сверху
+	page := 1
+	if n, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && n > 1 && n <= maxCodePage {
+		page = n
+	}
+	stats, err := s.Store.Batches(r.Context(), now, maxBatchRows)
+	if err != nil {
+		s.internalError(w, r, "пачки не прочитаны", err)
+		return
+	}
+	brs := make([]batchRow, 0, len(stats))
+	for _, b := range stats {
+		brs = append(brs, batchRow{ID: b.Batch, Created: unixText(b.Created), By: b.CreatedBy, Who: whoText(b.UserID, logins),
+			Days: strconv.FormatInt(b.Days, 10), Total: b.Total, Active: b.Active, Used: b.Used, Expired: b.Expired,
+			Revoked: b.Revoked, CanRevoke: b.Active+b.Expired > 0})
+	}
+	// на одну строку больше страницы: так видно, есть ли следующая
+	list, err := s.Store.CodesPage(r.Context(), store.CodeFilter{Batch: batchFilter, State: stateFilter}, now,
+		codesPerPage+1, (page-1)*codesPerPage)
+	if err != nil {
+		s.internalError(w, r, "коды не прочитаны", err)
+		return
+	}
+	more := len(list) > codesPerPage
+	if more {
+		list = list[:codesPerPage]
+	}
+	rows := make([]codeRow, 0, len(list))
+	for _, c := range list {
 		st := c.State(now)
-		b := batches[c.Batch]
-		if b == nil {
-			b = &batchRow{ID: c.Batch, Created: unixText(c.Created), By: c.CreatedBy, Who: whoText(c.UserID, logins),
-				Days: strconv.FormatInt(c.Days, 10)}
-			batches[c.Batch] = b
-			order = append(order, c.Batch)
-		}
-		b.Total++
-		switch st {
-		case store.CodeActive:
-			b.Active++
-			b.CanRevoke = true
-		case store.CodeUsed:
-			b.Used++
-		case store.CodeExpired:
-			b.Expired++
-			b.CanRevoke = true
-		case store.CodeRevoked:
-			b.Revoked++
-		}
-		if (batchFilter != "" && c.Batch != batchFilter) || (stateFilter != "" && st != stateFilter) || len(rows) >= maxCodeRows {
-			continue
-		}
 		row := codeRow{ID: c.ID, Batch: c.Batch, State: st, StateText: codeStateText[st], Days: c.Days,
 			ValidUntil: time.Unix(c.ValidUntil, 0).UTC().Format("2006-01-02") + " UTC",
 			Who:        whoText(c.UserID, logins), CanRevoke: st == store.CodeActive || st == store.CodeExpired}
@@ -131,16 +132,35 @@ func (s *Server) codesPage(w http.ResponseWriter, r *http.Request) {
 		}
 		rows = append(rows, row)
 	}
-	brs := make([]batchRow, 0, len(order))
-	for _, id := range order {
-		brs = append(brs, *batches[id])
-	}
 	states := make([]map[string]any, 0, len(codeStates))
 	for _, st := range codeStates {
 		states = append(states, map[string]any{"Value": st, "Text": codeStateText[st], "Selected": st == stateFilter})
 	}
-	s.render(w, r, http.StatusOK, "codes", map[string]any{"Batches": brs, "Codes": rows, "Batch": batchFilter,
-		"States": states, "More": len(rows) >= maxCodeRows})
+	pageHref := func(n int) string {
+		q := url.Values{}
+		if batchFilter != "" {
+			q.Set("batch", batchFilter)
+		}
+		if stateFilter != "" {
+			q.Set("state", stateFilter)
+		}
+		if n > 1 {
+			q.Set("page", strconv.Itoa(n))
+		}
+		if len(q) == 0 {
+			return "/codes"
+		}
+		return "/codes?" + q.Encode()
+	}
+	data := map[string]any{"Batches": brs, "Codes": rows, "Batch": batchFilter, "States": states,
+		"Page": page, "BatchesCut": len(stats) >= maxBatchRows, "PerPage": codesPerPage}
+	if page > 1 {
+		data["PrevHref"] = pageHref(page - 1)
+	}
+	if more && page < maxCodePage {
+		data["NextHref"] = pageHref(page + 1)
+	}
+	s.render(w, r, http.StatusOK, "codes", data)
 }
 
 type codeForm struct{ Count, Days, Until, User string }

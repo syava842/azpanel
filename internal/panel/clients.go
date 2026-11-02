@@ -292,6 +292,9 @@ func (s *Server) dropStaleHistory(r *http.Request, name string) {
 	if err := s.Store.DeleteClientLink(r.Context(), s.NodeID, name); err != nil {
 		s.Log.Warn("старая ссылка портала не удалена", "client", name, "err", err)
 	}
+	if err := s.Store.DeleteDownloadLinks(r.Context(), s.NodeID, name); err != nil {
+		s.Log.Warn("старые одноразовые ссылки не удалены", "client", name, "err", err)
+	}
 }
 
 func (s *Server) user(r *http.Request) string {
@@ -504,6 +507,12 @@ func (s *Server) renew(w http.ResponseWriter, r *http.Request) {
 		s.failed(w, r, c, "renew", err)
 		return
 	}
+	// файл профиля OpenVPN после перевыпуска другой: прежние одноразовые ссылки гасим
+	if s.Store != nil && c.OpenVPN {
+		if err := s.Store.DeleteDownloadLinks(r.Context(), s.NodeID, c.Name); err != nil {
+			s.Log.Warn("одноразовые ссылки клиента не удалены", "client", c.Name, "err", err)
+		}
+	}
 	before, _ := certText(c.CertExpires)
 	s.done(w, r, c, "renew", before, fmt.Sprintf("продлён на %d дн.", days), "renewed", days)
 }
@@ -591,6 +600,10 @@ func (s *Server) deleteClient(w http.ResponseWriter, r *http.Request) {
 		// ссылка портала клиента уходит вместе с ним
 		if err := s.Store.DeleteClientLink(r.Context(), s.NodeID, c.Name); err != nil {
 			s.Log.Warn("ссылка портала клиента не удалена", "client", c.Name, "err", err)
+		}
+		// одноразовые ссылки ищут профиль по имени: пересозданный клиент отдал бы новые ключи
+		if err := s.Store.DeleteDownloadLinks(r.Context(), s.NodeID, c.Name); err != nil {
+			s.Log.Warn("одноразовые ссылки клиента не удалены", "client", c.Name, "err", err)
 		}
 	}
 	redirectMsg(w, r, "/", "deleted")
