@@ -1,8 +1,8 @@
 package antizapret
 
 import (
+	"errors"
 	"fmt"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -138,7 +138,22 @@ type SetupShPlan struct {
 	Problems []string
 }
 
-var plainValueRe = regexp.MustCompile(`^[\x21-\x7e]*$`)
+// checkEnvKind — проверка значения ключа окружения setup.sh по той же таблице
+// видов, что PUT /v1/setup. Ключа нет в таблице — отказ.
+func checkEnvKind(key, v string) error {
+	def, ok := LookupSetupKey(key)
+	if !ok {
+		return errors.New("ключа нет в таблице видов")
+	}
+	if def.Kind == "" {
+		return nil // вид у ключа задаёт сам вопрос setup.sh (shPrompt.accepts)
+	}
+	if def.Kind == SetupHost {
+		return errors.New("адрес идёт вводом, а не окружением")
+	}
+	_, err := checkKindValue(def, v)
+	return err
+}
 
 // PlanSetupSh собирает окружение и ввод для setup.sh из текущего файла setup
 // и изменений overrides (ключи с применением reinstall). Значение, которое
@@ -207,6 +222,10 @@ func PlanSetupSh(setup, overrides map[string]string) SetupShPlan {
 			p.Problems = append(p.Problems, fmt.Sprintf("%s=%q: setup.sh принимает только %s", q.key, v, q.describe()))
 			continue
 		}
+		if err := checkEnvKind(q.key, v); err != nil {
+			p.Problems = append(p.Problems, fmt.Sprintf("%s=%q: %v", q.key, v, err))
+			continue
+		}
 		env[q.key] = v
 	}
 	for _, k := range shPassthrough {
@@ -214,8 +233,10 @@ func PlanSetupSh(setup, overrides map[string]string) SetupShPlan {
 		if !ok {
 			continue
 		}
-		if !plainValueRe.MatchString(v) {
-			p.Problems = append(p.Problems, fmt.Sprintf("%s: недопустимые символы в значении", k))
+		// Значение попадает в файл setup и подключается через «source»: любой
+		// символ оболочки — исполнение кода от root. Только вид из таблицы.
+		if err := checkEnvKind(k, v); err != nil {
+			p.Problems = append(p.Problems, fmt.Sprintf("%s=%q: %v", k, v, err))
 			continue
 		}
 		env[k] = v

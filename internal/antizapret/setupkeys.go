@@ -417,6 +417,13 @@ func checkSetupValue(key, v string) (string, error) {
 	if !def.Editable {
 		return "", errors.New("меняется переустановкой AntiZapret (setup.sh)")
 	}
+	return checkKindValue(def, v)
+}
+
+// checkKindValue проверяет значение только по виду ключа (y/n, перечень, целое,
+// адрес) — без оглядки на Editable. По ней же PlanSetupSh проверяет окружение
+// setup.sh: правила для API и для установки не расходятся.
+func checkKindValue(def SetupKey, v string) (string, error) {
 	switch def.Kind {
 	case SetupYN:
 		if v != "y" && v != "n" {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"os/exec"
-	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -163,69 +162,30 @@ func TestPlanSetupShOverrides(t *testing.T) {
 // Сверка таблицы вопросов с настоящим setup.sh. Упала после обновления
 // testdata/setup.sh — setup.sh изменил вопросы: правьте shPrompts.
 func TestShPromptsMatchSetupSh(t *testing.T) {
-	text := readSetupSh(t)
-	lines := strings.Split(text, "\n")
-	untilRe := regexp.MustCompile(`^until \[\[ "\$([A-Z_]+)" =~ (.+?) \]\]`)
-	readRe := regexp.MustCompile(`-e -i (\S+) ([A-Z_]+)$`)
-	type q struct{ pattern, def string }
-	got := map[string]q{}
-	for i, l := range lines {
-		m := untilRe.FindStringSubmatch(l)
-		if m == nil || m[1] == "MTU" || i+1 >= len(lines) {
-			continue
-		}
-		r := readRe.FindStringSubmatch(lines[i+1])
-		if r == nil || r[2] != m[1] {
-			t.Fatalf("строка %d: после until %s не нашёлся read с -i", i+1, m[1])
-		}
-		def := strings.Trim(r[1], `"`)
-		got[m[1]] = q{pattern: m[2], def: def}
+	if problems := CheckSetupShQuestions(readSetupSh(t)); len(problems) > 0 {
+		t.Fatalf("setup.sh и таблица вопросов расходятся:\n%s", strings.Join(problems, "\n"))
 	}
-	want := map[string]q{}
-	for _, p := range shPrompts {
-		want[p.key] = q{pattern: p.pattern, def: p.def}
-	}
-	for k, w := range want {
-		g, ok := got[k]
-		if !ok {
-			t.Errorf("%s: в setup.sh такого вопроса нет", k)
-			continue
-		}
-		if g != w {
-			t.Errorf("%s: setup.sh %+v, таблица %+v", k, g, w)
-		}
-	}
-	for k := range got {
-		if _, ok := want[k]; !ok {
-			t.Errorf("%s: вопрос есть в setup.sh, в таблице нет", k)
-		}
-	}
+}
 
-	// Все ключи, которые setup.sh переносит из окружения в setup.
-	saved := regexp.MustCompile(`(?m)^([A-Z_]+)=\$([A-Z_]+)$`)
-	wantSaved := map[string]bool{shKeyMTU: true, shKeyOpenVPNHost: true, shKeyWireGuardHost: true}
-	for _, p := range shPrompts {
-		wantSaved[p.key] = true
+// Сверка в коде ловит то, что меняет upstream: новый вопрос, другой шаблон,
+// переставленный ввод.
+func TestCheckSetupShQuestionsCatchesDrift(t *testing.T) {
+	text := readSetupSh(t)
+	cases := map[string]string{
+		"новый вопрос":     strings.Replace(text, "until [[ \"$ROUTE_ALL\" =~ (y|n) ]]", "until [[ \"$ROUTE_ALL\" =~ (y|n|a) ]]", 1),
+		"нет вопроса":      strings.Replace(text, "until [[ \"$TORRENT_GUARD\" =~ (y|n) ]]", "until [[ \"$NEW_ASK\" =~ (y|n) ]]", 1),
+		"ввод переставлен": strings.Replace(text, "OPENVPN_HOST\ndo", "OPENVPN_HOST_X\ndo", 1),
 	}
-	for _, k := range shPassthrough {
-		wantSaved[k] = true
-	}
-	gotSaved := map[string]bool{}
-	for _, m := range saved.FindAllStringSubmatch(text, -1) {
-		if m[1] != m[2] {
-			t.Errorf("%s=$%s: ключ записывается из другой переменной", m[1], m[2])
+	for name, mod := range cases {
+		if mod == text {
+			t.Fatalf("%s: подмена не сработала — поправьте тест", name)
 		}
-		gotSaved[m[1]] = true
-	}
-	for k := range gotSaved {
-		if !wantSaved[k] {
-			t.Errorf("%s: setup.sh берёт его из окружения, а таблица не передаёт", k)
+		if len(CheckSetupShQuestions(mod)) == 0 {
+			t.Errorf("%s: расхождение не замечено", name)
 		}
 	}
-	for k := range wantSaved {
-		if !gotSaved[k] {
-			t.Errorf("%s: в таблице есть, а setup.sh в setup не записывает", k)
-		}
+	if len(CheckSetupShQuestions("#!/bin/bash\necho hi\n")) == 0 {
+		t.Error("чужой скрипт признан совпавшим")
 	}
 }
 
@@ -253,10 +213,7 @@ func TestSetupShFacts(t *testing.T) {
 // Настоящий bash проходит секцию вопросов setup.sh с нашими окружением и
 // вводом: ни один вопрос не остаётся без ответа, ввод читается в нужном порядке.
 func TestPlanDrivesRealQuestionSection(t *testing.T) {
-	bash, err := exec.LookPath("bash")
-	if err != nil {
-		t.Skip("нет bash")
-	}
+	bash := workingBash(t)
 	text := readSetupSh(t)
 	start := strings.Index(text, "# Спрашиваем о настройках")
 	end := strings.Index(text, "echo 'Installation, please wait...'")
@@ -289,10 +246,7 @@ func TestPlanDrivesRealQuestionSection(t *testing.T) {
 // Значение вне шаблона зациклило бы вопрос на конце ввода: без таблицы-защиты
 // bash крутился бы до предела времени. Проверка, что зацикливание реально.
 func TestInvalidValueLoopsSetupShQuestion(t *testing.T) {
-	bash, err := exec.LookPath("bash")
-	if err != nil {
-		t.Skip("нет bash")
-	}
+	bash := workingBash(t)
 	script := "until [[ \"$X\" =~ (y|n) ]]; do\n\tread -rp 'q: ' -e -i y X\ndone\necho done\n"
 	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
 	defer cancel()
@@ -305,4 +259,22 @@ func TestInvalidValueLoopsSetupShQuestion(t *testing.T) {
 	if ctx.Err() == nil {
 		t.Fatal("ожидалось зависание до предела времени")
 	}
+}
+
+// workingBash — путь к bash, который действительно запускается. На Windows
+// «bash» из System32 — заглушка WSL без дистрибутива: тесты, которым нужен
+// настоящий bash, там пропускаются, а не падают.
+func workingBash(t *testing.T) string {
+	t.Helper()
+	path, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("нет bash")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path, "-c", "echo ok").Output()
+	if err != nil || strings.TrimSpace(string(out)) != "ok" {
+		t.Skipf("bash %s не запускается (%v)", path, err)
+	}
+	return path
 }

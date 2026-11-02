@@ -345,3 +345,41 @@ func TestInstalledFileCorruptIsEmpty(t *testing.T) {
 		t.Fatalf("%+v %v", in, err)
 	}
 }
+
+// Коммит из форка тянется по тому же адресу архива, что и коммит upstream:
+// принадлежность main проверяется через compare, а не по форме sha.
+func TestInMain(t *testing.T) {
+	inHistory := strings.Repeat("a", 40)
+	old := strings.Repeat("b", 40)
+	fork := strings.Repeat("c", 40)
+	var compares atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/commits"):
+			json.NewEncoder(w).Encode([]map[string]any{{"sha": inHistory, "commit": map[string]any{"message": "x"}}})
+		case strings.Contains(r.URL.Path, "/compare/"+old+"..."):
+			compares.Add(1)
+			json.NewEncoder(w).Encode(map[string]string{"status": "behind"})
+		case strings.Contains(r.URL.Path, "/compare/"+fork+"..."):
+			compares.Add(1)
+			json.NewEncoder(w).Encode(map[string]string{"status": "diverged"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	g := &GitHub{BaseURL: srv.URL}
+	ctx := context.Background()
+	for sha, want := range map[string]bool{inHistory: true, old: true, fork: false, strings.Repeat("d", 40): false} {
+		got, err := g.InMain(ctx, sha)
+		if err != nil || got != want {
+			t.Errorf("%s: %v %v, ждали %v", sha[:1], got, err, want)
+		}
+	}
+	before := compares.Load()
+	g.InMain(ctx, old)
+	g.InMain(ctx, fork)
+	if compares.Load() != before {
+		t.Error("ответ compare не кешируется")
+	}
+}

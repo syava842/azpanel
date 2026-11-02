@@ -86,6 +86,9 @@ type GitHub struct {
 	history map[string]cacheEntry[[]string]
 	// found — результат поиска по хешам; ключ — хеши и вершина main.
 	found map[string]cacheEntry[string]
+	// inMain — принадлежность коммита истории main (compare API); ответ
+	// «входит» неизменен, «не входит» кешируется на час.
+	inMain map[string]cacheEntry[bool]
 }
 
 type cacheEntry[T any] struct {
@@ -478,4 +481,47 @@ func hashesEqual(a, b map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// InMain — входит ли коммит sha в историю ветки main. Сначала смотрится кеш
+// последних коммитов, затем compare/<sha>...main: «behind» и «identical»
+// значат, что коммит предок main. Объекты форков GitHub отдаёт по тому же
+// адресу архива, что и коммиты upstream, поэтому одной формы sha мало.
+func (g *GitHub) InMain(ctx context.Context, sha string) (bool, error) {
+	commits, err := g.Commits(ctx)
+	if err == nil {
+		for _, c := range commits {
+			if c.SHA == sha {
+				return true, nil
+			}
+		}
+	}
+	g.mu.Lock()
+	if e, ok := g.inMain[sha]; ok && (e.val || g.fresh(e.at)) {
+		g.mu.Unlock()
+		return e.val, nil
+	}
+	g.mu.Unlock()
+	var cmp struct {
+		Status string `json:"status"`
+	}
+	if err := g.get(ctx, "/compare/"+url.PathEscape(sha)+"..."+upstreamBranch, nil, &cmp); err != nil {
+		if strings.Contains(err.Error(), "GitHub ответил 404") || strings.Contains(err.Error(), "GitHub ответил 422") {
+			g.rememberInMain(sha, false)
+			return false, nil // такого коммита нет в репозитории
+		}
+		return false, err
+	}
+	ok := cmp.Status == "behind" || cmp.Status == "identical"
+	g.rememberInMain(sha, ok)
+	return ok, nil
+}
+
+func (g *GitHub) rememberInMain(sha string, ok bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.inMain == nil {
+		g.inMain = map[string]cacheEntry[bool]{}
+	}
+	g.inMain[sha] = cacheEntry[bool]{at: g.now(), val: ok, ok: true}
 }

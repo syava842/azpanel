@@ -74,10 +74,7 @@ func TestInsertWithoutShebangAndEmpty(t *testing.T) {
 // Строку хука исполняет настоящий bash, в том числе с set -e: отказ — только
 // код 3, любой другой код скрипт не обрывает.
 func TestConnectBlockSemanticsInBash(t *testing.T) {
-	bash, err := exec.LookPath("bash")
-	if err != nil {
-		t.Skip("bash не найден")
-	}
+	bash := workingBash(t)
 	for _, mode := range []string{"", "-e"} {
 		for code, wantRC := range map[int]int{0: 0, 1: 0, 2: 0, 3: 1, 127: 0} {
 			script := "f() { return " + strconv.Itoa(code) + "; }\n" + strings.Replace(ConnectBlock("f"), "f hook connect", "f", 1) + "exit 0\n"
