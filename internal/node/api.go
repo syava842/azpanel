@@ -42,6 +42,7 @@ type API struct {
 	SocketDir     string
 	Sampler       *sysinfo.Sampler
 	Denials       *Denials // отказы хука; nil — журнал пуст
+	Tasks         *Tasks   // фоновые задачи AntiZapret
 	Services      func(ctx context.Context) ([]sysinfo.Service, error)
 	WGShow        func(ctx context.Context, iface string) ([]antizapret.WGPeer, error)
 	Kill          func(sock, name string, timeout time.Duration) (int, error)
@@ -69,6 +70,11 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/sessions", a.sessions)
 	mux.HandleFunc("GET /v1/system", a.system)
 	mux.HandleFunc("GET /v1/denials", a.denials)
+	mux.HandleFunc("GET /v1/tasks", a.listTasks)
+	mux.HandleFunc("GET /v1/tasks/{id}", a.getTask)
+	mux.HandleFunc("POST /v1/routing/apply", a.applyRouting)
+	mux.HandleFunc("POST /v1/antizapret/restart", a.restartAntiZapret)
+	mux.HandleFunc("POST /v1/clients/profiles/rebuild", a.rebuildProfiles)
 	return a.auth(mux)
 }
 
@@ -149,6 +155,9 @@ func (a *API) createClient(w http.ResponseWriter, r *http.Request) {
 	}
 	a.ops.Lock()
 	defer a.ops.Unlock()
+	if a.profilesBusy(w) {
+		return
+	}
 	c, _, err := a.find(req.Name)
 	if err != nil {
 		a.fail(w, "состав клиентов не прочитан", err)
@@ -210,6 +219,9 @@ func (a *API) renew(w http.ResponseWriter, r *http.Request) {
 	}
 	a.ops.Lock()
 	defer a.ops.Unlock()
+	if a.profilesBusy(w) {
+		return
+	}
 	c, found, err := a.find(name)
 	if err != nil {
 		a.fail(w, "состав клиентов не прочитан", err)
@@ -236,6 +248,9 @@ func (a *API) deleteClient(w http.ResponseWriter, r *http.Request) {
 	kind, name := r.PathValue("kind"), r.PathValue("name")
 	a.ops.Lock()
 	defer a.ops.Unlock()
+	if a.profilesBusy(w) {
+		return
+	}
 	c, _, err := a.find(name)
 	if err != nil {
 		a.fail(w, "состав клиентов не прочитан", err)

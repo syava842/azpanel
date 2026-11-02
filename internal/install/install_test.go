@@ -245,3 +245,15 @@ func TestUninstallRemovesPanelUnit(t *testing.T) {
 		t.Fatalf("порядок остановки: %v", *calls)
 	}
 }
+
+// Агент запускает фоновые задачи через systemd-run: тот говорит с PID 1 по
+// D-Bus (AF_UNIX), поэтому юнит агента не должен сужать семейства адресов
+// или изолировать сеть и пользователей.
+func TestNodeUnitAllowsSystemdRun(t *testing.T) {
+	u := NodeUnit("/opt/azpanel/bin/azpanel")
+	for _, bad := range []string{"RestrictAddressFamilies", "PrivateNetwork", "PrivateUsers", "ProtectKernelModules", "SystemCallFilter"} {
+		if strings.Contains(u, bad) {
+			t.Errorf("в юните агента %s: systemd-run может не достучаться до D-Bus", bad)
+		}
+	}
+}

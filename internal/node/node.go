@@ -87,7 +87,7 @@ func Run(ctx context.Context, cfg config.Config, version string, ensureHook func
 	}
 	go p.Run(ctx, time.Duration(cfg.Node.PollSeconds)*time.Second)
 	if cfg.Node.APIListen != "" {
-		stop, err := startAPI(cfg, version, tr, denials, log)
+		stop, err := startAPI(ctx, cfg, version, tr, denials, log)
 		if err != nil {
 			log.Error("API агента не запущен — панель узел не увидит, хук работает", "err", err)
 		} else {
@@ -116,7 +116,7 @@ func Run(ctx context.Context, cfg config.Config, version string, ensureHook func
 // startAPI запускает HTTP API для панели. Его сбой не трогает хук: лимиты
 // и блокировки работают и без API. При остановке службы systemd гасит и
 // дочерние процессы — client.sh, запущенный в эту секунду, оборвётся.
-func startAPI(cfg config.Config, version string, tr *Tracker, denials *Denials, log *slog.Logger) (func(), error) {
+func startAPI(ctx context.Context, cfg config.Config, version string, tr *Tracker, denials *Denials, log *slog.Logger) (func(), error) {
 	sec, err := secrets.Load(paths.SecretsFile())
 	if err != nil {
 		return nil, err
@@ -129,7 +129,16 @@ func startAPI(cfg config.Config, version string, tr *Tracker, denials *Denials, 
 		return nil, errors.New("NODE_TOKEN в secrets.env не 64 hex-символа — удалите строку и повторите azpanel install")
 	}
 	n := cfg.Node
+	tasks := &Tasks{
+		Dir: n.AntiZapretDir, LogDir: filepath.Join(paths.Log(), "tasks"),
+		StatePath: filepath.Join(paths.Data(), "tasks.json"), Log: log, Now: time.Now,
+	}
+	if err := tasks.Load(); err != nil {
+		log.Error("список задач не прочитан — задачи начаты заново", "err", err)
+	}
+	go tasks.RunRotation(ctx)
 	api := &API{
+		Tasks: tasks,
 		Token: token, Version: version, Tracker: tr, LimitsPath: paths.LimitsFile(),
 		Inventory:     antizapret.Inventory{PKI: n.EasyRSAPKI, WireGuardDir: n.WireGuardDir},
 		ClientSh:      &antizapret.ClientSh{Dir: n.AntiZapretDir, Timeout: time.Duration(n.ClientShTimeoutS) * time.Second},

@@ -101,6 +101,23 @@ type Result struct {
 	Killed int    `json:"killed,omitempty"` // разорвано сессий при блокировке
 }
 
+// Task — фоновая задача AntiZapret (doall, restart, profiles).
+type Task struct {
+	ID          string     `json:"id"`   // 12 hex
+	Kind        string     `json:"kind"` // doall | restart | profiles
+	Started     time.Time  `json:"started"`
+	Finished    *time.Time `json:"finished,omitempty"`
+	ExitCode    *int       `json:"exit_code,omitempty"`
+	Interrupted bool       `json:"interrupted,omitempty"` // агент перезапускался: код выхода неизвестен
+	Log         string     `json:"log"`                   // путь журнала на узле
+}
+
+// TaskDetail — задача и хвост её журнала (до 64 КБ).
+type TaskDetail struct {
+	Task
+	Tail string `json:"tail"`
+}
+
 type ErrorBody struct {
 	Error string `json:"error"`
 }
@@ -190,6 +207,35 @@ func (c *HTTPClient) SetLimit(ctx context.Context, name string, limit int) error
 func (c *HTTPClient) SetBlocked(ctx context.Context, name string, blocked bool) (Result, error) {
 	var v Result
 	return v, c.do(ctx, http.MethodPut, "/v1/clients/"+url.PathEscape(name)+"/blocked", SetBlocked{Blocked: blocked}, &v)
+}
+
+// Tasks — последние задачи, новые сверху.
+func (c *HTTPClient) Tasks(ctx context.Context) ([]Task, error) {
+	var v []Task
+	return v, c.do(ctx, http.MethodGet, "/v1/tasks", nil, &v)
+}
+
+func (c *HTTPClient) Task(ctx context.Context, id string) (TaskDetail, error) {
+	var v TaskDetail
+	return v, c.do(ctx, http.MethodGet, "/v1/tasks/"+url.PathEscape(id), nil, &v)
+}
+
+// ApplyRouting запускает doall.sh; 409, если уже идёт другая задача.
+func (c *HTTPClient) ApplyRouting(ctx context.Context) (Task, error) {
+	var v Task
+	return v, c.do(ctx, http.MethodPost, "/v1/routing/apply", nil, &v)
+}
+
+// RestartAntiZapret перезапускает службу antizapret задачей.
+func (c *HTTPClient) RestartAntiZapret(ctx context.Context) (Task, error) {
+	var v Task
+	return v, c.do(ctx, http.MethodPost, "/v1/antizapret/restart", nil, &v)
+}
+
+// RebuildProfiles запускает client.sh 7 — пересоздание профилей клиентов.
+func (c *HTTPClient) RebuildProfiles(ctx context.Context) (Task, error) {
+	var v Task
+	return v, c.do(ctx, http.MethodPost, "/v1/clients/profiles/rebuild", nil, &v)
 }
 
 func (c *HTTPClient) do(ctx context.Context, method, path string, in, out any) error {
