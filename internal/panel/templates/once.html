@@ -1,0 +1,9 @@
+{{define "content"}}
+<h1>{{.Title}}</h1>
+<div class="card">
+  <p>{{.Note}}</p>
+  <pre>{{range .Items}}{{.}}
+{{end}}</pre>
+  <p><a href="{{.Back}}">{{.BackText}}</a></p>
+</div>
+{{end}}

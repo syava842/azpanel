@@ -1,0 +1,40 @@
+{{define "content"}}
+<h1>Пользователи</h1>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Логин</th><th>Роль</th><th>2FA</th><th>Состояние</th><th>Клиентов</th><th>Последний вход</th></tr></thead>
+  <tbody>
+  {{range .Rows}}
+  <tr>
+    <td><a href="/users/{{.ID}}">{{.Login}}</a></td>
+    <td>{{.Role}}</td>
+    <td>{{if .Has2FA}}да{{else}}нет{{end}}</td>
+    <td>{{if .Disabled}}<span class="bad">отключён</span>{{else}}активен{{end}}</td>
+    <td>{{.Clients}}</td>
+    <td>{{.LastLogin}}</td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+
+<h2>Новый пользователь</h2>
+<form method="post" action="/users" class="card narrow">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label>Логин (строчные латинские буквы, цифры, _ . -; 3-32 знака)
+    <input type="text" name="login" value="{{.FormLogin}}" autocomplete="off" required>
+  </label>
+  <label>Роль
+    <select name="role">
+      <option value="user">пользователь</option>
+      <option value="admin">администратор</option>
+    </select>
+  </label>
+  <label>Пароль (от 10 символов, буквы и цифры; пусто — сгенерировать)
+    <input type="password" name="password" autocomplete="new-password">
+  </label>
+  <label><input type="checkbox" name="generate" value="1"> Сгенерировать пароль (16 знаков, показывается один раз)</label>
+  <label><input type="checkbox" name="must_change" value="1" checked> Сменить пароль при первом входе</label>
+  <button type="submit">Создать</button>
+</form>
+{{end}}

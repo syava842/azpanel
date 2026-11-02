@@ -13,9 +13,13 @@
   {{if .User}}
   <nav>
     <a href="/">Клиенты</a>
+    {{if .IsAdmin}}
     <a href="/monitor">Сейчас</a>
     <a href="/audit">Журнал</a>
-    {{if .IsAdmin}}<a href="/settings/access">Доступ</a>{{end}}
+    <a href="/users">Пользователи</a>
+    <a href="/settings/access">Доступ</a>
+    {{end}}
+    <a href="/account">Аккаунт ({{.User}})</a>
   </nav>
   <form method="post" action="/logout" class="inline">
     <input type="hidden" name="csrf" value="{{.CSRF}}">

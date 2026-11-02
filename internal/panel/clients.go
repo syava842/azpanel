@@ -87,10 +87,11 @@ func (s *Server) lookup(w http.ResponseWriter, r *http.Request) (nodeapi.Client,
 		return nodeapi.Client{}, false
 	}
 	for _, c := range list {
-		if c.Name == name {
+		if c.Name == name && s.visibleClient(r, name) {
 			return c, true
 		}
 	}
+	// чужой клиент отвечает так же, как несуществующий
 	s.errorPage(w, r, http.StatusNotFound, "клиент не найден")
 	return nodeapi.Client{}, false
 }
@@ -124,8 +125,21 @@ func (s *Server) clientsList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+	var owned map[string]bool // для пользователя — только его клиенты
+	if sess, _ := session(r); !sess.IsAdmin() {
+		var err error
+		if s.Store == nil {
+			owned = map[string]bool{}
+		} else if owned, err = s.ownedNames(r, sess.UserID); err != nil {
+			s.internalError(w, r, "клиенты пользователя не прочитаны", err)
+			return
+		}
+	}
 	rows := []clientRow{}
 	for _, c := range list {
+		if owned != nil && !owned[c.Name] {
+			continue
+		}
 		if q != "" && !strings.Contains(strings.ToLower(c.Name), q) {
 			continue
 		}
@@ -288,6 +302,18 @@ var msgTexts = map[string]string{
 	"blocked":    "заблокирован, разорвано сессий: %d",
 	"unblocked":  "разблокирован",
 	"card_saved": "карточка сохранена",
+
+	"password_changed": "пароль изменён, остальные сессии завершены",
+	"2fa_off":          "двухфакторная проверка выключена",
+	"session_revoked":  "сессия отозвана",
+	"user_created":     "пользователь создан",
+	"user_deleted":     "пользователь удалён",
+	"user_disabled":    "пользователь отключён, его сессии завершены",
+	"user_enabled":     "пользователь включён",
+	"role_set":         "роль изменена",
+	"2fa_reset":        "2FA сброшена, сессии завершены",
+	"owner_set":        "владелец назначен",
+	"owner_cleared":    "владелец снят",
 }
 
 // redirectMsg ведёт на страницу с уведомлением по коду; n — число для
@@ -322,6 +348,11 @@ func flashText(r *http.Request) string {
 func (s *Server) card(w http.ResponseWriter, r *http.Request, c nodeapi.Client, status int, errText string) {
 	data := map[string]any{"Client": c, "Name": c.Name, "Href": clientHref(c.Name), "NotOnlyOVPN": notOnlyOVPN,
 		"WGOnlyBlock": c.Blocked && !c.OpenVPN}
+	sess, _ := session(r)
+	data["CanManage"] = sess.IsAdmin()
+	if sess.IsAdmin() {
+		s.addOwner(r, c, data)
+	}
 	data["Cert"], data["CertSoon"] = certText(c.CertExpires)
 	data["Limit"] = "—"
 	if c.Limit > 0 {
@@ -533,4 +564,74 @@ func (s *Server) deleteClient(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	redirectMsg(w, r, "/", "deleted")
+}
+
+// addOwner кладёт в данные карточки выбор владельца: пользователей и
+// текущего владельца.
+func (s *Server) addOwner(r *http.Request, c nodeapi.Client, data map[string]any) {
+	if s.Store == nil {
+		return
+	}
+	users, err := s.Store.Users(r.Context())
+	if err != nil {
+		s.Log.Warn("пользователи не прочитаны", "err", err)
+		return
+	}
+	owner, has, err := s.Store.OwnerOf(r.Context(), s.NodeID, c.Name)
+	if err != nil {
+		s.Log.Warn("владелец клиента не прочитан", "client", c.Name, "err", err)
+		return
+	}
+	type option struct {
+		ID       int64
+		Login    string
+		Selected bool
+	}
+	opts := []option{}
+	for _, u := range users {
+		opts = append(opts, option{u.ID, u.Login, has && u.ID == owner})
+	}
+	data["Owners"], data["NoOwner"] = opts, !has
+}
+
+// setOwner назначает владельца клиента; пустое значение снимает.
+func (s *Server) setOwner(w http.ResponseWriter, r *http.Request) {
+	c, ok := s.lookup(w, r)
+	if !ok {
+		return
+	}
+	if s.Store == nil {
+		s.errorPage(w, r, http.StatusServiceUnavailable, "база панели недоступна")
+		return
+	}
+	var uid *int64
+	login := "нет"
+	if v := strings.TrimSpace(r.PostForm.Get("owner")); v != "" {
+		id, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			s.card(w, r, c, http.StatusBadRequest, "владелец: неверный пользователь")
+			return
+		}
+		u, err := s.Store.UserByID(r.Context(), id)
+		if err != nil {
+			s.card(w, r, c, http.StatusBadRequest, "владелец: такого пользователя нет")
+			return
+		}
+		uid, login = &u.ID, u.Login
+	}
+	before := "нет"
+	if old, has, err := s.Store.OwnerOf(r.Context(), s.NodeID, c.Name); err == nil && has {
+		if u, err := s.Store.UserByID(r.Context(), old); err == nil {
+			before = u.Login
+		}
+	}
+	if err := s.Store.SetOwner(r.Context(), s.NodeID, c.Name, uid); err != nil {
+		s.internalError(w, r, "владелец не сохранён", err)
+		return
+	}
+	code := "owner_cleared"
+	if uid != nil {
+		code = "owner_set"
+	}
+	s.done(w, r, c, "owner", before, login, code)
 }

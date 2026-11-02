@@ -90,8 +90,10 @@ type Server struct {
 	ConfigFile   string
 	NoConfigFile bool
 
-	pages  map[string]*template.Template
-	access accessState
+	pages      map[string]*template.Template
+	registered []string   // шаблоны маршрутов Handler(): сверяются с таблицей прав
+	usersMu    sync.Mutex // действия над пользователями — по одному (защита последнего администратора)
+	access     accessState
 
 	loginSem      chan struct{} // ограничивает одновременные bcrypt
 	mfaMu         sync.Mutex    // сверка кода 2FA и запись принятого шага — одним куском
@@ -123,7 +125,8 @@ func (s *Server) Handler() http.Handler {
 	s.initAccess()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+	s.registered = nil
+	s.route(mux, "GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Write([]byte("ok\n"))
 	})
@@ -131,36 +134,57 @@ func (s *Server) Handler() http.Handler {
 	if err != nil {
 		panic(err)
 	}
-	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(sub)))
-	mux.HandleFunc("GET /login", s.loginForm)
-	mux.HandleFunc("POST /login", s.loginSubmit)
-	mux.Handle("GET /login/2fa", s.guard(s.mfaForm, guardMFA))
-	mux.Handle("POST /login/2fa", s.guard(s.mfaSubmit, guardMFA))
-	mux.HandleFunc("POST /logout", s.logoutRoute)
+	s.route(mux, "GET /static/", http.StripPrefix("/static/", http.FileServerFS(sub)).ServeHTTP)
+	s.route(mux, "GET /login", s.loginForm)
+	s.route(mux, "POST /login", s.loginSubmit)
+	s.route(mux, "GET /login/2fa", s.mfaForm)
+	s.route(mux, "POST /login/2fa", s.mfaSubmit)
+	s.route(mux, "POST /logout", s.logoutRoute)
 
-	// Настройки: только администратор. Задача 4 внесёт эти маршруты в таблицу прав.
-	mux.Handle("GET /settings/access", s.adminOnly(s.accessPage))
-	mux.Handle("POST /settings/access", s.adminOnly(s.accessSave))
-	mux.Handle("POST /settings/access/confirm", s.adminOnly(s.accessConfirm))
+	// Аккаунт и пользователи.
+	s.route(mux, "GET /account", s.accountPage)
+	s.route(mux, "GET /account/password", s.accountPage)
+	s.route(mux, "POST /account/password", s.accountPassword)
+	s.route(mux, "GET /account/2fa", s.account2FAForm)
+	s.route(mux, "POST /account/2fa", s.account2FAEnable)
+	s.route(mux, "POST /account/2fa/disable", s.account2FADisable)
+	s.route(mux, "POST /account/2fa/codes", s.accountNewCodes)
+	s.route(mux, "POST /account/sessions/revoke", s.accountRevoke)
+	s.route(mux, "POST /account/sessions/all", s.accountLogoutAll)
 
-	// Всё остальное — за входом; новые страницы добавляются выше
-	// этих двух строк.
-	mux.Handle("GET /monitor", s.protect(s.monitor))
-	mux.Handle("GET /audit", s.protect(s.auditPage))
-	mux.Handle("GET /clients/new", s.protect(s.newForm))
-	mux.Handle("POST /clients", s.protect(s.createClient))
-	mux.Handle("GET /clients/{name}", s.protect(s.clientCard))
-	mux.Handle("GET /clients/{name}/profiles/{kind}/{variant}/{file}", s.protect(s.profileFile))
-	mux.Handle("GET /clients/{name}/qr/{kind}/{variant}/{file}", s.protect(s.profileQR))
-	mux.Handle("POST /clients/{name}/renew", s.protect(s.renew))
-	mux.Handle("POST /clients/{name}/limit", s.protect(s.setLimit))
-	mux.Handle("POST /clients/{name}/card", s.protect(s.saveCard))
-	mux.Handle("POST /clients/{name}/block", s.protect(s.block))
-	mux.Handle("POST /clients/{name}/delete", s.protect(s.deleteClient))
-	mux.Handle("GET /{$}", s.protect(s.clientsList))
-	mux.Handle("/", s.protect(func(w http.ResponseWriter, r *http.Request) {
+	s.route(mux, "GET /users", s.usersPage)
+	s.route(mux, "POST /users", s.userCreate)
+	s.route(mux, "GET /users/{id}", s.userPage)
+	s.route(mux, "POST /users/{id}/role", s.userRole)
+	s.route(mux, "POST /users/{id}/disabled", s.userDisabled)
+	s.route(mux, "POST /users/{id}/password", s.userResetPassword)
+	s.route(mux, "POST /users/{id}/2fa/reset", s.userReset2FA)
+	s.route(mux, "POST /users/{id}/sessions/revoke", s.userRevoke)
+	s.route(mux, "POST /users/{id}/delete", s.userDelete)
+
+	// Настройки: только администратор.
+	s.route(mux, "GET /settings/access", s.accessPage)
+	s.route(mux, "POST /settings/access", s.accessSave)
+	s.route(mux, "POST /settings/access/confirm", s.accessConfirm)
+
+	// Всё остальное — за входом; права каждого маршрута — в таблице routes.
+	s.route(mux, "GET /monitor", s.monitor)
+	s.route(mux, "GET /audit", s.auditPage)
+	s.route(mux, "GET /clients/new", s.newForm)
+	s.route(mux, "POST /clients", s.createClient)
+	s.route(mux, "GET /clients/{name}", s.clientCard)
+	s.route(mux, "GET /clients/{name}/profiles/{kind}/{variant}/{file}", s.profileFile)
+	s.route(mux, "GET /clients/{name}/qr/{kind}/{variant}/{file}", s.profileQR)
+	s.route(mux, "POST /clients/{name}/renew", s.renew)
+	s.route(mux, "POST /clients/{name}/limit", s.setLimit)
+	s.route(mux, "POST /clients/{name}/card", s.saveCard)
+	s.route(mux, "POST /clients/{name}/block", s.block)
+	s.route(mux, "POST /clients/{name}/delete", s.deleteClient)
+	s.route(mux, "POST /clients/{name}/owner", s.setOwner)
+	s.route(mux, "GET /{$}", s.clientsList)
+	s.route(mux, "/", func(w http.ResponseWriter, r *http.Request) {
 		s.errorPage(w, r, http.StatusNotFound, "страница не найдена")
-	}))
+	})
 	return s.headers(s.allowGate(mux))
 }
 

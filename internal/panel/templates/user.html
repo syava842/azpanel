@@ -1,0 +1,74 @@
+{{define "content"}}
+<h1>{{.U.Login}}</h1>
+<p><a href="/users">К списку пользователей</a></p>
+<div class="card">
+  <p>Роль: {{.RoleText}}; 2FA: {{if .Has2FA}}включена{{else}}выключена{{end}};
+  состояние: {{if .U.Disabled}}<span class="bad">отключён</span>{{else}}активен{{end}}{{if .U.MustChange}}; ждёт смены пароля{{end}}</p>
+</div>
+
+<h2>Роль и доступ</h2>
+<div class="card actions">
+  <form method="post" action="{{.Href}}/role">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label>Роль
+      <select name="role">
+        <option value="user"{{if not .IsAdminRole}} selected{{end}}>пользователь</option>
+        <option value="admin"{{if .IsAdminRole}} selected{{end}}>администратор</option>
+      </select>
+    </label>
+    <button type="submit">Сохранить роль</button>
+  </form>
+  <form method="post" action="{{.Href}}/disabled">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <input type="hidden" name="disabled" value="{{if .U.Disabled}}0{{else}}1{{end}}">
+    <button type="submit">{{if .U.Disabled}}Включить{{else}}Отключить{{end}}</button>
+  </form>
+  <form method="post" action="{{.Href}}/password">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <button type="submit">Сбросить пароль</button>
+    <p class="muted">Новый пароль показывается один раз; все сессии пользователя завершаются.</p>
+  </form>
+  {{if .Has2FA}}
+  <form method="post" action="{{.Href}}/2fa/reset">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <button type="submit">Сбросить 2FA</button>
+  </form>
+  {{end}}
+</div>
+
+<h2>Клиенты</h2>
+<ul>
+  {{range .Clients}}<li><a href="{{.Href}}">{{.Name}}</a></li>
+  {{else}}<li class="muted">Клиентов нет. Владельца назначают на карточке клиента.</li>{{end}}
+</ul>
+
+<h2>Сессии</h2>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Адрес</th><th>Браузер</th><th>Создана</th><th>Последняя активность</th><th></th></tr></thead>
+  <tbody>
+  {{range .Sessions}}
+  <tr>
+    <td>{{.IP}}</td><td>{{.Agent}}</td><td>{{.Created}}</td><td>{{.Seen}}</td>
+    <td><form method="post" action="{{$.Href}}/sessions/revoke" class="inline">
+      <input type="hidden" name="csrf" value="{{$.CSRF}}">
+      <input type="hidden" name="session" value="{{.ID}}">
+      <button type="submit" class="link">Отозвать</button>
+    </form></td>
+  </tr>
+  {{else}}
+  <tr><td colspan="5" class="muted">Активных сессий нет.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+
+<h2>Удаление</h2>
+<form method="post" action="{{.Href}}/delete" class="card narrow">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label>Чтобы удалить пользователя, впишите его логин
+    <input type="text" name="confirm" autocomplete="off" required>
+  </label>
+  <button type="submit" class="danger">Удалить</button>
+</form>
+{{end}}

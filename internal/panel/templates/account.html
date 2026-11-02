@@ -1,0 +1,74 @@
+{{define "content"}}
+<h1>Аккаунт</h1>
+<div class="card">
+  <p>Логин: <b>{{.Login}}</b>, роль: {{.RoleText}}</p>
+  {{if .MustChange}}<p class="warn">Нужно сменить пароль.</p>{{end}}
+</div>
+
+<h2>Пароль</h2>
+<form method="post" action="/account/password" class="card narrow">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label>Текущий пароль
+    <input type="password" name="old" autocomplete="current-password" required>
+  </label>
+  <label>Новый пароль (от 10 символов, буквы и цифры)
+    <input type="password" name="new" autocomplete="new-password" required>
+  </label>
+  <label>Новый пароль ещё раз
+    <input type="password" name="new2" autocomplete="new-password" required>
+  </label>
+  <button type="submit">Сменить пароль</button>
+  <p class="muted">Остальные сессии будут завершены.</p>
+</form>
+
+<h2>Двухфакторная проверка</h2>
+<div class="card">
+  {{if .Has2FA}}
+  <p class="ok">Включена.</p>
+  <form method="post" action="/account/2fa/codes">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label>Пароль
+      <input type="password" name="password" autocomplete="current-password" required>
+    </label>
+    <button type="submit">Выпустить новые резервные коды</button>
+  </form>
+  <form method="post" action="/account/2fa/disable">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label>Пароль
+      <input type="password" name="password" autocomplete="current-password" required>
+    </label>
+    <label>Код из приложения или резервный код
+      <input type="text" name="code" autocomplete="one-time-code" required>
+    </label>
+    <button type="submit" class="danger">Выключить</button>
+  </form>
+  {{else}}
+  <p>Выключена.</p>
+  {{if .Can2FA}}<a class="button" href="/account/2fa">Включить</a>{{else}}<p class="muted">Недоступна: в секретах панели нет PANEL_DATA_KEY.</p>{{end}}
+  {{end}}
+</div>
+
+<h2>Сессии</h2>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Адрес</th><th>Браузер</th><th>Создана</th><th>Последняя активность</th><th></th></tr></thead>
+  <tbody>
+  {{range .Sessions}}
+  <tr>
+    <td>{{.IP}}</td><td>{{.Agent}}</td><td>{{.Created}}</td><td>{{.Seen}}</td>
+    <td>{{if .Current}}<span class="muted">текущая</span>{{else}}
+      <form method="post" action="/account/sessions/revoke" class="inline">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+        <input type="hidden" name="session" value="{{.ID}}">
+        <button type="submit" class="link">Отозвать</button>
+      </form>{{end}}</td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+<form method="post" action="/account/sessions/all">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <button type="submit">Выйти везде</button>
+</form>
+{{end}}

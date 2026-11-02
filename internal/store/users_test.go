@@ -186,3 +186,19 @@ func TestSaveCardKeepsOwner(t *testing.T) {
 		t.Fatalf("SaveCard стёрла владельца: %+v", refs)
 	}
 }
+
+func TestOwnerOf(t *testing.T) {
+	s := open(t)
+	u := mkUser(t, s, "bob", RoleUser)
+	if _, ok, err := s.OwnerOf(ctx, LocalNode, "c1"); err != nil || ok {
+		t.Fatalf("без карточки: ok=%v err=%v", ok, err)
+	}
+	s.SetOwner(ctx, LocalNode, "c1", &u.ID)
+	if id, ok, err := s.OwnerOf(ctx, LocalNode, "c1"); err != nil || !ok || id != u.ID {
+		t.Fatalf("id=%d ok=%v err=%v", id, ok, err)
+	}
+	s.SetOwner(ctx, LocalNode, "c1", nil)
+	if _, ok, _ := s.OwnerOf(ctx, LocalNode, "c1"); ok {
+		t.Fatal("владелец не снят")
+	}
+}

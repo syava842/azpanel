@@ -1,0 +1,16 @@
+{{define "content"}}
+<h1>Включение двухфакторной проверки</h1>
+<div class="card">
+  <p>Отсканируйте QR-код приложением-аутентификатором или введите секрет вручную, затем подтвердите кодом из приложения.</p>
+  <p><img src="{{.QR}}" alt="QR-код для приложения-аутентификатора" width="256" height="256"></p>
+  <p>Секрет: <code>{{.Secret}}</code></p>
+  <form method="post" action="/account/2fa">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <input type="hidden" name="sealed" value="{{.Sealed}}">
+    <label>Код из приложения
+      <input type="text" name="code" inputmode="numeric" autocomplete="one-time-code" autofocus required>
+    </label>
+    <button type="submit">Подтвердить и включить</button>
+  </form>
+</div>
+{{end}}

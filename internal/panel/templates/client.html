@@ -21,6 +21,13 @@
 {{end}}
 
 <h2>Карточка</h2>
+{{if not .CanManage}}
+<div class="card">
+  {{if .CardForm.Note}}<p>Заметка: {{.CardForm.Note}}</p>{{end}}
+  <p>Доступ до: {{if .CardForm.Until}}{{.CardForm.Until}}{{else}}без срока{{end}}</p>
+  <p>Лимит трафика: {{if eq .CardForm.LimitGB "0"}}без лимита{{else}}{{.CardForm.LimitGB}} ГБ{{end}} ({{if eq .CardForm.Period "day"}}за сутки{{else if eq .CardForm.Period "week"}}за неделю{{else}}за месяц{{end}})</p>
+</div>
+{{else}}
 <div class="card">
   <form method="post" action="{{.Href}}/card">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
@@ -41,6 +48,22 @@
       </select>
     </label>
     <button type="submit">Сохранить карточку</button>
+  </form>
+</div>
+{{end}}
+{{end}}
+{{if and .CanManage .Owners}}
+<h2>Владелец</h2>
+<div class="card">
+  <form method="post" action="{{.Href}}/owner">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label>Владелец клиента (видит его карточку, профили и трафик)
+      <select name="owner">
+        <option value=""{{if .NoOwner}} selected{{end}}>нет</option>
+        {{range .Owners}}<option value="{{.ID}}"{{if .Selected}} selected{{end}}>{{.Login}}</option>{{end}}
+      </select>
+    </label>
+    <button type="submit">Сохранить владельца</button>
   </form>
 </div>
 {{end}}
@@ -70,6 +93,7 @@
   {{end}}
 </ul>
 
+{{if .CanManage}}
 <h2>Действия</h2>
 <div class="card actions">
   {{if .Client.OpenVPN}}
@@ -118,4 +142,5 @@
   </form>
   {{end}}
 </div>
+{{end}}
 {{end}}

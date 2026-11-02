@@ -212,3 +212,16 @@ func (s *Store) ClientsOf(ctx context.Context, userID int64) ([]ClientRef, error
 	}
 	return out, rows.Err()
 }
+
+// OwnerOf — владелец клиента; ok=false, если владельца нет.
+func (s *Store) OwnerOf(ctx context.Context, node int64, client string) (userID int64, ok bool, err error) {
+	var id sql.NullInt64
+	err = s.db.QueryRowContext(ctx, `SELECT owner_id FROM client_cards WHERE node_id = ? AND name = ?`, node, client).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return id.Int64, id.Valid, nil
+}

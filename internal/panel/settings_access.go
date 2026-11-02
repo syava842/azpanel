@@ -18,19 +18,6 @@ const (
 	pendingCheckEvery = 5 * time.Second   // как часто проверяются сроки
 )
 
-// adminOnly — маршрут только для администратора (403 иначе). Страницы
-// настроек пока подключены через него; задача 4 переносит их в общую
-// таблицу прав, и эта обёртка уйдёт вместе с остальными проверками.
-func (s *Server) adminOnly(h http.HandlerFunc) http.Handler {
-	return s.protect(func(w http.ResponseWriter, r *http.Request) {
-		if sess, _ := session(r); !sess.IsAdmin() {
-			s.errorPage(w, r, http.StatusForbidden, "доступно только администратору")
-			return
-		}
-		h(w, r)
-	})
-}
-
 // accessState — состояние белого списка и таймера; заводится один раз.
 type accessState struct {
 	once sync.Once
