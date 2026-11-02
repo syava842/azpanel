@@ -16,6 +16,8 @@ import (
 	"github.com/syava842/azpanel/internal/paths"
 	"github.com/syava842/azpanel/internal/secrets"
 	"github.com/syava842/azpanel/internal/sysinfo"
+	"github.com/syava842/azpanel/internal/update"
+	"github.com/syava842/azpanel/internal/updateapi"
 )
 
 // Run — режим «azpanel proxy»: API агента прокси, пока не отменён ctx.
@@ -46,6 +48,13 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		Sampler:   &sysinfo.Sampler{Proc: "/proc", DiskPath: "/"},
 		Log:       log,
 		Now:       time.Now,
+	}
+	api.Update = &updateapi.Service{
+		Root: paths.Root(), Pub: update.ReleasePublicKey, Self: paths.Binary(),
+		ParamsDir: filepath.Join(paths.Data(), "params"),
+		StageDir:  filepath.Join(paths.Data(), "update", "stage"),
+		Version:   version, Log: log,
+		Launch: SelfUpdateLauncher(nil, filepath.Join(paths.Log(), "selfupdate.log"), log, nil),
 	}
 	lns, err := listen(cfg.Proxy, log)
 	if err != nil {

@@ -75,6 +75,10 @@ func report(err error) int {
 	case errors.Is(err, errUsage):
 		usage()
 		return 2
+	case errors.As(err, new(exitCodeError)):
+		var ec exitCodeError
+		errors.As(err, &ec)
+		return ec.code
 	default:
 		fmt.Fprintln(os.Stderr, "azpanel:", err)
 		return 1

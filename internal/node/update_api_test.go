@@ -44,8 +44,41 @@ func newUpdEnv(t *testing.T) updEnv {
 	u := updEnv{apiEnv: e, f: f, tk: tk, root: root, pub: pub, priv: priv,
 		stage: filepath.Join(root, "data", "update", "stage"), params: filepath.Join(root, "data", "params")}
 	e.api.Version = "0.9.0"
-	e.api.Update = &UpdateService{Root: root, Pub: pub, Self: "/opt/azpanel/bin/azpanel", ParamsDir: u.params, StageDir: u.stage}
+	e.api.Update = &UpdateService{Root: root, Pub: pub, Self: "/opt/azpanel/bin/azpanel", ParamsDir: u.params, StageDir: u.stage, Exec: migrateExec(config.Migrate)}
 	return u
+}
+
+// migrateExec подменяет запуск нового бинарника: `internal migrate-config`
+// отвечает так, как отвечает настоящий (код 3 и JSON при вопросах).
+func migrateExec(migrate func([]byte, map[string]string) ([]byte, []config.Question, error)) update.ExecFunc {
+	return func(_ context.Context, _ string, args ...string) (update.ExecResult, error) {
+		arg := func(name string) string {
+			for i, a := range args {
+				if a == name && i+1 < len(args) {
+					return args[i+1]
+				}
+			}
+			return ""
+		}
+		cfg, _ := os.ReadFile(arg("--in"))
+		var answers map[string]string
+		ans, _ := os.ReadFile(arg("--answers"))
+		json.Unmarshal(ans, &answers)
+		out, _, err := migrate(cfg, answers)
+		var qe *config.QuestionsError
+		switch {
+		case errors.As(err, &qe):
+			var reply update.MigrateReply
+			for _, q := range qe.Questions {
+				reply.Questions = append(reply.Questions, update.MigrateQuestion{Key: q.Key, Text: q.Text})
+			}
+			data, _ := json.Marshal(reply)
+			return update.ExecResult{Stdout: data, Code: update.MigrateExitQuestions}, nil
+		case err != nil:
+			return update.ExecResult{Stderr: []byte(err.Error()), Code: 1}, nil
+		}
+		return update.ExecResult{Stdout: out}, nil
+	}
 }
 
 func (u updEnv) release(t *testing.T, ver string, key ed25519.PrivateKey, pad int) nodeapi.UpdateRequest {
@@ -155,9 +188,9 @@ func TestUpdateRejectsTamperedArchiveAndStaleVersion(t *testing.T) {
 func TestUpdateQuestionsComeBackAs409(t *testing.T) {
 	u := newUpdEnv(t)
 	q := config.Question{Key: "node.x", Text: "значение?"}
-	u.api.Update.Migrate = func([]byte, map[string]string) ([]byte, []config.Question, error) {
+	u.api.Update.Exec = migrateExec(func([]byte, map[string]string) ([]byte, []config.Question, error) {
 		return nil, []config.Question{q}, &config.QuestionsError{Questions: []config.Question{q}}
-	}
+	})
 	_, err := u.client.Update(context.Background(), u.release(t, "0.9.1", u.priv, 10))
 	var ae *nodeapi.Error
 	if status(err) != 409 || !errors.As(err, &ae) || len(ae.Questions) != 1 || ae.Questions[0].Key != "node.x" || ae.Questions[0].Text != "значение?" {

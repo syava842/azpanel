@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -100,6 +101,31 @@ func TestUpdateRefusesDevAndNoToken(t *testing.T) {
 	}
 }
 
+// migrateExec подменяет запуск распакованного нового бинарника: отвечает так,
+// как `azpanel internal migrate-config` (код 3 и JSON при вопросах).
+func migrateExec(migrate func([]byte, map[string]string) ([]byte, []config.Question, error)) update.ExecFunc {
+	return func(_ context.Context, _ string, args ...string) (update.ExecResult, error) {
+		cfg, _ := os.ReadFile(args[3])
+		var answers map[string]string
+		ans, _ := os.ReadFile(args[5])
+		json.Unmarshal(ans, &answers)
+		out, _, err := migrate(cfg, answers)
+		var qe *config.QuestionsError
+		switch {
+		case errors.As(err, &qe):
+			var reply update.MigrateReply
+			for _, q := range qe.Questions {
+				reply.Questions = append(reply.Questions, update.MigrateQuestion{Key: q.Key, Text: q.Text})
+			}
+			data, _ := json.Marshal(reply)
+			return update.ExecResult{Stdout: data, Code: update.MigrateExitQuestions}, nil
+		case err != nil:
+			return update.ExecResult{Stderr: []byte(err.Error()), Code: 1}, nil
+		}
+		return update.ExecResult{Stdout: out}, nil
+	}
+}
+
 func fakeEnv(t *testing.T, pub ed25519.PublicKey, migrate func([]byte, map[string]string) ([]byte, []config.Question, error)) (*update.Env, string) {
 	root := t.TempDir()
 	for rel, c := range map[string]string{"bin/azpanel": "\x7fELF-old", "etc/config.toml": "a = 1\n"} {
@@ -107,8 +133,12 @@ func fakeEnv(t *testing.T, pub ed25519.PublicKey, migrate func([]byte, map[strin
 		os.MkdirAll(filepath.Dir(p), 0o755)
 		os.WriteFile(p, []byte(c), 0o755)
 	}
+	if migrate == nil {
+		migrate = config.Migrate
+	}
 	return &update.Env{
-		Root: root, Version: "0.9.0", Pub: pub, Arch: runtime.GOARCH, Migrate: migrate,
+		Root: root, Version: "0.9.0", Pub: pub, Arch: runtime.GOARCH, Exec: migrateExec(migrate),
+		Checks:     []update.Check{func(context.Context, string) error { return nil }},
 		Systemctl:  func(context.Context, ...string) error { return nil },
 		HealthWait: time.Second,
 	}, root
@@ -207,7 +237,7 @@ func TestHealthChecksAgentVersion(t *testing.T) {
 	addr := strings.TrimPrefix(srv.URL, "http://")
 	cfg := config.Default()
 	cfg.Panel.Listen, cfg.Node.APIListen = addr, addr
-	checks := healthChecks(cfg, "tok", true, []string{"azpanel-node", "azpanel-panel"})
+	checks := healthChecks(cfg, "tok", []string{"azpanel-node", "azpanel-panel"})
 	if len(checks) != 2 {
 		t.Fatalf("проверок %d", len(checks))
 	}

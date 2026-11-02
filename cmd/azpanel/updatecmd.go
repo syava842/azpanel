@@ -6,8 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/syava842/azpanel/internal/config"
@@ -104,7 +107,7 @@ func runUpdate(args []string, in io.Reader, out io.Writer, d updateDeps) error {
 	for {
 		// Предварительная проверка ничего не меняет, поэтому вопросы можно
 		// задавать сколько нужно.
-		_, err := env.Preflight(input)
+		_, err := env.Preflight(ctx, input)
 		var qe *config.QuestionsError
 		if !errors.As(err, &qe) {
 			if err != nil {
@@ -124,11 +127,31 @@ func runUpdate(args []string, in io.Reader, out io.Writer, d updateDeps) error {
 			}
 		}
 	}
-	// Ctrl+C во время замены оставил бы систему наполовину обновлённой.
+	// Ctrl+C, обрыв SSH (SIGHUP) и SIGTERM во время замены оставили бы
+	// систему наполовину обновлённой: с этого места сигналы игнорируются до
+	// конца обновления или отката.
+	restore := protectFromSignals()
+	defer restore()
 	res, err := env.Apply(context.WithoutCancel(ctx), input)
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "Обновлено: %s -> %s. Бэкап: %s\n", res.From, res.To, res.Backup)
 	return nil
+}
+
+// protectFromSignals игнорирует SIGINT, SIGTERM, SIGHUP и SIGPIPE на время
+// замены бинарника и возвращает функцию, которая возвращает прежнее
+// поведение. SIGPIPE: оборванный SSH закрывает stdout, и первая же запись
+// в него убила бы процесс посреди отката.
+//
+// Выбор пути: можно было запускать Apply отдельной задачей systemd-run, как у
+// агента, но тогда CLI превращается в наблюдателя за чужим процессом (файлы
+// параметров, журнал, опрос итога) — вторая машина состояний ради случая,
+// который закрывается игнорированием сигналов. Остаётся SIGKILL (его не
+// перехватить) и потеря питания; от обоих спасает бэкап и ручной откат.
+func protectFromSignals() func() {
+	sigs := []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGPIPE}
+	signal.Ignore(sigs...)
+	return func() { signal.Reset(sigs...) }
 }

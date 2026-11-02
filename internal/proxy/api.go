@@ -16,6 +16,7 @@ import (
 	"github.com/syava842/azpanel/internal/nodeapi"
 	"github.com/syava842/azpanel/internal/proxyapi"
 	"github.com/syava842/azpanel/internal/sysinfo"
+	"github.com/syava842/azpanel/internal/updateapi"
 )
 
 const maxAPIBody = 64 << 10
@@ -28,8 +29,11 @@ type API struct {
 	Apply     *Applier
 	Conntrack func(ctx context.Context) (io.ReadCloser, error)
 	Sampler   *sysinfo.Sampler
-	Log       *slog.Logger
-	Now       func() time.Time
+	// Update — самообновление (POST /v1/update) тем же кодом, что у агента
+	// узла; nil — маршруты не регистрируются.
+	Update *updateapi.Service
+	Log    *slog.Logger
+	Now    func() time.Time
 }
 
 func (a *API) Handler() http.Handler {
@@ -38,6 +42,10 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/proxy/state", a.state)
 	mux.HandleFunc("GET /v1/proxy/conntrack", a.conntrack)
 	mux.HandleFunc("PUT /v1/proxy/target", a.setTarget)
+	if a.Update != nil {
+		mux.HandleFunc("POST /v1/update", a.Update.Post)
+		mux.HandleFunc("GET /v1/update/result", a.Update.Result)
+	}
 	return a.auth(mux)
 }
 
@@ -50,7 +58,11 @@ func (a *API) auth(next http.Handler) http.Handler {
 			writeErr(w, http.StatusUnauthorized, "нужен токен узла")
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, maxAPIBody)
+		limit := int64(maxAPIBody)
+		if r.URL.Path == "/v1/update" && r.Method == http.MethodPost {
+			limit = nodeapi.MaxUpdateBody // архив релиза не влезает в 64 КБ
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		next.ServeHTTP(w, r)
 	})
 }

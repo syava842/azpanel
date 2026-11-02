@@ -15,10 +15,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
-	"github.com/syava842/azpanel/internal/config"
 	"github.com/syava842/azpanel/internal/fsutil"
 )
 
@@ -64,8 +64,18 @@ type Env struct {
 	Pub     ed25519.PublicKey
 	Arch    string   // пусто — runtime.GOARCH
 	Units   []string // службы этого хоста, перезапускаются в этом порядке
-	// Migrate — миграции конфига; nil — config.Migrate.
-	Migrate func(data []byte, answers map[string]string) ([]byte, []config.Question, error)
+	// Exec запускает исполняемые файлы: распакованный НОВЫЙ бинарник для
+	// миграции конфига (`internal migrate-config`) и установленный для
+	// проверки версии. nil — настоящий запуск.
+	Exec ExecFunc
+	// WorkDir — где временно лежит распакованный новый бинарник; пусто —
+	// data/update/tmp. Агент ставит свой каталог подготовки.
+	WorkDir string
+	// VersionCheck добавляет к Checks проверку `azpanel version`; без Checks
+	// она (и is-active каждой службы) включается сама.
+	VersionCheck bool
+	// KeepBackups — сколько бэкапов update-*.tar.gz оставлять; 0 — 3.
+	KeepBackups int
 	// BackupDB пишет согласованный снимок базы src в dst (VACUUM INTO).
 	// nil — базу не снимать.
 	BackupDB func(ctx context.Context, src, dst string) error
@@ -184,7 +194,12 @@ func extractBinary(archive []byte) ([]byte, error) {
 // прошла — откат из бэкапа и ошибка с причиной. Итог пишется в result.json.
 func (e *Env) Apply(ctx context.Context, in Input) (res Result, err error) {
 	res = Result{From: e.Version}
-	p, err := e.plan(in)
+	unlock, err := acquireLock(e.p("data", "update", "lock"))
+	if err != nil {
+		return res, err
+	}
+	defer unlock()
+	p, err := e.plan(ctx, in)
 	if err != nil {
 		return res, err
 	}
@@ -202,6 +217,7 @@ func (e *Env) Apply(ctx context.Context, in Input) (res Result, err error) {
 	}
 	res.Backup = backup
 	e.logf("Бэкап: %s", backup)
+	e.pruneBackups(backup)
 
 	defer func() {
 		os.Remove(staged)
@@ -258,15 +274,30 @@ func (e *Env) healthWait() time.Duration {
 	return 30 * time.Second
 }
 
+// effectiveChecks — проверки живости. Пустой список не может означать успех:
+// без HTTP-проверок остаются версия установленного бинарника и is-active
+// каждой службы.
+func (e *Env) effectiveChecks() []Check {
+	checks := append([]Check(nil), e.Checks...)
+	if len(checks) == 0 || e.VersionCheck {
+		checks = append(checks, e.binaryVersionCheck)
+	}
+	if len(e.Checks) == 0 && len(e.Units) > 0 {
+		checks = append(checks, e.unitsActiveCheck)
+	}
+	return checks
+}
+
 func (e *Env) waitHealthy(ctx context.Context, newVer string) error {
 	each := e.HealthEach
 	if each <= 0 {
 		each = time.Second
 	}
 	deadline := time.Now().Add(e.healthWait())
+	checks := e.effectiveChecks()
 	for {
 		var last error
-		for _, c := range e.Checks {
+		for _, c := range checks {
 			if last = c(ctx, newVer); last != nil {
 				break
 			}
@@ -354,32 +385,82 @@ func copyFile(src, dst string) error {
 	return fsutil.WriteFileAtomic(dst, data, info.Mode().Perm())
 }
 
-// skipInBackup — что в бэкап не входит: файлы самой базы (вместо них снимок),
-// каталоги параметров задач и итога обновления.
+// skipInBackup — что в бэкап не входит и при откате не трогается: файлы самой
+// базы (вместо них снимок), каталоги параметров задач, итога обновления и
+// принятых архивов синхронизации (до 256 МБ).
 func skipInBackup(rel string) bool {
 	switch rel {
-	case "data/update", "data/params", "data/" + dbName + "-wal", "data/" + dbName + "-shm":
+	case "data/update", "data/params", "data/sync", "data/" + dbName + "-wal", "data/" + dbName + "-shm":
 		return true
 	}
 	return false
 }
 
-// backup пишет backup/update-<версия>-<дата>.tar.gz с etc/ и data/. База —
-// снимок VACUUM INTO, а не копия живого файла.
-func (e *Env) backup(ctx context.Context) (string, error) {
+const defaultKeepBackups = 3
+
+// pruneBackups оставляет последние KeepBackups бэкапов обновления (свежий
+// keep остаётся всегда). Чужие файлы в backup/ не трогаются.
+func (e *Env) pruneBackups(keep string) {
+	n := e.KeepBackups
+	if n <= 0 {
+		n = defaultKeepBackups
+	}
+	list, err := filepath.Glob(e.p("backup", "update-*.tar.gz"))
+	if err != nil || len(list) <= n {
+		return
+	}
+	type item struct {
+		path string
+		mod  time.Time
+	}
+	var items []item
+	for _, p := range list {
+		if info, err := os.Stat(p); err == nil && info.Mode().IsRegular() {
+			items = append(items, item{p, info.ModTime()})
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if !items[i].mod.Equal(items[j].mod) {
+			return items[i].mod.After(items[j].mod)
+		}
+		return items[i].path > items[j].path
+	})
+	for i, it := range items {
+		if i >= n && it.path != keep {
+			if err := os.Remove(it.path); err == nil {
+				e.logf("Старый бэкап удалён: %s", it.path)
+			}
+		}
+	}
+}
+
+// backup пишет backup/update-<версия>-<дата>.tar.gz с etc/ и data/ потоком во
+// временный файл (в памяти архив не собирается: на маленьком VPS это риск OOM
+// посреди обновления). База — снимок VACUUM INTO, а не копия живого файла.
+func (e *Env) backup(ctx context.Context) (path string, err error) {
 	dir := e.p("backup")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
 	name := fmt.Sprintf("update-%s-%s.tar.gz", e.Version, e.now().UTC().Format("20060102-150405"))
 	dest := filepath.Join(dir, name)
-	var buf bytes.Buffer
-	zw := gzip.NewWriter(&buf)
+	tmp := dest + ".tmp"
+	out, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		out.Close()
+		if err != nil {
+			os.Remove(tmp)
+		}
+	}()
+	zw := gzip.NewWriter(out)
 	tw := tar.NewWriter(zw)
 	snap := ""
 	if e.BackupDB != nil {
 		db := e.p("data", dbName)
-		if _, err := os.Stat(db); err == nil {
+		if _, serr := os.Stat(db); serr == nil {
 			snap = filepath.Join(dir, ".snapshot-"+dbName)
 			os.Remove(snap) // VACUUM INTO не пишет поверх существующего файла
 			defer os.Remove(snap)
@@ -390,7 +471,7 @@ func (e *Env) backup(ctx context.Context) (string, error) {
 	}
 	for _, top := range []string{"etc", "data"} {
 		root := e.p(top)
-		if _, err := os.Stat(root); errors.Is(err, fs.ErrNotExist) {
+		if _, serr := os.Stat(root); errors.Is(serr, fs.ErrNotExist) {
 			continue
 		}
 		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -428,7 +509,13 @@ func (e *Env) backup(ctx context.Context) (string, error) {
 	if err := zw.Close(); err != nil {
 		return "", err
 	}
-	if err := fsutil.WriteFileAtomic(dest, buf.Bytes(), 0o600); err != nil {
+	if err := out.Sync(); err != nil {
+		return "", err
+	}
+	if err := out.Close(); err != nil {
+		return "", err
+	}
+	if err := os.Rename(tmp, dest); err != nil {
 		return "", err
 	}
 	return dest, nil
@@ -444,19 +531,27 @@ func addToTar(tw *tar.Writer, rel, src string, info fs.FileInfo) error {
 		h.Name += "/"
 		return tw.WriteHeader(h)
 	}
-	data, err := os.ReadFile(src)
+	f, err := os.Open(src)
 	if err != nil {
 		return err
 	}
-	h.Size = int64(len(data))
+	defer f.Close()
+	// Размер — из открытого файла: заголовок обязан совпасть с числом байт.
+	fi, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	h.Size = fi.Size()
 	if err := tw.WriteHeader(h); err != nil {
 		return err
 	}
-	_, err = tw.Write(data)
+	_, err = io.CopyN(tw, f, h.Size)
 	return err
 }
 
-// restoreBackup разворачивает бэкап поверх etc/ и data/.
+// restoreBackup разворачивает бэкап поверх etc/ и data/ и убирает оттуда
+// обычные файлы, которых в бэкапе нет: их создала новая версия (сертификаты,
+// новые данные), и «вернуть как было» означает не оставить их старой версии.
 func (e *Env) restoreBackup(path string) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -468,10 +563,11 @@ func (e *Env) restoreBackup(path string) error {
 		return err
 	}
 	tr := tar.NewReader(zr)
+	have := map[string]bool{}
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
-			return nil
+			break
 		}
 		if err != nil {
 			return err
@@ -497,8 +593,47 @@ func (e *Env) restoreBackup(path string) error {
 			if err := fsutil.WriteFileAtomic(dst, data, fs.FileMode(h.Mode).Perm()); err != nil {
 				return err
 			}
+			have[filepath.ToSlash(clean)] = true
 		}
 	}
+	return e.removeNewFiles(have)
+}
+
+// removeNewFiles удаляет в etc/ и data/ обычные файлы вне бэкапа (кроме того,
+// что в бэкап не входит по определению).
+func (e *Env) removeNewFiles(have map[string]bool) error {
+	var errs []error
+	for _, top := range []string{"etc", "data"} {
+		root := e.p(top)
+		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				if errors.Is(err, fs.ErrNotExist) {
+					return nil
+				}
+				return err
+			}
+			rel, _ := filepath.Rel(e.Root, path)
+			rel = filepath.ToSlash(rel)
+			if skipInBackup(rel) {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if d.Type().IsRegular() && !have[rel] {
+				if rerr := os.Remove(path); rerr != nil {
+					errs = append(errs, rerr)
+				} else {
+					e.logf("Убран файл новой версии: %s", rel)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 type plan struct {
@@ -507,8 +642,9 @@ type plan struct {
 	oldCfg, newCfg []byte
 }
 
-// plan делает все проверки без записи на диск: подпись, версия, миграция конфига.
-func (e *Env) plan(in Input) (plan, error) {
+// plan делает все проверки без записи в систему: подпись, версия, миграция
+// конфига — кодом нового бинарника (временный файл вне bin/, потом удаляется).
+func (e *Env) plan(ctx context.Context, in Input) (plan, error) {
 	var p plan
 	var err error
 	if p.version, p.binary, err = e.Prepare(in); err != nil {
@@ -517,21 +653,17 @@ func (e *Env) plan(in Input) (plan, error) {
 	if p.oldCfg, err = os.ReadFile(e.p("etc", "config.toml")); err != nil {
 		return p, fmt.Errorf("config.toml не прочитан: %w", err)
 	}
-	migrate := e.Migrate
-	if migrate == nil {
-		migrate = config.Migrate
-	}
-	if p.newCfg, _, err = migrate(p.oldCfg, in.Answers); err != nil {
+	if p.newCfg, err = e.migrateWithBinary(ctx, p.binary, p.oldCfg, in.Answers); err != nil {
 		return p, err
 	}
 	return p, nil
 }
 
 // Preflight — всё, что проверяет Apply до первой записи: подпись, версия,
-// архитектура, миграция конфига. Вопросы без ответа приходят как
-// *config.QuestionsError. Агент вызывает его при приёме, чтобы отказать
-// запросом, а не упавшей задачей.
-func (e *Env) Preflight(in Input) (newVersion string, err error) {
-	p, err := e.plan(in)
+// архитектура, миграция конфига новым бинарником. Вопросы без ответа
+// приходят как *config.QuestionsError. Агент вызывает его при приёме, чтобы
+// отказать запросом, а не упавшей задачей.
+func (e *Env) Preflight(ctx context.Context, in Input) (newVersion string, err error) {
+	p, err := e.plan(ctx, in)
 	return p.version, err
 }
