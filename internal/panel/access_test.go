@@ -102,8 +102,8 @@ func TestPermissionsEveryRouteAsUser(t *testing.T) {
 		a := routes[pattern]
 		seen++
 		switch {
-		case a == accPublic || a == accMFA:
-			continue // вход, выход, статика: права роли не участвуют
+		case a == accPublic || a == accMFA || a == accPortal:
+			continue // вход, выход, статика, портал: права роли не участвуют (портал — portal_test.go)
 		case a == accAdmin:
 			// и страницы, и любые действия — 403, даже над своим клиентом
 			for _, name := range []string{ownClient, foreignClient} {
@@ -179,7 +179,7 @@ func TestPermissionsAdminSeesAll(t *testing.T) {
 	e.node.SystemFn = func(context.Context) (nodeapi.System, error) { return nodeapi.System{}, nil }
 	e.node.InfoFn = func(context.Context) (nodeapi.Info, error) { return nodeapi.Info{}, nil }
 	for _, pattern := range e.srv.registered {
-		if !strings.HasPrefix(pattern, "GET ") || routes[pattern] == accPublic || routes[pattern] == accMFA {
+		if !strings.HasPrefix(pattern, "GET ") || routes[pattern] == accPublic || routes[pattern] == accMFA || routes[pattern] == accPortal {
 			continue
 		}
 		_, p := concrete(pattern, ownClient, bob.ID)

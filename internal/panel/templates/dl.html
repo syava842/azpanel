@@ -1,0 +1,13 @@
+{{define "content"}}
+<h1>Скачать файл подключения</h1>
+<form method="post" action="{{.Action}}" class="card narrow">
+  <p>Файл: {{.File}}</p>
+  <p>Ссылка действует до {{.Expires}} и только для одного скачивания.</p>
+  {{if .HasPIN}}
+  <label>PIN (осталось попыток: {{.Left}})
+    <input type="password" name="pin" autocomplete="off" inputmode="numeric" required>
+  </label>
+  {{end}}
+  <button type="submit">Скачать</button>
+</form>
+{{end}}

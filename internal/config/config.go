@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/netip"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -54,6 +55,9 @@ type Panel struct {
 	// AllowIPs — белый список адресов панели: IP или CIDR; пусто — без
 	// ограничения.
 	AllowIPs []string `toml:"allow_ips"`
+	// PublicURL — внешний адрес панели для ссылок портала и одноразовых
+	// ссылок (https://vpn.example.org); пусто — ссылки относительные.
+	PublicURL string `toml:"public_url"`
 }
 
 type Log struct {
@@ -184,6 +188,8 @@ func (c Config) Validate() error {
 		return fmt.Errorf("panel.session_hours = %d, нужно 1..720", p.SessionHours)
 	case allowErr(p.AllowIPs) != nil:
 		return fmt.Errorf("panel.allow_ips: %w", allowErr(p.AllowIPs))
+	case publicURLErr(p.PublicURL) != nil:
+		return fmt.Errorf("panel.public_url: %w", publicURLErr(p.PublicURL))
 	case c.Log.MaxSizeMB < 1 || c.Log.MaxSizeMB > 1000:
 		return fmt.Errorf("log.max_size_mb = %d, нужно 1..1000", c.Log.MaxSizeMB)
 	case c.Log.Keep < 1 || c.Log.Keep > 100:
@@ -295,4 +301,24 @@ func unmapBits(p netip.Prefix) int {
 		return p.Bits() - 96
 	}
 	return p.Bits()
+}
+
+// publicURLErr проверяет panel.public_url: пусто либо http(s)://хост[:порт][/путь]
+// без учётных данных, запроса и фрагмента.
+func publicURLErr(v string) error {
+	if v == "" {
+		return nil
+	}
+	u, err := url.Parse(v)
+	switch {
+	case err != nil || strings.ContainsAny(v, " \t\r\n"):
+		return fmt.Errorf("%q: неверный адрес", v)
+	case u.Scheme != "http" && u.Scheme != "https":
+		return fmt.Errorf("%q: нужен адрес http:// или https://", v)
+	case u.Host == "" || u.Hostname() == "":
+		return fmt.Errorf("%q: не указан хост", v)
+	case u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.Contains(v, "?") || strings.Contains(v, "#"):
+		return fmt.Errorf("%q: без учётных данных, запроса и фрагмента", v)
+	}
+	return nil
 }

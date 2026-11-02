@@ -108,11 +108,15 @@ type Server struct {
 	// из paths. NoConfigFile — не писать файл (тесты без файла).
 	ConfigFile   string
 	NoConfigFile bool
+	// PublicURL — внешний адрес панели (panel.public_url) для ссылок портала
+	// и одноразовых ссылок; пусто — ссылки относительные.
+	PublicURL string
 
 	pages      map[string]*template.Template
 	registered []string   // шаблоны маршрутов Handler(): сверяются с таблицей прав
 	usersMu    sync.Mutex // действия над пользователями — по одному (защита последнего администратора)
 	redeemMu   sync.Mutex // ввод кодов: проверка срока, гашение и продление — одним куском
+	portalMu   sync.Mutex // ввод кода в портале: счёт попыток и погашение — одним куском
 	access     accessState
 	once       onceStore // секреты «показать один раз»
 
@@ -184,6 +188,7 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /users/{id}/sessions/revoke", s.userRevoke)
 	s.route(mux, "POST /users/{id}/delete", s.userDelete)
 	s.route(mux, "POST /users/{id}/access", s.userAccess)
+	s.route(mux, "POST /users/{id}/portal", s.userPortalLink)
 
 	// Коды продления: только администратор; ввод кода — в карточке клиента.
 	s.route(mux, "GET /codes", s.codesPage)
@@ -213,6 +218,20 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /clients/{name}/delete", s.deleteClient)
 	s.route(mux, "POST /clients/{name}/owner", s.setOwner)
 	s.route(mux, "POST /clients/{name}/redeem", s.redeemCode)
+	s.route(mux, "POST /clients/{name}/portal", s.clientPortalLink)
+	s.route(mux, "POST /clients/{name}/dl", s.clientDownloadLink)
+
+	// Публичный портал клиента и одноразовые ссылки: без входа, доступ по
+	// токену в адресе; белый список адресов панели на них не действует.
+	s.route(mux, "GET /p/{token}", s.portalIndex)
+	s.route(mux, "GET /p/{token}/help", s.portalHelp)
+	s.route(mux, "GET /p/{token}/profile/{name}/{kind}/{variant}/{file}", s.portalProfile)
+	s.route(mux, "GET /p/{token}/qr/{name}/{kind}/{variant}/{file}", s.portalQR)
+	s.route(mux, "POST /p/{token}/unlock", s.portalUnlock)
+	s.route(mux, "/p/", s.portalGone)
+	s.route(mux, "GET /dl/{token}", s.dlPage)
+	s.route(mux, "POST /dl/{token}", s.dlDownload)
+	s.route(mux, "/dl/", s.dlGone)
 
 	// Маршрутизация, настройки AntiZapret, задачи: только администратор.
 	s.route(mux, "GET /routing", s.routingPage)

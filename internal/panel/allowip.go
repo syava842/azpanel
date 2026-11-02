@@ -3,6 +3,7 @@ package panel
 import (
 	"net/http"
 	"net/netip"
+	"strings"
 	"sync"
 )
 
@@ -50,11 +51,11 @@ func allowsIn(nets []netip.Prefix, host string) bool {
 
 // allowGate — самый внешний обработчик (после заголовков): адрес вне белого
 // списка получает 403 без подробностей, до входа и на всех маршрутах, кроме
-// /healthz. Адрес — remoteHost; за nginx это будет заголовок доверенного
+// /healthz, портала (/p/, /dl/) и статики для его страниц. Адрес — remoteHost; за nginx это будет заголовок доверенного
 // прокси (этап 2б).
 func (s *Server) allowGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/healthz" && !s.Allow.Allows(remoteHost(r)) {
+		if r.URL.Path != "/healthz" && !isPortalPath(r.URL.Path) && !strings.HasPrefix(r.URL.Path, "/static/") && !s.Allow.Allows(remoteHost(r)) {
 			http.Error(w, "доступ запрещён", http.StatusForbidden)
 			return
 		}

@@ -50,6 +50,7 @@ type sessionRow struct {
 type profileRow struct {
 	Kind, Variant, File string
 	Href, QRHref        string
+	Value               string // kind/variant/file для формы одноразовой ссылки
 }
 
 func clientHref(name string) string { return "/clients/" + url.PathEscape(name) }
@@ -288,6 +289,9 @@ func (s *Server) dropStaleHistory(r *http.Request, name string) {
 	if err := s.Store.DeleteTraffic(r.Context(), s.NodeID, name); err != nil {
 		s.Log.Warn("старый трафик не удалён", "client", name, "err", err)
 	}
+	if err := s.Store.DeleteClientLink(r.Context(), s.NodeID, name); err != nil {
+		s.Log.Warn("старая ссылка портала не удалена", "client", name, "err", err)
+	}
 }
 
 func (s *Server) user(r *http.Request) string {
@@ -393,7 +397,7 @@ func (s *Server) card(w http.ResponseWriter, r *http.Request, c nodeapi.Client, 
 	} else {
 		for _, p := range ps {
 			tail := url.PathEscape(p.Kind) + "/" + url.PathEscape(p.Variant) + "/" + url.PathEscape(p.File)
-			row := profileRow{Kind: p.Kind, Variant: p.Variant, File: p.File, Href: clientHref(c.Name) + "/profiles/" + tail}
+			row := profileRow{Kind: p.Kind, Variant: p.Variant, File: p.File, Href: clientHref(c.Name) + "/profiles/" + tail, Value: tail}
 			if p.Kind == nodeapi.KindWireGuard {
 				row.QRHref = clientHref(c.Name) + "/qr/" + tail
 			}
@@ -402,6 +406,9 @@ func (s *Server) card(w http.ResponseWriter, r *http.Request, c nodeapi.Client, 
 	}
 	data["Profiles"] = profiles
 	s.addHistory(r, c, data)
+	if sess.IsAdmin() {
+		s.addPortalInfo(r, c, data)
+	}
 	s.render(w, r, status, "client", data)
 }
 
@@ -422,13 +429,27 @@ func (s *Server) profileFile(w http.ResponseWriter, r *http.Request) {
 		s.errorPage(w, r, st, tx)
 		return
 	}
-	cd := mime.FormatMediaType("attachment", map[string]string{"filename": r.PathValue("file")})
+	writeProfile(w, r.PathValue("file"), data)
+}
+
+// writeProfile отдаёт файл профиля вложением.
+func writeProfile(w http.ResponseWriter, file string, data []byte) {
+	cd := mime.FormatMediaType("attachment", map[string]string{"filename": file})
 	if cd == "" {
 		cd = "attachment"
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", cd)
 	w.Write(data)
+}
+
+// profileQRPNG рисует QR профиля WireGuard; false — профиль не помещается.
+func profileQRPNG(data []byte) ([]byte, bool) {
+	if len(data) > maxQRProfile {
+		return nil, false
+	}
+	png, err := qrcode.Encode(string(data), qrcode.Medium, qrSize)
+	return png, err == nil
 }
 
 func (s *Server) profileQR(w http.ResponseWriter, r *http.Request) {
@@ -446,14 +467,9 @@ func (s *Server) profileQR(w http.ResponseWriter, r *http.Request) {
 		s.errorPage(w, r, st, tx)
 		return
 	}
-	tooBig := "профиль слишком велик для QR"
-	if len(data) > maxQRProfile {
-		s.errorPage(w, r, http.StatusUnprocessableEntity, tooBig)
-		return
-	}
-	png, err := qrcode.Encode(string(data), qrcode.Medium, qrSize)
-	if err != nil {
-		s.errorPage(w, r, http.StatusUnprocessableEntity, tooBig)
+	png, ok := profileQRPNG(data)
+	if !ok {
+		s.errorPage(w, r, http.StatusUnprocessableEntity, "профиль слишком велик для QR")
 		return
 	}
 	w.Header().Set("Content-Type", "image/png")
@@ -571,6 +587,10 @@ func (s *Server) deleteClient(w http.ResponseWriter, r *http.Request) {
 	if s.Store != nil && !(kind == nodeapi.KindOpenVPN && c.WireGuard) && !(kind == nodeapi.KindWireGuard && c.OpenVPN) {
 		if err := s.Store.DeleteCard(r.Context(), s.NodeID, c.Name); err != nil {
 			s.Log.Warn("карточка клиента не удалена", "client", c.Name, "err", err)
+		}
+		// ссылка портала клиента уходит вместе с ним
+		if err := s.Store.DeleteClientLink(r.Context(), s.NodeID, c.Name); err != nil {
+			s.Log.Warn("ссылка портала клиента не удалена", "client", c.Name, "err", err)
 		}
 	}
 	redirectMsg(w, r, "/", "deleted")

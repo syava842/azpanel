@@ -82,6 +82,7 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		DataKey:         dataKey,
 		RequireAdmin2FA: cfg.Panel.RequireAdmin2FA,
 		ConfigFile:      paths.ConfigFile(),
+		PublicURL:       cfg.Panel.PublicURL,
 	}
 	if err := s.SeedAllow(cfg.Panel.AllowIPs); err != nil {
 		return fmt.Errorf("panel.allow_ips: %w", err)

@@ -268,3 +268,21 @@ func (s *Store) EffectiveUntil(ctx context.Context, node int64, client string) (
 	}
 	return nil, nil
 }
+
+// ClientLinkCreated — когда выпущена ссылка клиента; ok=false — ссылки нет.
+func (s *Store) ClientLinkCreated(ctx context.Context, node int64, client string) (created int64, ok bool, err error) {
+	err = s.db.QueryRowContext(ctx, `SELECT created FROM portal_links WHERE kind = 'c' AND node_id = ? AND client = ?`, node, client).Scan(&created)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	return created, err == nil, err
+}
+
+// UserLinkCreated — когда выпущена ссылка пользователя; ok=false — ссылки нет.
+func (s *Store) UserLinkCreated(ctx context.Context, userID int64) (created int64, ok bool, err error) {
+	err = s.db.QueryRowContext(ctx, `SELECT created FROM portal_links WHERE kind = 'u' AND user_id = ?`, userID).Scan(&created)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	return created, err == nil, err
+}

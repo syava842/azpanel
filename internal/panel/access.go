@@ -10,6 +10,7 @@ type access int
 
 const (
 	accPublic access = iota // без входа (сами решают, что проверять)
+	accPortal               // public-portal: без сессии панели, доступ по токену в адресе
 	accMFA                  // только сессия, ждущая код 2FA
 	accAny                  // любой вошедший; клиентов ограничивает visibleClient
 	accAdmin                // только администратор
@@ -51,6 +52,7 @@ var routes = map[string]access{
 	"POST /users/{id}/sessions/revoke": accAdmin,
 	"POST /users/{id}/delete":          accAdmin,
 	"POST /users/{id}/access":          accAdmin,
+	"POST /users/{id}/portal":          accAdmin,
 
 	"GET /codes":                       accAdmin,
 	"GET /codes/new":                   accAdmin,
@@ -90,6 +92,19 @@ var routes = map[string]access{
 	"POST /clients/{name}/owner":                           accAdmin,
 	// «Продлить кодом»: администратор и владелец клиента (visibleClient)
 	"POST /clients/{name}/redeem": accAny,
+	"POST /clients/{name}/portal": accAdmin,
+	"POST /clients/{name}/dl":     accAdmin,
+
+	// Портал клиента и одноразовые ссылки: роль public-portal, без сессии.
+	"GET /p/{token}":      accPortal,
+	"GET /p/{token}/help": accPortal,
+	"GET /p/{token}/profile/{name}/{kind}/{variant}/{file}": accPortal,
+	"GET /p/{token}/qr/{name}/{kind}/{variant}/{file}":      accPortal,
+	"POST /p/{token}/unlock":                                accPortal,
+	"/p/":                                                   accPortal,
+	"GET /dl/{token}":                                       accPortal,
+	"POST /dl/{token}":                                      accPortal,
+	"/dl/":                                                  accPortal,
 }
 
 // route регистрирует маршрут по таблице прав; маршрута нет в таблице — паника
@@ -107,7 +122,7 @@ func (s *Server) route(mux *http.ServeMux, pattern string, h http.HandlerFunc) {
 // административном маршруте получает 403.
 func (s *Server) require(a access, h http.HandlerFunc) http.Handler {
 	switch a {
-	case accPublic:
+	case accPublic, accPortal:
 		return h
 	case accMFA:
 		return s.guard(h, guardMFA)

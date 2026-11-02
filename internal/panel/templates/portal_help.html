@@ -1,0 +1,35 @@
+{{define "content"}}
+<h1>Как подключиться</h1>
+<p><a href="{{.Base}}">Назад к доступу</a></p>
+<p>Скачайте файл подключения на странице доступа (OpenVPN — файл .ovpn, WireGuard и AmneziaWG — файл .conf или QR-код) и импортируйте его в приложение.</p>
+
+<h2>Android</h2>
+<ol>
+  <li>OpenVPN: установите «OpenVPN Connect», откройте скачанный .ovpn, нажмите «Add» и включите профиль.</li>
+  <li>WireGuard: установите «WireGuard», нажмите «+», выберите «Сканировать QR-код» или «Импорт из файла», включите туннель.</li>
+  <li>AmneziaWG: установите «AmneziaWG», импорт файла .conf или QR-кода выполняется так же.</li>
+</ol>
+
+<h2>iOS</h2>
+<ol>
+  <li>OpenVPN: установите «OpenVPN Connect», откройте .ovpn через «Поделиться» и выберите «OpenVPN», затем «Add».</li>
+  <li>WireGuard: установите «WireGuard», нажмите «+», «Создать из QR-кода» или «Создать из файла», включите туннель.</li>
+  <li>AmneziaWG: установите «AmneziaWG» и импортируйте .conf или QR-код.</li>
+</ol>
+
+<h2>Windows</h2>
+<ol>
+  <li>OpenVPN: установите «OpenVPN Connect», перетащите .ovpn в окно или нажмите «Import profile», подключитесь.</li>
+  <li>WireGuard: установите «WireGuard», нажмите «Добавить туннель», выберите .conf, нажмите «Подключить».</li>
+  <li>AmneziaWG: установите «AmneziaWG» и добавьте туннель из файла .conf.</li>
+</ol>
+
+<h2>macOS</h2>
+<ol>
+  <li>OpenVPN: установите «OpenVPN Connect», перетащите .ovpn в окно, нажмите «Add», подключитесь.</li>
+  <li>WireGuard: установите «WireGuard» из App Store, «Импорт туннелей из файла», выберите .conf, нажмите «Подключить».</li>
+  <li>AmneziaWG: установите «AmneziaWG» и импортируйте .conf.</li>
+</ol>
+
+<p class="muted">Если подключение не работает, проверьте на странице доступа, что клиент не заблокирован и срок не истёк, и при необходимости продлите доступ кодом.</p>
+{{end}}

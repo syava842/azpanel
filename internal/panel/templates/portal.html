@@ -1,0 +1,52 @@
+{{define "content"}}
+<h1>Ваш доступ к VPN</h1>
+<p><a href="{{.Base}}/help">Как подключиться: инструкция для Android, iOS, Windows и macOS</a></p>
+{{if .SessErr}}<div class="error">{{.SessErr}}</div>{{end}}
+{{range .Clients}}
+<h2>{{.Name}}</h2>
+<div class="card">
+  <p>Состояние: {{if .Blocked}}<span class="bad">{{.StatusText}}</span>{{else}}<span class="ok">{{.StatusText}}</span>{{end}}</p>
+  <p>Действует до: {{.Until}}</p>
+  <p>Подключений сейчас: {{len .Sessions}}; лимит одновременных подключений: {{.Limit}}</p>
+  {{if .Sessions}}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Тип</th><th>Адрес</th><th>С</th></tr></thead>
+    <tbody>
+    {{range .Sessions}}<tr><td>{{.Kind}}</td><td>{{.Addr}}</td><td>{{.Time}}</td></tr>{{end}}
+    </tbody>
+  </table>
+  </div>
+  {{end}}
+</div>
+
+<h3>Трафик за 30 дней</h3>
+{{if .TrafficErr}}<div class="error">{{.TrafficErr}}</div>{{else}}
+<div class="card">
+  {{.Chart}}
+  <p>За 30 дней: ↓ {{.Down}}, ↑ {{.Up}} (время на графике — UTC)</p>
+</div>
+{{end}}
+
+<h3>Файлы подключения</h3>
+{{if .ProfilesErr}}<div class="error">{{.ProfilesErr}}</div>{{end}}
+<ul>
+  {{range .Profiles}}
+  <li>{{.Kind}} / {{.Variant}}: <a href="{{.Href}}">{{.File}}</a>{{if .QRHref}} · <a href="{{.QRHref}}">QR-код</a>{{end}}</li>
+  {{else}}
+  <li class="muted">Файлов нет.</li>
+  {{end}}
+</ul>
+
+<h3>Продлить кодом</h3>
+<form method="post" action="{{$.Base}}/unlock" class="card narrow">
+  {{if $.IsUser}}<input type="hidden" name="client" value="{{.Name}}">{{end}}
+  <label>Код продления
+    <input type="text" name="code" autocomplete="off" placeholder="XXXX-XXXX-XXXX-XXXX" required>
+  </label>
+  <button type="submit">Продлить</button>
+</form>
+{{else}}
+<p class="muted">Клиентов нет.</p>
+{{end}}
+{{end}}

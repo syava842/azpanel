@@ -103,6 +103,15 @@ func TestValidateListenAddresses(t *testing.T) {
 		{"адрес агента не http", func(c *Config) { c.Panel.NodeURL = "127.0.0.1:9100" }, false},
 		{"тайм-аут client.sh мал", func(c *Config) { c.Node.ClientShTimeoutS = 5 }, false},
 		{"история 0 дней", func(c *Config) { c.Panel.HistoryDays = 0 }, false},
+		{"public_url пуст", func(c *Config) { c.Panel.PublicURL = "" }, true},
+		{"public_url https", func(c *Config) { c.Panel.PublicURL = "https://vpn.example.org" }, true},
+		{"public_url http с портом и путём", func(c *Config) { c.Panel.PublicURL = "http://10.0.0.5:8443/panel" }, true},
+		{"public_url без схемы", func(c *Config) { c.Panel.PublicURL = "vpn.example.org" }, false},
+		{"public_url ftp", func(c *Config) { c.Panel.PublicURL = "ftp://vpn.example.org" }, false},
+		{"public_url без хоста", func(c *Config) { c.Panel.PublicURL = "https://" }, false},
+		{"public_url с запросом", func(c *Config) { c.Panel.PublicURL = "https://vpn.example.org/?a=1" }, false},
+		{"public_url с учёткой", func(c *Config) { c.Panel.PublicURL = "https://u:p@vpn.example.org" }, false},
+		{"public_url с пробелом", func(c *Config) { c.Panel.PublicURL = "https://vpn example.org" }, false},
 	}
 	for _, tc := range cases {
 		c := Default()

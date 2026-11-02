@@ -64,6 +64,35 @@
   </form>
 </div>
 {{end}}
+{{if and .CanManage .HasStore}}
+<h2>Ссылка портала</h2>
+<div class="card">
+  <p>{{if .PortalCreated}}Создана {{.PortalCreated}}. Адрес показывается один раз при выпуске; «Перевыпустить» выпускает новую ссылку, прежняя перестаёт работать.{{else}}Ссылка ещё не создана.{{end}}</p>
+  {{if not .PublicURLSet}}<p class="muted">Адрес панели не задан: укажите panel.public_url в настройках (config.toml), иначе ссылка будет относительной.</p>{{end}}
+  <form method="post" action="{{.Href}}/portal">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <button type="submit">{{if .PortalCreated}}Перевыпустить{{else}}Создать{{end}}</button>
+  </form>
+</div>
+<h2>Одноразовая ссылка на профиль</h2>
+<div class="card">
+  {{if .Profiles}}
+  <form method="post" action="{{.Href}}/dl">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label>Профиль
+      <select name="profile">
+        {{range .Profiles}}<option value="{{.Value}}">{{.Kind}} / {{.Variant}} / {{.File}}</option>{{end}}
+      </select>
+    </label>
+    <label>PIN (4–8 цифр, по желанию)
+      <input type="text" name="pin" inputmode="numeric" autocomplete="off" maxlength="8">
+    </label>
+    <button type="submit">Создать ссылку</button>
+    <p class="muted">Ссылка живёт 24 часа или до первого скачивания; показывается один раз. Пять неверных PIN закрывают её навсегда.</p>
+  </form>
+  {{else}}<p class="muted">Профилей нет.</p>{{end}}
+</div>
+{{end}}
 {{if and .CanManage .Owners}}
 <h2>Владелец</h2>
 <div class="card">

@@ -46,6 +46,14 @@
   <button type="submit">Сохранить срок</button>
 </form>
 
+<h2>Ссылка портала</h2>
+<form method="post" action="{{.Href}}/portal" class="card narrow">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <p>{{if .PortalCreated}}Создана {{.PortalCreated}}.{{else}}Ссылки нет.{{end}} В портале пользователь видит все свои клиенты; адрес показывается один раз, «Перевыпустить» отключает прежний.</p>
+  {{if not .PublicURLSet}}<p class="muted">Адрес панели не задан: укажите panel.public_url в настройках (config.toml).</p>{{end}}
+  <button type="submit">{{if .PortalCreated}}Перевыпустить{{else}}Создать{{end}}</button>
+</form>
+
 <h2>Клиенты</h2>
 <ul>
   {{range .Clients}}<li><a href="{{.Href}}">{{.Name}}</a></li>

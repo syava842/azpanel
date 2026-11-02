@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/syava842/azpanel/internal/store"
 )
@@ -159,8 +160,14 @@ func (s *Server) userView(w http.ResponseWriter, r *http.Request, u store.User, 
 	if u.AccessUntil != nil {
 		until = untilText(u.AccessUntil)
 	}
-	data := map[string]any{"Until": until, "UntilStamp": untilStamp(u.AccessUntil), "U": u, "Href": userHref(u), "RoleText": roleText(u.Role), "IsAdminRole": u.Role == store.RoleAdmin,
+	data := map[string]any{"PublicURLSet": s.PublicURL != "", "Until": until, "UntilStamp": untilStamp(u.AccessUntil), "U": u, "Href": userHref(u), "RoleText": roleText(u.Role), "IsAdminRole": u.Role == store.RoleAdmin,
 		"Has2FA": len(u.TOTPSecret) > 0, "Sessions": rows, "Clients": clients, "IsSelf": u.ID == sess.UserID}
+	if created, has, err := s.Store.UserLinkCreated(r.Context(), u.ID); err != nil {
+		s.Log.Warn("ссылка портала пользователя не прочитана", "user", u.Login, "err", err)
+	} else if has {
+		t := time.Unix(created, 0)
+		data["PortalCreated"] = formatTime(&t)
+	}
 	if errText != "" {
 		data["Error"] = errText
 	}

@@ -451,3 +451,29 @@ func TestSetUserAccessUntilKeepsOtherFields(t *testing.T) {
 		t.Fatalf("срок затёрт: %+v", got)
 	}
 }
+
+func TestLinkCreatedLookup(t *testing.T) {
+	s := open(t)
+	if _, ok, err := s.ClientLinkCreated(ctx, LocalNode, "c1"); err != nil || ok {
+		t.Fatalf("до выпуска: %v %v", ok, err)
+	}
+	if _, err := s.CreateClientLink(ctx, LocalNode, "c1", 77); err != nil {
+		t.Fatal(err)
+	}
+	if at, ok, err := s.ClientLinkCreated(ctx, LocalNode, "c1"); err != nil || !ok || at != 77 {
+		t.Fatalf("ссылка клиента: %d %v %v", at, ok, err)
+	}
+	u, err := s.CreateUser(ctx, User{Login: "u-link", Hash: "x", Role: RoleUser})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := s.UserLinkCreated(ctx, u.ID); ok {
+		t.Fatal("ссылка пользователя есть до выпуска")
+	}
+	if _, err := s.CreateUserLink(ctx, u.ID, 88); err != nil {
+		t.Fatal(err)
+	}
+	if at, ok, err := s.UserLinkCreated(ctx, u.ID); err != nil || !ok || at != 88 {
+		t.Fatalf("ссылка пользователя: %d %v %v", at, ok, err)
+	}
+}
