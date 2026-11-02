@@ -19,8 +19,9 @@ const (
 	TaskBackup = "backup"
 )
 
-// DefaultBackupDir — куда client.sh 8 кладёт архив.
-const DefaultBackupDir = "/root"
+// DefaultBackupDir — куда client.sh 8 кладёт архив:
+// /root/antizapret/backup-<IP>.tar.gz (сверено по client.sh).
+const DefaultBackupDir = "/root/antizapret"
 
 // backupNameRe — имя файла бэкапа: backup*.tar.gz без разделителей пути.
 var backupNameRe = regexp.MustCompile(`^backup[A-Za-z0-9._()-]*\.tar\.gz$`)
