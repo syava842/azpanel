@@ -469,3 +469,28 @@ func TestDisableTwoIncludeFilesOneApply(t *testing.T) {
 		t.Fatalf("ожидался один проход: %v", f.cmds)
 	}
 }
+
+// nginx читает conf.d/*.conf раньше sites-enabled/*: блок домена из conf.d
+// побеждает одноимённый блок из sites-enabled, и проверка домена (PlanACME)
+// должна идти через него.
+func TestFindServersConfDBeforeSitesEnabled(t *testing.T) {
+	dir := t.TempDir()
+	site := "server {\n    listen 80;\n    server_name vpn.example.org;\n    location / { root /var/www/a; }\n}\n"
+	conf := "server {\n    listen 80;\n    server_name vpn.example.org;\n    location ^~ /.well-known/acme-challenge/ {\n        root /var/www/conf;\n    }\n}\n"
+	writeReal(t, filepath.Join(dir, "sites-enabled", "a-site"), site)
+	writeReal(t, filepath.Join(dir, "conf.d", "z-conf.conf"), conf)
+	got, err := FindServers(dir)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("%v %d", err, len(got))
+	}
+	if filepath.Base(got[0].File) != "z-conf.conf" || filepath.Base(got[1].File) != "a-site" {
+		t.Fatalf("порядок блоков: %s, %s", got[0].File, got[1].File)
+	}
+	plan, err := PlanACME(got, "vpn.example.org", "nginx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Mode != ACMEExisting || plan.Webroot != "/var/www/conf" || filepath.Base(plan.Server.File) != "z-conf.conf" {
+		t.Fatalf("план взял не первый блок nginx: %+v", plan)
+	}
+}

@@ -244,11 +244,14 @@ func parseServers(file, src string) []parsedServer {
 	return out
 }
 
-// FindServers разбирает dir/sites-enabled/* и dir/conf.d/*.conf (только
-// чтение). Отсутствующий каталог — не ошибка.
+// FindServers разбирает dir/conf.d/*.conf и dir/sites-enabled/* (только
+// чтение) в том порядке, в каком их читает nginx: в Debian и Ubuntu
+// nginx.conf подключает `include /etc/nginx/conf.d/*.conf;` раньше
+// `include /etc/nginx/sites-enabled/*;`. Порядок важен: из блоков с одним
+// server_name на порту nginx берёт первый. Отсутствующий каталог — не ошибка.
 func FindServers(dir string) ([]NginxServer, error) {
 	var files []string
-	for _, pat := range []string{"sites-enabled/*", "conf.d/*.conf"} {
+	for _, pat := range []string{"conf.d/*.conf", "sites-enabled/*"} {
 		m, err := filepath.Glob(filepath.Join(dir, pat))
 		if err != nil {
 			return nil, err
