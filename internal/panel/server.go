@@ -306,6 +306,14 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /telemt/update", s.telemtUpdate)
 	s.route(mux, "POST /telemt/install", s.telemtInstall)
 
+	// WARP: встроенный и AZ-WARP.
+	s.route(mux, "GET /warp", s.warpPage)
+	s.route(mux, "POST /warp/domains", s.warpEdit("domains"))
+	s.route(mux, "POST /warp/ips", s.warpEdit("ips"))
+	s.route(mux, "POST /warp/sync", s.warpSync)
+	s.route(mux, "POST /warp/update", s.warpUpdate)
+	s.route(mux, "POST /warp/install", s.warpInstall)
+
 	s.route(mux, "GET /{$}", s.clientsList)
 	s.route(mux, "/", func(w http.ResponseWriter, r *http.Request) {
 		s.errorPage(w, r, http.StatusNotFound, "страница не найдена")

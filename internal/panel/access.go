@@ -104,6 +104,13 @@ var routes = map[string]access{
 	"POST /telemt/update":              accAdmin,
 	"POST /telemt/install":             accAdmin,
 
+	"GET /warp":          accAdmin,
+	"POST /warp/domains": accAdmin,
+	"POST /warp/ips":     accAdmin,
+	"POST /warp/sync":    accAdmin,
+	"POST /warp/update":  accAdmin,
+	"POST /warp/install": accAdmin,
+
 	"GET /{$}": accAny,
 	"/":        accAny,
 

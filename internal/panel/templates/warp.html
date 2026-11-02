@@ -1,0 +1,176 @@
+{{define "content"}}
+<h1>WARP</h1>
+{{if .WarpErr}}<div class="error">{{.WarpErr}}</div>{{end}}
+
+<h2>Встроенный WARP AntiZapret</h2>
+<p class="muted">Режимы (ANTIZAPRET_WARP, VPN_WARP, DNS_WARP, WARP_MTU) меняются в <a href="{{url "/settings/antizapret"}}">настройках AntiZapret</a>. Здесь — интерфейсы warp-*.</p>
+{{range .Builtin}}
+<div class="table-wrap">
+<table>
+  <caption><b>{{.Name}}</b></caption>
+  <thead><tr><th>Узел</th><th>Последнее рукопожатие</th><th>Принято</th><th>Отправлено</th></tr></thead>
+  <tbody>
+  {{range .Peers}}<tr><td>{{.Endpoint}}</td><td>{{.Handshake}}</td><td>{{.Rx}}</td><td>{{.Tx}}</td></tr>
+  {{else}}<tr><td colspan="4" class="muted">Пиров нет.</td></tr>{{end}}
+  </tbody>
+</table>
+</div>
+{{else}}
+{{if not .WarpErr}}<p class="muted">Интерфейсов warp-* нет.</p>{{end}}
+{{end}}
+
+{{if not .WarpErr}}
+<h2>AZ-WARP</h2>
+{{with .AZ}}
+{{if .Installed}}
+<div class="card">
+  <p>Версия: <code>{{.Version}}</code>{{if .RemoteVersion}} · последняя <code>{{.RemoteVersion}}</code>{{end}}
+     {{if .UpdateAvailable}}<span class="warn">· есть обновление</span>{{else}}<span class="ok">· актуальная</span>{{end}}</p>
+  {{if $.OutboundShown}}<p>Выход: {{$.OutboundShown}}</p>{{end}}
+  <p>AntiZapret через WARP: {{if .AntizapretWarp}}да{{if .AntizapretMode}} ({{.AntizapretMode}}){{end}}{{else}}нет{{end}}
+     · VPN через WARP: {{if .VPNWarp}}да{{if .VPNWarpMode}} ({{.VPNWarpMode}}){{end}}{{else}}нет{{end}}</p>
+  <p>Домены синхронизированы: {{if .DomainsSynced}}<span class="ok">да</span>{{else}}<span class="warn">нет</span>{{end}}
+     · подсеть доменов <code>{{.Subnet.Fake}}</code>{{if .Subnet.Conflict}} <span class="bad">(конфликт)</span>{{end}}{{if not .Subnet.InAntiZapret}} <span class="warn">(не в AntiZapret)</span>{{end}}
+     · адресных диапазонов: {{.IPRanges.Count}} (маршрутов {{.IPRanges.RoutesCount}}, синхронизированы: {{if .IPRanges.Synced}}да{{else}}нет{{end}})</p>
+  <p>sing-box: {{if .Singbox.Running}}<span class="ok">работает</span>{{else}}<span class="warn">не работает</span>{{end}}{{if .Singbox.MTU}} · MTU {{.Singbox.MTU}}{{end}}
+     {{if .TrafficToday}}· трафик за сегодня: {{.TrafficToday}}{{end}}</p>
+  {{if .Error}}<p class="warn">{{.Error}}</p>{{end}}
+  <p class="muted">Секреты (пароли, ключи) в этой сводке не показываются.</p>
+  <form method="post" action="{{url "/warp/update"}}" class="inline">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <label class="inline"><input type="checkbox" name="confirm" value="1"> подтверждаю</label>
+    <button type="submit">Обновить AZ-WARP</button>
+  </form>
+  <form method="post" action="{{url "/warp/sync"}}" class="inline">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <button type="submit">Синхронизировать домены</button>
+  </form>
+</div>
+
+<h2>Домены</h2>
+{{if $.DomErr}}<div class="error">{{$.DomErr}}</div>{{end}}
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Домен</th><th>Источник</th><th>Включён</th><th></th></tr></thead>
+  <tbody>
+  {{range $.Domains}}
+  {{if .Known}}
+  <tr><td>{{.Domain}}</td><td>{{.Source}}</td><td>{{if .Enabled}}<span class="ok">да</span>{{else}}<span class="warn">нет</span>{{end}}</td><td>
+    {{if eq .Source "user"}}
+    <form method="post" action="{{url "/warp/domains"}}" class="inline">
+      <input type="hidden" name="csrf" value="{{$.CSRF}}">
+      <input type="hidden" name="action" value="remove">
+      <input type="hidden" name="arg" value="{{.Domain}}">
+      <input type="hidden" name="sync" value="1">
+      <button type="submit">Удалить</button>
+    </form>
+    {{end}}
+  </td></tr>
+  {{else}}
+  <tr><td colspan="4"><code>{{.Raw}}</code></td></tr>
+  {{end}}
+  {{else}}
+  <tr><td colspan="4" class="muted">Список пуст.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+<form method="post" action="{{url "/warp/domains"}}" class="card">
+  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+  <input type="hidden" name="action" value="add">
+  <label>Добавить домен <input type="text" name="arg" required spellcheck="false" placeholder="example.com"></label>
+  <label class="inline"><input type="checkbox" name="sync" value="1" checked> сразу синхронизировать</label>
+  <button type="submit">Добавить</button>
+</form>
+<div class="card">
+  <p>Списки сервисов:</p>
+  {{range $.Toggles}}
+  <form method="post" action="{{url "/warp/domains"}}" class="inline">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <input type="hidden" name="action" value="{{.Action}}">
+    <input type="hidden" name="arg" value="{{.List}}">
+    <input type="hidden" name="sync" value="1">
+    <button type="submit">{{.Title}}</button>
+  </form>
+  {{end}}
+  <form method="post" action="{{url "/warp/domains"}}" class="inline">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <input type="hidden" name="action" value="save">
+    <input type="hidden" name="sync" value="1">
+    <button type="submit">Сохранить список (domains save)</button>
+  </form>
+</div>
+
+<h2>Подсети</h2>
+{{if $.IPErr}}<div class="error">{{$.IPErr}}</div>{{end}}
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Подсеть</th><th></th></tr></thead>
+  <tbody>
+  {{range $.IPs}}
+  <tr><td><code>{{.}}</code></td><td>
+    <form method="post" action="{{url "/warp/ips"}}" class="inline">
+      <input type="hidden" name="csrf" value="{{$.CSRF}}">
+      <input type="hidden" name="action" value="ipremove">
+      <input type="hidden" name="arg" value="{{.}}">
+      <input type="hidden" name="sync" value="1">
+      <button type="submit">Удалить</button>
+    </form>
+  </td></tr>
+  {{else}}
+  <tr><td colspan="2" class="muted">Подсетей нет.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+<form method="post" action="{{url "/warp/ips"}}" class="card">
+  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+  <input type="hidden" name="action" value="ipadd">
+  <label>Добавить подсеть <input type="text" name="arg" required spellcheck="false" placeholder="1.2.3.0/24"></label>
+  <label class="inline"><input type="checkbox" name="sync" value="1" checked> сразу синхронизировать</label>
+  <button type="submit">Добавить</button>
+</form>
+
+{{else}}
+<p>AZ-WARP не установлен.</p>
+<form method="post" action="{{url "/warp/install"}}" class="card">
+  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+  <p class="warn">Установщик запускается задачей и отвечает на вопросы за вас по этой форме. Встретит неизвестный вопрос — остановится, не угадывая; вывод останется в журнале задачи.</p>
+  <label>Режим
+    <select name="mode">{{range $.Modes}}<option value="{{.Value}}"{{if eq (index $.Typed "mode") .Value}} selected{{end}}>{{.Title}}</option>{{end}}</select>
+  </label>
+  <label>Фейковая подсеть <small class="muted">пусто — 10.224.0.0/16</small> <input type="text" name="subnet" value="{{index $.Typed "subnet"}}" spellcheck="false" placeholder="10.224.0.0/16"></label>
+  <label class="inline"><input type="checkbox" name="force_subnet" value="1"> использовать подсеть, даже если установщик считает её занятой</label>
+  <label>MTU <small class="muted">1280–1500; пусто — рекомендуемый</small> <input type="number" name="mtu" value="{{index $.Typed "mtu"}}"></label>
+  <label>Номер источника ключей WARP <small class="muted">пусто — первый</small> <input type="number" name="warp_key" value="{{index $.Typed "warp_key"}}"></label>
+  <label class="inline"><input type="checkbox" name="no_gemini" value="1"> не добавлять домены Gemini</label>
+  <label class="inline"><input type="checkbox" name="no_chatgpt" value="1"> не добавлять домены ChatGPT</label>
+
+  <h3>Донор (режим «Донор»)</h3>
+  <label>Ссылка ss:// или адрес <input type="text" name="slave_link" value="{{index $.Typed "slave_link"}}" spellcheck="false"></label>
+  <label>Порт <small class="muted">только для адреса</small> <input type="text" name="slave_port" value="{{index $.Typed "slave_port"}}"></label>
+  <label>Ключ Shadowsocks <small class="muted">только для адреса</small> <input type="password" name="slave_key" autocomplete="off"></label>
+
+  <h3>VLESS / Hysteria2</h3>
+  <label>Ссылка vless:// или hy2:// <input type="text" name="proxy_link" value="{{index $.Typed "proxy_link"}}" spellcheck="false"></label>
+
+  <h3>WireGuard</h3>
+  <label>Номер найденного .conf <small class="muted">0 или пусто — ввести вручную</small> <input type="number" name="wg_conf_index" value="{{index $.Typed "wg_conf_index"}}"></label>
+  <label>Endpoint (host:port) <input type="text" name="wg_endpoint" value="{{index $.Typed "wg_endpoint"}}" spellcheck="false"></label>
+  <label>Address <input type="text" name="wg_address" value="{{index $.Typed "wg_address"}}" spellcheck="false"></label>
+  <label>Приватный ключ <input type="password" name="wg_private_key" autocomplete="off"></label>
+  <label>Публичный ключ сервера <input type="text" name="wg_public_key" value="{{index $.Typed "wg_public_key"}}" spellcheck="false"></label>
+  <label>PresharedKey <input type="password" name="wg_preshared_key" autocomplete="off"></label>
+  <label>PersistentKeepalive <input type="text" name="wg_keepalive" value="{{index $.Typed "wg_keepalive"}}"></label>
+
+  <h3>OpenVPN</h3>
+  <label>Путь к .ovpn <input type="text" name="ovpn_path" value="{{index $.Typed "ovpn_path"}}" spellcheck="false"></label>
+  <label>Пользователь <input type="text" name="ovpn_user" value="{{index $.Typed "ovpn_user"}}"></label>
+  <label>Пароль <input type="password" name="ovpn_pass" autocomplete="off"></label>
+
+  <button type="submit">Установить AZ-WARP</button>
+</form>
+{{end}}
+{{end}}
+{{end}}
+{{end}}
