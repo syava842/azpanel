@@ -24,10 +24,10 @@ const (
 	confirmTTL    = 60 * time.Second // подтверждение опасного действия
 	dialogTTL     = 10 * time.Minute // диалог «создать клиента», «ввести код»
 	pageSize      = 20               // клиентов на страницу списка
-	codeMax       = 5                // неверных кодов за окно на один Telegram ID
 	codeWindow    = time.Hour
-	attemptsKeep  = 24 * time.Hour
 	linkMax       = 10 // попыток привязки кодом за час на один Telegram ID
+	maxRequests   = 20 // открытых заявок на доступ; сверх этого незнакомцам не отвечаем
+	rejectQuiet   = 24 * time.Hour
 	maxMessage    = 4000
 	telegramLimit = 50 << 20 // предел sendDocument для ботов
 )
@@ -37,7 +37,6 @@ type Node interface {
 	Info(ctx context.Context) (nodeapi.Info, error)
 	Clients(ctx context.Context) ([]nodeapi.Client, error)
 	Sessions(ctx context.Context) ([]nodeapi.Session, error)
-	System(ctx context.Context) (nodeapi.System, error)
 	Profiles(ctx context.Context, name string) ([]nodeapi.Profile, error)
 	Profile(ctx context.Context, name string, p nodeapi.Profile) ([]byte, error)
 	Renew(ctx context.Context, name string, days int) (nodeapi.Result, error)
@@ -55,7 +54,8 @@ type Store interface {
 	UserByID(ctx context.Context, id int64) (store.User, error)
 	Users(ctx context.Context) ([]store.User, error)
 	RedeemLinkCode(ctx context.Context, code string, now int64) (int64, error)
-	SetTelegramID(ctx context.Context, userID, tgID int64) error
+	BindTelegramID(ctx context.Context, userID, tgID int64) error
+	LinkTelegramID(ctx context.Context, userID, tgID int64) error
 	TelegramBanned(ctx context.Context, tgID int64) (bool, error)
 	BanTelegram(ctx context.Context, tgID, now int64) error
 	TelegramRequests(ctx context.Context) ([]store.TelegramRequest, error)
@@ -69,9 +69,10 @@ type Store interface {
 	Audit(ctx context.Context, e store.AuditEntry) error
 	Attempt(ctx context.Context, key string, now int64) error
 	Attempts(ctx context.Context, key string, since int64) (int, error)
-	PurgeAttempts(ctx context.Context, before int64) error
 	Pending(ctx context.Context, limit int) ([]store.OutboxItem, error)
 	MarkSent(ctx context.Context, id, now int64) error
+	FailOutbox(ctx context.Context, id int64) (int, error)
+	MarkSentBefore(ctx context.Context, before, now int64) (int64, error)
 	Meta(ctx context.Context, key string) (string, bool, error)
 	SetMeta(ctx context.Context, key, value string) error
 }
@@ -102,6 +103,20 @@ type Backend interface {
 	NewUser(ctx context.Context, login string) (store.User, error)
 	// QR рисует PNG профиля; false — не помещается.
 	QR(data []byte) ([]byte, bool)
+	// OpenAttempt резервирует попытку ввода кода пользователем панели — тем же
+	// счётчиком, что и в вебе и портале (пять неверных за час закрывают ввод
+	// на час). retry > 0 — ввод закрыт, столько ждать.
+	OpenAttempt(ctx context.Context, userID int64) (t AttemptTicket, retry time.Duration, err error)
+	// RefundAttempt возвращает резерв: код не оказался неверным.
+	RefundAttempt(ctx context.Context, t AttemptTicket)
+	// FailAttempt подтверждает неверный код; возвращает остаток попыток.
+	FailAttempt(ctx context.Context, t AttemptTicket) (left int)
+}
+
+// AttemptTicket — резерв одной попытки ввода кода (устройство — у Backend).
+type AttemptTicket struct {
+	Key string
+	TS  int64
 }
 
 // Bot — бот панели.
@@ -122,15 +137,19 @@ type Bot struct {
 	NotifyEvery time.Duration
 	// Sync — выполнять долгие действия (бэкап) в том же потоке; нужно тестам.
 	Sync bool
+	// LastSystem — последний снимок ресурсов узла у сборщика панели: бот сам
+	// агента о ресурсах не спрашивает (замер ЦП у агента считается от прошлого
+	// вызова, и лишний вызов сбил бы замер сборщика). false — снимка ещё нет.
+	LastSystem func() (nodeapi.System, bool)
 
 	mu       sync.Mutex
 	username string
 	confirms map[string]confirm
 	dialogs  map[int64]*dialog
-	sentTo   map[int64]map[int64]bool // outbox id -> чаты, куда уже доставлено
-	fails    map[int64]int            // outbox id -> неудачных проходов
-	codeMu   sync.Mutex               // счёт неверных кодов и погашение — одним куском
+	sentTo   map[int64]map[int64]bool // outbox id -> чаты, куда уже доставлено (после перезапуска доставка может повториться)
 	backupMu sync.Mutex               // один бэкап за раз
+	tasks    sync.WaitGroup           // фоновые действия
+	outboxOK bool                     // первый проход очереди после запуска сделан
 }
 
 type confirm struct {
@@ -195,10 +214,37 @@ func (b *Bot) Run(ctx context.Context) {
 	go func() { defer wg.Done(); b.scheduleLoop(ctx) }()
 	b.pollLoop(ctx)
 	wg.Wait()
+	b.tasks.Wait()
+}
+
+// pollPause — пауза после n-й подряд ошибки Bot API (n с единицы): 5 с, дальше
+// вдвое дольше, но не больше пяти минут.
+func pollPause(n int) time.Duration {
+	if n < 1 {
+		n = 1
+	}
+	d := 5 * time.Second
+	for i := 1; i < n && d < pollPauseMax; i++ {
+		d *= 2
+	}
+	return min(d, pollPauseMax)
+}
+
+// pollLogEvery — как часто повторять одну и ту же ошибку опроса в журнале.
+const (
+	pollPauseMax = 5 * time.Minute
+	pollLogEvery = 10 * time.Minute
+)
+
+// pollShouldLog: первая ошибка серии пишется сразу, дальше — раз в pollLogEvery.
+func pollShouldLog(n int, last, now time.Time) bool {
+	return n <= 1 || now.Sub(last) >= pollLogEvery
 }
 
 func (b *Bot) pollLoop(ctx context.Context) {
 	var offset int64
+	var fails int
+	var lastLog time.Time
 	for ctx.Err() == nil {
 		ups, err := b.TG.GetUpdates(ctx, offset, telegram.LongPollSeconds)
 		if err != nil {
@@ -207,15 +253,20 @@ func (b *Bot) pollLoop(ctx context.Context) {
 			}
 			var api *telegram.APIError
 			if errors.As(err, &api) {
-				b.log().Warn("бот: getUpdates отклонён", "err", err)
+				fails++
+				if pollShouldLog(fails, lastLog, b.now()) {
+					lastLog = b.now()
+					b.log().Warn("бот: getUpdates отклонён", "err", err, "подряд", fails)
+				}
 				select {
 				case <-ctx.Done():
 					return
-				case <-time.After(5 * time.Second):
+				case <-time.After(pollPause(fails)):
 				}
 			}
 			continue
 		}
+		fails = 0
 		for _, up := range ups {
 			b.HandleUpdate(ctx, up)
 		}
@@ -255,6 +306,18 @@ func (b *Bot) send(ctx context.Context, chat int64, text string, kb *telegram.In
 	}
 }
 
+// agentErr — текст ошибки агента для чата: подробности (адрес, порт) только в
+// журнале, человеку — общая фраза; ошибка самого агента (*nodeapi.Error) —
+// его собственное сообщение.
+func (b *Bot) agentErr(err error) string {
+	var ne *nodeapi.Error
+	if errors.As(err, &ne) {
+		return ne.Message
+	}
+	b.log().Warn("бот: агент недоступен", "err", err)
+	return "сервер временно недоступен"
+}
+
 // show заменяет сообщение msgID (кнопка под ним) или шлёт новое.
 func (b *Bot) show(ctx context.Context, chat, msgID int64, text string, kb *telegram.InlineKeyboardMarkup) {
 	if msgID != 0 {
@@ -288,18 +351,27 @@ func (b *Bot) audit(ctx context.Context, a actor, action, target, before, after 
 	}
 }
 
-// admins — активные администраторы с привязанным Telegram.
-func (b *Bot) admins(ctx context.Context) []store.User {
+// adminsErr — активные администраторы с привязанным Telegram; роль читается
+// из базы в момент вызова.
+func (b *Bot) adminsErr(ctx context.Context) ([]store.User, error) {
 	us, err := b.Store.Users(ctx)
 	if err != nil {
-		b.log().Warn("бот: пользователи не прочитаны", "err", err)
-		return nil
+		return nil, err
 	}
 	var out []store.User
 	for _, u := range us {
 		if u.Role == store.RoleAdmin && !u.Disabled && u.TelegramID != nil {
 			out = append(out, u)
 		}
+	}
+	return out, nil
+}
+
+// admins — то же без ошибки: при сбое чтения пусто, сбой в журнале.
+func (b *Bot) admins(ctx context.Context) []store.User {
+	out, err := b.adminsErr(ctx)
+	if err != nil {
+		b.log().Warn("бот: пользователи не прочитаны", "err", err)
 	}
 	return out
 }

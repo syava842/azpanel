@@ -23,6 +23,8 @@ const (
 
 var loginSan = regexp.MustCompile(`[^a-z0-9_.-]`)
 
+func rejectKey(tg int64) string { return fmt.Sprintf("tgreject:%d", tg) }
+
 // parseStart разбирает «/start» и «/start код».
 func parseStart(text string) (isStart bool, code string) {
 	f := strings.Fields(text)
@@ -80,6 +82,10 @@ func (b *Bot) onStranger(ctx context.Context, m *telegram.Message, text, code st
 	if b.Cfg.Strangers != "request" {
 		return // closed: молчим
 	}
+	// Отклонённый ID сутки молчит: иначе отказ порождает новую заявку и уведомление.
+	if n, err := b.Store.Attempts(ctx, rejectKey(m.From.ID), b.now().Add(-rejectQuiet).Unix()); err != nil || n > 0 {
+		return
+	}
 	reqs, err := b.Store.TelegramRequests(ctx)
 	if err != nil {
 		b.log().Warn("бот: заявки не прочитаны", "err", err)
@@ -91,15 +97,18 @@ func (b *Bot) onStranger(ctx context.Context, m *telegram.Message, text, code st
 			known = true
 		}
 	}
+	if known {
+		return // заявка уже подана: отвечали один раз, повторы молча
+	}
+	if len(reqs) >= maxRequests {
+		return // открытых заявок слишком много (ботоферма): не отвечаем и не уведомляем
+	}
 	req := store.TelegramRequest{ID: m.From.ID, Username: m.From.Username, Name: displayName(m.From), Created: b.now().Unix()}
 	if err := b.Store.AddTelegramRequest(ctx, req); err != nil {
 		b.log().Warn("бот: заявка не записана", "err", err)
 		return
 	}
 	b.send(ctx, chat, "Заявка отправлена администратору. Ответ придёт сюда.", nil)
-	if known {
-		return
-	}
 	who := req.Name
 	if req.Username != "" {
 		who += " (@" + req.Username + ")"
@@ -143,8 +152,12 @@ func (b *Bot) link(ctx context.Context, m *telegram.Message, code string) {
 		b.log().Warn("бот: пользователь привязки не прочитан", "err", err)
 		return
 	}
-	if err := b.Store.SetTelegramID(ctx, uid, tg); err != nil {
-		if errors.Is(err, store.ErrTelegramTaken) {
+	if u.Disabled {
+		b.send(ctx, chat, textClosed, nil)
+		return
+	}
+	if err := b.Store.LinkTelegramID(ctx, uid, tg); err != nil {
+		if errors.Is(err, store.ErrTelegramTaken) || errors.Is(err, store.ErrTelegramBound) {
 			b.send(ctx, chat, err.Error()+".", nil)
 			return
 		}
@@ -158,6 +171,12 @@ func (b *Bot) link(ctx context.Context, m *telegram.Message, code string) {
 	a := actor{tg: tg, chat: chat, user: u, admin: u.Role == store.RoleAdmin}
 	b.audit(ctx, a, "tg_link", u.Login, "", fmt.Sprintf("привязан Telegram %d", tg))
 	b.send(ctx, chat, "Готово: Telegram привязан к «"+u.Login+"».", b.mainMenu(a))
+	// Привязка — новый вход в панель: остальные администраторы должны о ней знать.
+	for _, ad := range b.admins(ctx) {
+		if *ad.TelegramID != tg {
+			b.send(ctx, *ad.TelegramID, fmt.Sprintf("К «%s» привязан Telegram ID %d.", u.Login, tg), nil)
+		}
+	}
 }
 
 // onText — сообщение привязанного пользователя.
@@ -241,17 +260,41 @@ func (b *Bot) onCallback(ctx context.Context, q *telegram.CallbackQuery) {
 		return
 	}
 	u, err := b.Store.UserByTelegramID(ctx, tg)
+	if errors.Is(err, store.ErrNotFound) {
+		// Непривязанный Telegram: как и в сообщениях, молчим (даже без всплывашки).
+		_ = b.TG.AnswerCallbackQuery(ctx, q.ID, "", false)
+		return
+	}
 	if err != nil || u.Disabled {
 		_ = b.TG.AnswerCallbackQuery(ctx, q.ID, "Нет доступа.", true)
 		return
 	}
 	a := actor{tg: tg, chat: q.Message.Chat.ID, user: u, admin: u.Role == store.RoleAdmin}
 	args := strings.Split(q.Data, ":")
+	if longOps[args[0]] && (a.admin || !adminOps[args[0]]) {
+		// Долгое действие (клиентские скрипты, сертификаты, перезагрузка):
+		// кнопке отвечаем сразу, иначе Telegram через ~15 с отвечает «query is
+		// too old», а бот не обслуживает остальных. Итог — сообщением в чат.
+		if err := b.TG.AnswerCallbackQuery(ctx, q.ID, "", false); err != nil {
+			b.log().Warn("бот: ответ на кнопку не отправлен", "err", err)
+		}
+		msgID := q.Message.MessageID
+		b.spawn(func() {
+			if note := b.dispatch(ctx, a, msgID, args[0], args[1:]); note != "" {
+				b.send(ctx, a.chat, note, nil)
+			}
+		})
+		return
+	}
 	toast := b.dispatch(ctx, a, q.Message.MessageID, args[0], args[1:])
 	if err := b.TG.AnswerCallbackQuery(ctx, q.ID, toast, false); err != nil {
 		b.log().Warn("бот: ответ на кнопку не отправлен", "err", err)
 	}
 }
+
+// longOps — кнопки с долгим действием: подтверждение (удаление, перезагрузка),
+// продление, создание клиента.
+var longOps = map[string]bool{"y": true, "e": true, "t": true, "g": true}
 
 func argInt(args []string, i int) (int, bool) {
 	if i >= len(args) {
@@ -381,7 +424,9 @@ func (b *Bot) onDialog(ctx context.Context, a actor, d *dialog, text string) {
 		b.send(ctx, a.chat, "Тип клиента «"+text+"»:", keyboard(
 			row(btn("OpenVPN", cb("t", nodeapi.KindOpenVPN)), btn("WireGuard", cb("t", nodeapi.KindWireGuard)))))
 	case "code":
-		b.enterCode(ctx, a, d.client, text)
+		// Погашение кода может перевыпускать сертификат — бот на это время не встаёт.
+		name := d.client
+		b.spawn(func() { b.enterCode(ctx, a, name, text) })
 	}
 }
 
@@ -389,7 +434,7 @@ func (b *Bot) onDialog(ctx context.Context, a actor, d *dialog, text string) {
 func (b *Bot) search(ctx context.Context, a actor, q string) {
 	list, err := b.Node.Clients(ctx)
 	if err != nil {
-		b.send(ctx, a.chat, "Агент недоступен: "+err.Error(), nil)
+		b.send(ctx, a.chat, "Агент недоступен: "+b.agentErr(err), nil)
 		return
 	}
 	q = strings.ToLower(q)
@@ -438,7 +483,9 @@ func (b *Bot) request(ctx context.Context, a actor, msgID int64, op string, args
 		}
 		var rows [][]telegram.InlineKeyboardButton
 		for _, u := range us {
-			if u.TelegramID == nil && !u.Disabled && len(rows) < 30 {
+			// Только обычные пользователи без привязки: администратору Telegram
+			// из бота не отдаётся (его привязывают из веб-сессии с паролем).
+			if bindable(u) && len(rows) < 30 {
 				rows = append(rows, row(btn(u.Login, cb("rb", id, u.ID))))
 			}
 		}
@@ -452,6 +499,10 @@ func (b *Bot) request(ctx context.Context, a actor, msgID int64, op string, args
 		u, err := b.Store.UserByID(ctx, int64(uid))
 		if err != nil {
 			return "Пользователь не найден."
+		}
+		// Список мог устареть: условия проверяются заново, а привязка условная.
+		if !bindable(u) {
+			return "Этому пользователю привязать Telegram из бота нельзя: он администратор, отключён или уже привязан."
 		}
 		return b.approve(ctx, a, msgID, *req, u)
 	case "rc":
@@ -476,6 +527,9 @@ func (b *Bot) request(ctx context.Context, a actor, msgID int64, op string, args
 		if err := b.Store.DeleteTelegramRequest(ctx, id); err != nil {
 			return "Заявка не снята."
 		}
+		if err := b.Store.Attempt(ctx, rejectKey(id), b.now().Unix()); err != nil {
+			b.log().Warn("бот: отказ по заявке не запомнен", "err", err)
+		}
 		b.audit(ctx, a, "tg_request", strconv.FormatInt(id, 10), "", "отклонена")
 		b.send(ctx, id, "Заявка отклонена.", nil)
 		b.show(ctx, a.chat, msgID, "Заявка "+strconv.FormatInt(id, 10)+" отклонена.", nil)
@@ -489,9 +543,20 @@ func (b *Bot) request(ctx context.Context, a actor, msgID int64, op string, args
 	return ""
 }
 
+// bindable: привязать Telegram по заявке можно только обычному активному
+// пользователю без привязки.
+func bindable(u store.User) bool {
+	return u.Role == store.RoleUser && !u.Disabled && u.TelegramID == nil
+}
+
 func (b *Bot) approve(ctx context.Context, a actor, msgID int64, req store.TelegramRequest, u store.User) string {
-	if err := b.Store.SetTelegramID(ctx, u.ID, req.ID); err != nil {
-		return err.Error()
+	if err := b.Store.BindTelegramID(ctx, u.ID, req.ID); err != nil {
+		switch {
+		case errors.Is(err, store.ErrBindRefused), errors.Is(err, store.ErrTelegramBound), errors.Is(err, store.ErrTelegramTaken):
+			return err.Error() + "."
+		}
+		b.log().Warn("бот: привязка по заявке не удалась", "err", err)
+		return "Привязка не удалась."
 	}
 	if err := b.Store.DeleteTelegramRequest(ctx, req.ID); err != nil {
 		b.log().Warn("бот: заявка не снята", "err", err)

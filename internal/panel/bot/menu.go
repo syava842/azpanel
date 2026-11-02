@@ -21,14 +21,6 @@ func sortedClients(list []nodeapi.Client) []nodeapi.Client {
 	return out
 }
 
-func agentErr(err error) string {
-	var ne *nodeapi.Error
-	if errors.As(err, &ne) {
-		return ne.Message
-	}
-	return "агент недоступен: " + err.Error()
-}
-
 // ownClients — имена клиентов пользователя на этом узле.
 func (b *Bot) ownClients(ctx context.Context, userID int64) (map[string]bool, error) {
 	refs, err := b.Store.ClientsOf(ctx, userID)
@@ -70,7 +62,7 @@ func (b *Bot) visible(ctx context.Context, a actor, name string) (nodeapi.Client
 func (b *Bot) showClients(ctx context.Context, a actor, msgID int64, page int) {
 	list, err := b.Node.Clients(ctx)
 	if err != nil {
-		b.show(ctx, a.chat, msgID, "Клиенты недоступны: "+agentErr(err), b.mainMenu(a))
+		b.show(ctx, a.chat, msgID, "Клиенты недоступны: "+b.agentErr(err), b.mainMenu(a))
 		return
 	}
 	var own map[string]bool
@@ -177,7 +169,7 @@ func (b *Bot) cardText(ctx context.Context, c nodeapi.Client) string {
 func (b *Bot) showCard(ctx context.Context, a actor, msgID int64, name, note string) string {
 	c, ok, err := b.visible(ctx, a, name)
 	if err != nil {
-		return agentErr(err)
+		return b.agentErr(err)
 	}
 	if !ok {
 		return textGone
@@ -250,13 +242,13 @@ func (b *Bot) profilesFor(ctx context.Context, a actor, name string) ([]nodeapi.
 
 func (b *Bot) showProfiles(ctx context.Context, a actor, msgID int64, name string) string {
 	if _, ok, err := b.visible(ctx, a, name); err != nil {
-		return agentErr(err)
+		return b.agentErr(err)
 	} else if !ok {
 		return textGone
 	}
 	ps, err := b.profilesFor(ctx, a, name)
 	if err != nil {
-		return agentErr(err)
+		return b.agentErr(err)
 	}
 	if len(ps) == 0 {
 		return "Профилей нет."
@@ -280,13 +272,13 @@ func (b *Bot) showProfiles(ctx context.Context, a actor, msgID int64, name strin
 
 func (b *Bot) sendProfile(ctx context.Context, a actor, name string, i int, qr bool) string {
 	if _, ok, err := b.visible(ctx, a, name); err != nil {
-		return agentErr(err)
+		return b.agentErr(err)
 	} else if !ok {
 		return textGone
 	}
 	ps, err := b.profilesFor(ctx, a, name)
 	if err != nil {
-		return agentErr(err)
+		return b.agentErr(err)
 	}
 	if i < 0 || i >= len(ps) {
 		return "Профиль не найден: откройте список заново."
@@ -294,7 +286,7 @@ func (b *Bot) sendProfile(ctx context.Context, a actor, name string, i int, qr b
 	p := ps[i]
 	data, err := b.Node.Profile(ctx, name, p)
 	if err != nil {
-		return agentErr(err)
+		return b.agentErr(err)
 	}
 	if qr {
 		if p.Kind != nodeapi.KindWireGuard {
@@ -325,14 +317,14 @@ func (b *Bot) renew(ctx context.Context, a actor, msgID int64, name string, days
 	}
 	c, ok, err := b.visible(ctx, a, name)
 	if err != nil {
-		return agentErr(err)
+		return b.agentErr(err)
 	}
 	if !ok {
 		return textGone
 	}
 	if _, err := b.Node.Renew(ctx, name, days); err != nil {
 		b.log().Warn("бот: продление не удалось", "client", name, "err", err)
-		return agentErr(err)
+		return b.agentErr(err)
 	}
 	before := "—"
 	if c.CertExpires != nil {
@@ -345,7 +337,7 @@ func (b *Bot) renew(ctx context.Context, a actor, msgID int64, name string, days
 func (b *Bot) setLimit(ctx context.Context, a actor, msgID int64, name string, limit int) string {
 	c, ok, err := b.visible(ctx, a, name)
 	if err != nil {
-		return agentErr(err)
+		return b.agentErr(err)
 	}
 	if !ok {
 		return textGone
@@ -354,7 +346,7 @@ func (b *Bot) setLimit(ctx context.Context, a actor, msgID int64, name string, l
 		return "Лимит вне диапазона."
 	}
 	if err := b.Node.SetLimit(ctx, name, limit); err != nil {
-		return agentErr(err)
+		return b.agentErr(err)
 	}
 	before, after := "—", "—"
 	if c.Limit > 0 {
@@ -372,7 +364,7 @@ func (b *Bot) setLimit(ctx context.Context, a actor, msgID int64, name string, l
 func (b *Bot) block(ctx context.Context, a actor, msgID int64, name string, blocked bool) string {
 	c, ok, err := b.visible(ctx, a, name)
 	if err != nil {
-		return agentErr(err)
+		return b.agentErr(err)
 	}
 	if !ok {
 		return textGone
@@ -380,7 +372,7 @@ func (b *Bot) block(ctx context.Context, a actor, msgID int64, name string, bloc
 	killed, err := b.Back.Block(ctx, c, blocked)
 	if err != nil {
 		b.log().Warn("бот: блокировка не удалась", "client", name, "err", err)
-		return agentErr(err)
+		return b.agentErr(err)
 	}
 	if blocked {
 		b.audit(ctx, a, "block", name, "не заблокирован", fmt.Sprintf("заблокирован, разорвано сессий: %d", killed))
@@ -393,7 +385,7 @@ func (b *Bot) block(ctx context.Context, a actor, msgID int64, name string, bloc
 func (b *Bot) askDelete(ctx context.Context, a actor, msgID int64, name string) string {
 	c, ok, err := b.visible(ctx, a, name)
 	if err != nil {
-		return agentErr(err)
+		return b.agentErr(err)
 	}
 	if !ok {
 		return textGone
@@ -427,21 +419,21 @@ func (b *Bot) confirmed(ctx context.Context, a actor, msgID int64, tok string) s
 		kind, name, _ := strings.Cut(c.arg, ":")
 		cl, ok, err := b.visible(ctx, a, name)
 		if err != nil {
-			return agentErr(err)
+			return b.agentErr(err)
 		}
 		if !ok {
 			return textGone
 		}
 		if err := b.Back.Delete(ctx, cl, kind); err != nil {
 			b.log().Warn("бот: удаление не удалось", "client", name, "err", err)
-			return agentErr(err)
+			return b.agentErr(err)
 		}
 		b.audit(ctx, a, "delete", name, kind, "удалён")
 		b.show(ctx, a.chat, msgID, "Клиент «"+name+"» ("+kind+") удалён.", b.mainMenu(a))
 	case "reboot":
 		if _, err := b.Node.Reboot(ctx); err != nil {
 			b.log().Warn("бот: перезагрузка не запущена", "err", err)
-			return agentErr(err)
+			return b.agentErr(err)
 		}
 		b.audit(ctx, a, "reboot", "сервер", "", "перезагрузка запущена")
 		b.show(ctx, a.chat, msgID, "Перезагрузка запущена. Бот вернётся, когда сервер поднимется.", nil)
@@ -484,7 +476,7 @@ func (b *Bot) finishCreate(ctx context.Context, a actor, msgID int64, d *dialog,
 	b.setDialog(a.tg, nil)
 	list, err := b.Node.Clients(ctx)
 	if err != nil {
-		return agentErr(err)
+		return b.agentErr(err)
 	}
 	for _, c := range list {
 		if c.Name == d.name {
@@ -494,7 +486,7 @@ func (b *Bot) finishCreate(ctx context.Context, a actor, msgID int64, d *dialog,
 	}
 	if err := b.Back.Create(ctx, d.name, d.ckind, days); err != nil {
 		b.log().Warn("бот: клиент не создан", "client", d.name, "err", err)
-		b.show(ctx, a.chat, msgID, "Клиент не создан: "+agentErr(err), b.mainMenu(a))
+		b.show(ctx, a.chat, msgID, "Клиент не создан: "+b.agentErr(err), b.mainMenu(a))
 		return ""
 	}
 	b.audit(ctx, a, "create", d.name, "", d.ckind)
@@ -530,7 +522,7 @@ func (b *Bot) startCode(ctx context.Context, a actor, msgID int64, name string) 
 		}
 	}
 	if _, ok, err := b.visible(ctx, a, name); err != nil {
-		return agentErr(err)
+		return b.agentErr(err)
 	} else if !ok {
 		return textGone
 	}
@@ -539,11 +531,12 @@ func (b *Bot) startCode(ctx context.Context, a actor, msgID int64, name string) 
 	return ""
 }
 
-// enterCode применяет код: правила портала и ограничение попыток по Telegram ID.
+// enterCode применяет код: правила портала и тот же счётчик попыток, что в
+// вебе и портале (по пользователю панели).
 func (b *Bot) enterCode(ctx context.Context, a actor, name, code string) {
 	c, ok, err := b.visible(ctx, a, name)
 	if err != nil {
-		b.send(ctx, a.chat, "Сервер временно недоступен: "+agentErr(err), nil)
+		b.send(ctx, a.chat, "Сервер временно недоступен: "+b.agentErr(err), nil)
 		return
 	}
 	if !ok {
@@ -551,20 +544,23 @@ func (b *Bot) enterCode(ctx context.Context, a actor, name, code string) {
 		b.send(ctx, a.chat, textGone, b.mainMenu(a))
 		return
 	}
-	b.codeMu.Lock()
-	defer b.codeMu.Unlock()
-	now := b.now()
-	key := fmt.Sprintf("tg:%d", a.tg)
-	n, err := b.Store.Attempts(ctx, key, now.Add(-codeWindow).Unix())
+	ticket, retry, err := b.Back.OpenAttempt(ctx, a.user.ID)
 	if err != nil {
 		b.log().Warn("бот: попытки не прочитаны", "err", err)
 		b.send(ctx, a.chat, "Внутренняя ошибка.", nil)
 		return
 	}
-	if n >= codeMax {
-		b.send(ctx, a.chat, "Слишком много неверных кодов: ввод закрыт на час.", b.mainMenu(a))
+	if retry > 0 {
+		b.setDialog(a.tg, nil)
+		b.send(ctx, a.chat, "Слишком много неверных кодов: ввод закрыт, повторите через "+humanDuration(retry)+".", b.mainMenu(a))
 		return
 	}
+	counted := false
+	defer func() {
+		if !counted {
+			b.Back.RefundAttempt(context.WithoutCancel(ctx), ticket)
+		}
+	}()
 	var owner *int64
 	if id, has, err := b.Store.OwnerOf(ctx, b.NodeID, name); err != nil {
 		b.send(ctx, a.chat, "Внутренняя ошибка.", nil)
@@ -575,13 +571,8 @@ func (b *Bot) enterCode(ctx context.Context, a actor, name, code string) {
 	res, err := b.Back.Redeem(ctx, c, owner, strings.TrimSpace(code))
 	switch {
 	case errors.Is(err, store.ErrCodeInvalid):
-		if aerr := b.Store.Attempt(ctx, key, now.Unix()); aerr != nil {
-			b.log().Warn("бот: попытка не записана", "err", aerr)
-		}
-		if perr := b.Store.PurgeAttempts(ctx, now.Add(-attemptsKeep).Unix()); perr != nil {
-			b.log().Warn("бот: старые попытки не стёрты", "err", perr)
-		}
-		left := codeMax - (n + 1)
+		counted = true
+		left := b.Back.FailAttempt(context.WithoutCancel(ctx), ticket)
 		msg := fmt.Sprintf("%s. Осталось попыток: %d.", store.ErrCodeInvalid.Error(), left)
 		if left == 0 {
 			b.setDialog(a.tg, nil)
@@ -624,11 +615,11 @@ func (b *Bot) showNode(ctx context.Context, a actor, msgID int64) {
 	if info, err := b.Node.Info(ctx); err == nil {
 		fmt.Fprintf(&sb, "Узел: %s, агент %s\n", info.Hostname, info.Version)
 	} else {
-		fmt.Fprintf(&sb, "Агент недоступен: %s\n", agentErr(err))
+		fmt.Fprintf(&sb, "Агент недоступен: %s\n", b.agentErr(err))
 		b.show(ctx, a.chat, msgID, sb.String(), keyboard(row(btn("Меню", "m"))))
 		return
 	}
-	if sys, err := b.Node.System(ctx); err == nil {
+	if sys, ok := b.lastSystem(); ok {
 		r := sys.Resources
 		mem := 0.0
 		if r.Memory.TotalBytes > 0 {

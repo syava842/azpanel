@@ -6,7 +6,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -26,13 +28,85 @@ type backupFile struct {
 	cleanup    func()
 }
 
-// spawn запускает f в фоне; с Sync (тесты) — сразу.
+// BackupGroupsKey — ключ meta: через запятую chat ID групп из backup_chats,
+// которым владелец явно разрешил получать бэкап (подтверждается в вебе).
+const BackupGroupsKey = "tg_backup_groups"
+
+// spawn запускает f в фоне; с Sync (тесты) — сразу. Паника не должна
+// останавливать панель.
 func (b *Bot) spawn(f func()) {
-	if b.Sync {
+	run := func() {
+		defer func() {
+			if r := recover(); r != nil {
+				b.log().Error("бот: сбой фонового действия", "panic", fmt.Sprint(r))
+			}
+		}()
 		f()
+	}
+	if b.Sync {
+		run()
 		return
 	}
-	go f()
+	b.tasks.Add(1)
+	go func() {
+		defer b.tasks.Done()
+		run()
+	}()
+}
+
+// ParseChatList разбирает список chat ID через запятую; мусор пропускается.
+func ParseChatList(v string) []int64 {
+	var out []int64
+	for _, p := range strings.Split(v, ",") {
+		if n, err := strconv.ParseInt(strings.TrimSpace(p), 10, 64); err == nil && n != 0 {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// FormatChatList — обратное к ParseChatList.
+func FormatChatList(ids []int64) string {
+	parts := make([]string, 0, len(ids))
+	for _, n := range ids {
+		parts = append(parts, strconv.FormatInt(n, 10))
+	}
+	return strings.Join(parts, ",")
+}
+
+// BackupRecipients отбирает из backup_chats тех, кому бэкап можно отправить.
+// Бэкап содержит ключи всех клиентов, поэтому: личный чат — только если это
+// привязанный действующий администратор (роль читается в момент отправки),
+// групповой — только если владелец подтвердил его в вебе. Остальные — отказ.
+func (b *Bot) BackupRecipients(ctx context.Context) (ok, rejected []int64, err error) {
+	admins, err := b.adminsErr(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	var groups []int64
+	if v, found, merr := b.Store.Meta(ctx, BackupGroupsKey); merr != nil {
+		return nil, nil, merr
+	} else if found {
+		groups = ParseChatList(v)
+	}
+	for _, chat := range b.Cfg.BackupChats {
+		allowed := false
+		if chat > 0 {
+			for _, a := range admins {
+				if *a.TelegramID == chat {
+					allowed = true
+				}
+			}
+		} else {
+			allowed = slices.Contains(groups, chat)
+		}
+		if allowed {
+			ok = append(ok, chat)
+		} else {
+			rejected = append(rejected, chat)
+		}
+	}
+	return ok, rejected, nil
 }
 
 // startBackup — кнопка «Бэкап»: client.sh 8 задачей агента, файл — в чат.
@@ -50,7 +124,9 @@ func (b *Bot) startBackup(ctx context.Context, a actor) string {
 			return
 		}
 		defer bf.cleanup()
-		b.sendBackup(ctx, a.chat, bf)
+		if err := b.sendBackup(ctx, a.chat, bf); err != nil {
+			b.send(ctx, a.chat, "Бэкап создан, но не отправлен: "+err.Error(), nil)
+		}
 	})
 	return "Бэкап запущен, это займёт несколько минут."
 }
@@ -66,14 +142,14 @@ func (b *Bot) pollEvery() time.Duration {
 func (b *Bot) makeBackup(ctx context.Context) (*backupFile, error) {
 	task, err := b.Node.CreateBackup(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("задача не запущена: %s", agentErr(err))
+		return nil, fmt.Errorf("задача не запущена: %s", b.agentErr(err))
 	}
 	deadline := time.Now().Add(backupTimeout)
 	var done bool
 	for !done {
 		d, err := b.Node.Task(ctx, task.ID)
 		if err != nil {
-			return nil, fmt.Errorf("состояние задачи не получено: %s", agentErr(err))
+			return nil, fmt.Errorf("состояние задачи не получено: %s", b.agentErr(err))
 		}
 		switch {
 		case d.Finished == nil:
@@ -104,7 +180,7 @@ func (b *Bot) makeBackup(ctx context.Context) (*backupFile, error) {
 	}
 	files, err := b.Node.Backups(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("список бэкапов не получен: %s", agentErr(err))
+		return nil, fmt.Errorf("список бэкапов не получен: %s", b.agentErr(err))
 	}
 	var src string
 	for _, f := range files { // новые первыми
@@ -118,7 +194,7 @@ func (b *Bot) makeBackup(ctx context.Context) (*backupFile, error) {
 	}
 	rc, err := b.Node.Backup(ctx, src)
 	if err != nil {
-		return nil, fmt.Errorf("файл бэкапа не получен: %s", agentErr(err))
+		return nil, fmt.Errorf("файл бэкапа не получен: %s", b.agentErr(err))
 	}
 	defer rc.Close()
 	return b.saveBackup(rc)
@@ -184,24 +260,27 @@ func (b *Bot) pruneBackups() {
 	}
 }
 
-// sendBackup отправляет файл в чат; слишком большой остаётся на сервере.
-func (b *Bot) sendBackup(ctx context.Context, chat int64, bf *backupFile) {
+// sendBackup отправляет файл в чат; слишком большой остаётся на сервере
+// (об этом пишется текстом, и это не ошибка). Ошибка — файл не дошёл.
+func (b *Bot) sendBackup(ctx context.Context, chat int64, bf *backupFile) error {
 	if bf.size > telegramLimit {
 		where := "на сервере панели"
 		if b.BackupDir == "" {
 			where = "только у агента"
 		}
 		b.send(ctx, chat, fmt.Sprintf("Бэкап готов (%s), но больше предела Telegram в 50 МБ. Файл %s.", humanBytes(uint64(bf.size)), where), nil)
-		return
+		return nil
 	}
 	f, err := os.Open(bf.path)
 	if err != nil {
 		b.log().Warn("бот: файл бэкапа не открыт", "err", err)
-		return
+		return fmt.Errorf("файл бэкапа не открыт")
 	}
 	defer f.Close()
 	caption := fmt.Sprintf("Бэкап %s, %s", b.now().UTC().Format("2006-01-02 15:04 UTC"), humanBytes(uint64(bf.size)))
 	if _, err := b.TG.SendDocument(ctx, chat, bf.name, f, caption); err != nil {
 		b.log().Warn("бот: бэкап не отправлен", "chat", chat, "err", err)
+		return fmt.Errorf("Telegram не принял файл")
 	}
+	return nil
 }

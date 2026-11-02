@@ -36,9 +36,10 @@ type tgCall struct {
 type fakeTG struct {
 	mu       sync.Mutex
 	calls    []tgCall
-	fail     bool  // отвечать ошибкой на отправку
-	failCode int   // код ошибки Bot API; 0 — 403
-	failChat int64 // не ноль: отказ только для sendMessage в этот чат
+	fail     bool   // отвечать ошибкой на отправку
+	failCode int    // код ошибки Bot API; 0 — 403
+	failChat int64  // не ноль: отказ только для sendMessage в этот чат
+	failOnly string // не пусто: отказ только для этого метода (например, sendDocument)
 	srv      *httptest.Server
 }
 
@@ -66,6 +67,9 @@ func newFakeTG(t *testing.T) *fakeTG {
 		f.mu.Lock()
 		f.calls = append(f.calls, call)
 		fail, code := f.fail && method != "answerCallbackQuery", f.failCode
+		if f.failOnly != "" {
+			fail = f.failOnly == method
+		}
 		if f.failChat != 0 {
 			fail = fail || (method == "sendMessage" && fmt.Sprint(call.Body["chat_id"]) == fmt.Sprint(f.failChat))
 		}
@@ -172,6 +176,10 @@ type fakeNode struct {
 	limits   []string
 	rebooted int
 	system   nodeapi.System
+	// clientsErr — ошибка, которую вернёт Clients (сетевой сбой)
+	clientsErr error
+	// backupGate — если задан, CreateBackup ждёт закрытия канала
+	backupGate chan struct{}
 	// бэкап
 	backupTask  nodeapi.Task
 	taskPolls   int
@@ -184,7 +192,12 @@ type fakeNode struct {
 func (n *fakeNode) Info(context.Context) (nodeapi.Info, error) {
 	return nodeapi.Info{Hostname: "host1", Version: "v-test"}, nil
 }
-func (n *fakeNode) Clients(context.Context) ([]nodeapi.Client, error) { return n.clients, nil }
+func (n *fakeNode) Clients(context.Context) ([]nodeapi.Client, error) {
+	if n.clientsErr != nil {
+		return nil, n.clientsErr
+	}
+	return n.clients, nil
+}
 func (n *fakeNode) Sessions(context.Context) ([]nodeapi.Session, error) {
 	return n.sessions, nil
 }
@@ -208,6 +221,9 @@ func (n *fakeNode) Reboot(context.Context) (nodeapi.Task, error) {
 	return nodeapi.Task{ID: "aaaaaaaaaaaa", Kind: "reboot"}, nil
 }
 func (n *fakeNode) CreateBackup(context.Context) (nodeapi.Task, error) {
+	if n.backupGate != nil {
+		<-n.backupGate
+	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.backupCalls++
@@ -238,6 +254,10 @@ func (n *fakeNode) Backup(_ context.Context, name string) (io.ReadCloser, error)
 }
 
 type fakeBack struct {
+	mu       sync.Mutex
+	now      func() time.Time
+	tries    map[string][]int64 // ключ -> моменты попыток
+	lockedAt map[string]int64
 	blocked  []string
 	deleted  []string
 	created  []string
@@ -274,6 +294,55 @@ func (f *fakeBack) NewUser(ctx context.Context, login string) (store.User, error
 	return f.st.CreateUser(ctx, store.User{Login: login, Hash: "x", Role: store.RoleUser, Created: 1})
 }
 func (f *fakeBack) QR(data []byte) ([]byte, bool) { return append([]byte("PNG:"), data...), true }
+
+// Попытки — те же правила, что у панели: пять неверных за час закрывают ввод на час.
+func (f *fakeBack) OpenAttempt(_ context.Context, userID int64) (AttemptTicket, time.Duration, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := fmt.Sprintf("code:user:%d", userID)
+	ts := f.now().Unix()
+	if f.tries == nil {
+		f.tries, f.lockedAt = map[string][]int64{}, map[string]int64{}
+	}
+	if at, ok := f.lockedAt[key]; ok && ts-at < 3600 {
+		return AttemptTicket{}, time.Duration(at+3600-ts) * time.Second, nil
+	}
+	n := 0
+	for _, x := range f.tries[key] {
+		if ts-x < 3600 {
+			n++
+		}
+	}
+	if n >= 5 {
+		return AttemptTicket{}, time.Hour, nil
+	}
+	f.tries[key] = append(f.tries[key], ts)
+	return AttemptTicket{Key: key, TS: ts}, 0, nil
+}
+func (f *fakeBack) RefundAttempt(_ context.Context, t AttemptTicket) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, x := range f.tries[t.Key] {
+		if x == t.TS {
+			f.tries[t.Key] = append(f.tries[t.Key][:i], f.tries[t.Key][i+1:]...)
+			return
+		}
+	}
+}
+func (f *fakeBack) FailAttempt(_ context.Context, t AttemptTicket) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, x := range f.tries[t.Key] {
+		if f.now().Unix()-x < 3600 {
+			n++
+		}
+	}
+	if n >= 5 {
+		f.lockedAt[t.Key] = f.now().Unix()
+	}
+	return max(5-n, 0)
+}
 
 // --- стенд ---
 
@@ -312,7 +381,7 @@ func newEnv(t *testing.T) *env {
 		},
 		backupData: map[string]string{},
 	}
-	e.back = &fakeBack{goodCode: "GOOD", st: st}
+	e.back = &fakeBack{goodCode: "GOOD", st: st, now: func() time.Time { return e.now }}
 	c := telegram.New(testToken, e.tg.srv.URL)
 	e.b = &Bot{
 		TG: c, Node: e.node, Store: st, Back: e.back, NodeID: store.LocalNode,

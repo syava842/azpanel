@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/syava842/azpanel/internal/nodeapi"
 	"github.com/syava842/azpanel/internal/telegram"
 )
 
@@ -74,7 +75,12 @@ func (b *Bot) maybeSummary(ctx context.Context, now time.Time) {
 		return
 	}
 	text := b.summaryText(ctx, utc)
-	for _, chat := range b.recipients(ctx, "summary", nil) {
+	chats, err := b.recipients(ctx, "summary", nil)
+	if err != nil {
+		b.log().Warn("бот: получатели сводки не прочитаны", "err", err)
+		return
+	}
+	for _, chat := range chats {
 		if _, err := b.TG.SendMessage(ctx, telegram.SendMessageParams{ChatID: chat, Text: clip(text)}); err != nil {
 			b.log().Warn("бот: сводка не отправлена", "chat", chat, "err", err)
 		}
@@ -92,7 +98,7 @@ func (b *Bot) summaryText(ctx context.Context, now time.Time) string {
 		}
 		fmt.Fprintf(&sb, "Онлайн сейчас: клиентов %d, сессий %d\n", len(names), len(ss))
 	} else {
-		fmt.Fprintf(&sb, "Онлайн: агент недоступен (%s)\n", agentErr(err))
+		fmt.Fprintf(&sb, "Онлайн: агент недоступен (%s)\n", b.agentErr(err))
 	}
 	if tr, err := b.Store.TrafficTotals(ctx, b.NodeID, now.Add(-24*time.Hour).Unix(), now.Unix()+1); err == nil {
 		type row struct {
@@ -115,7 +121,7 @@ func (b *Bot) summaryText(ctx context.Context, now time.Time) string {
 			fmt.Fprintf(&sb, "  %d. %s: %s\n", i+1, r.name, humanBytes(uint64(r.total)))
 		}
 	}
-	if sys, err := b.Node.System(ctx); err == nil {
+	if sys, ok := b.lastSystem(); ok {
 		r := sys.Resources
 		mem, disk := 0.0, 0.0
 		if r.Memory.TotalBytes > 0 {
@@ -139,7 +145,17 @@ func (b *Bot) summaryText(ctx context.Context, now time.Time) string {
 	return sb.String()
 }
 
-// maybeBackup делает бэкап раз в backup_every_days и отправляет его в backup_chats.
+// lastSystem — последний снимок ресурсов узла у сборщика панели.
+func (b *Bot) lastSystem() (nodeapi.System, bool) {
+	if b.LastSystem == nil {
+		return nodeapi.System{}, false
+	}
+	return b.LastSystem()
+}
+
+// maybeBackup делает бэкап раз в backup_every_days и отправляет его получателям
+// из backup_chats, прошедшим проверку (см. BackupRecipients). Сам бэкап идёт в
+// фоне: расписание (сводка, другие проверки) его не ждёт.
 func (b *Bot) maybeBackup(ctx context.Context, now time.Time) {
 	if b.Cfg.BackupEveryDays <= 0 || len(b.Cfg.BackupChats) == 0 {
 		return
@@ -154,25 +170,59 @@ func (b *Bot) maybeBackup(ctx context.Context, now time.Time) {
 	if !b.backupMu.TryLock() {
 		return // бэкап из бота уже идёт
 	}
-	defer b.backupMu.Unlock()
 	if err := b.Store.SetMeta(ctx, backupTryKey, strconv.FormatInt(now.Unix(), 10)); err != nil {
+		b.backupMu.Unlock()
 		b.log().Warn("бот: попытка бэкапа не записана", "err", err)
 		return
 	}
-	bf, err := b.makeBackup(ctx)
+	ok, rejected, err := b.BackupRecipients(ctx)
 	if err != nil {
-		b.log().Warn("бот: бэкап по расписанию не создан", "err", err)
-		for _, chat := range b.Cfg.BackupChats {
-			b.send(ctx, chat, "Бэкап по расписанию не создан: "+err.Error(), nil)
-		}
+		b.backupMu.Unlock()
+		b.log().Warn("бот: получатели бэкапа не определены", "err", err)
 		return
 	}
-	defer bf.cleanup()
-	for _, chat := range b.Cfg.BackupChats {
-		b.sendBackup(ctx, chat, bf)
+	for _, chat := range rejected {
+		b.log().Warn("бот: бэкап не отправляется в чат из backup_chats: это не действующий администратор и не подтверждённая группа", "chat", chat)
 	}
-	if err := b.Store.SetMeta(ctx, backupLastKey, strconv.FormatInt(now.Unix(), 10)); err != nil {
-		b.log().Warn("бот: время бэкапа не записано", "err", err)
+	if len(rejected) > 0 {
+		b.notifyAdmins(ctx, fmt.Sprintf("Бэкап по расписанию не отправлен в чаты %v: личный чат должен принадлежать действующему администратору с привязанным Telegram, группу нужно подтвердить на странице «Telegram-бот» в панели. Файл не передавался.", rejected))
+	}
+	if len(ok) == 0 {
+		b.backupMu.Unlock()
+		return
+	}
+	b.spawn(func() {
+		defer b.backupMu.Unlock()
+		bf, err := b.makeBackup(ctx)
+		if err != nil {
+			b.log().Warn("бот: бэкап по расписанию не создан", "err", err)
+			for _, chat := range ok {
+				b.send(ctx, chat, "Бэкап по расписанию не создан: "+err.Error(), nil)
+			}
+			return
+		}
+		defer bf.cleanup()
+		delivered := false
+		for _, chat := range ok {
+			if err := b.sendBackup(ctx, chat, bf); err != nil {
+				b.send(ctx, chat, "Бэкап создан, но не отправлен: "+err.Error()+". Копия осталась на сервере панели.", nil)
+				continue
+			}
+			delivered = true
+		}
+		if !delivered {
+			return // попытка повторится не раньше чем через час
+		}
+		if err := b.Store.SetMeta(ctx, backupLastKey, strconv.FormatInt(now.Unix(), 10)); err != nil {
+			b.log().Warn("бот: время бэкапа не записано", "err", err)
+		}
+	})
+}
+
+// notifyAdmins шлёт текст всем привязанным действующим администраторам.
+func (b *Bot) notifyAdmins(ctx context.Context, text string) {
+	for _, a := range b.admins(ctx) {
+		b.send(ctx, *a.TelegramID, text, nil)
 	}
 }
 

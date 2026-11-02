@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,6 +33,8 @@ const (
 const (
 	maxDeliveryFails = 10 // проходов с ошибкой, после которых запись помечается отправленной
 	deliverBatch     = 100
+	staleAfter       = 48 * time.Hour // записи старше при первом запуске бота не пересказываются
+	outboxStartedKey = "tg_outbox_started"
 )
 
 // Notice — содержимое уведомления в outbox: готовый текст. Так кладёт сборщик
@@ -98,19 +101,29 @@ func itemText(it store.OutboxItem) string {
 
 // recipients — чаты получателей записи: access_expiring идёт владельцу, если
 // он привязан; остальное — привязанным администраторам и чатам из настроек.
-func (b *Bot) recipients(ctx context.Context, kind string, userID *int64) []int64 {
+func (b *Bot) recipients(ctx context.Context, kind string, userID *int64) ([]int64, error) {
 	if kind == KindAccessExpiring {
 		if userID == nil {
-			return nil
+			return nil, nil
 		}
 		u, err := b.Store.UserByID(ctx, *userID)
-		if err != nil || u.Disabled || u.TelegramID == nil {
-			return nil
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, nil
 		}
-		return []int64{*u.TelegramID}
+		if err != nil {
+			return nil, err
+		}
+		if u.Disabled || u.TelegramID == nil {
+			return nil, nil
+		}
+		return []int64{*u.TelegramID}, nil
+	}
+	admins, err := b.adminsErr(ctx)
+	if err != nil {
+		return nil, err
 	}
 	var out []int64
-	for _, a := range b.admins(ctx) {
+	for _, a := range admins {
 		out = append(out, *a.TelegramID)
 	}
 	for _, c := range b.Cfg.NotifyChats {
@@ -118,7 +131,7 @@ func (b *Bot) recipients(ctx context.Context, kind string, userID *int64) []int6
 			out = append(out, c)
 		}
 	}
-	return out
+	return out, nil
 }
 
 // permanent: повтор не поможет (бот заблокирован, чата нет).
@@ -134,6 +147,7 @@ func permanent(err error) bool {
 // помечается отправленным без отправки; ошибка оставляет запись до
 // следующего прохода, после maxDeliveryFails проходов — запись в журнал и отметка.
 func (b *Bot) DeliverOutbox(ctx context.Context) {
+	b.skipStale(ctx)
 	items, err := b.Store.Pending(ctx, deliverBatch)
 	if err != nil {
 		b.log().Warn("бот: очередь уведомлений не прочитана", "err", err)
@@ -147,6 +161,39 @@ func (b *Bot) DeliverOutbox(ctx context.Context) {
 	}
 }
 
+// skipStale при первом включении бота помечает отправленными записи старше
+// двух суток: очередь копится с развёртывания, и недельное «истекает
+// сегодня» пересказывать незачем. Отметка в meta — раз и навсегда.
+func (b *Bot) skipStale(ctx context.Context) {
+	b.mu.Lock()
+	done := b.outboxOK
+	b.mu.Unlock()
+	if done {
+		return
+	}
+	if _, found, err := b.Store.Meta(ctx, outboxStartedKey); err != nil {
+		b.log().Warn("бот: отметка первого запуска не прочитана", "err", err)
+		return
+	} else if !found {
+		now := b.now()
+		n, err := b.Store.MarkSentBefore(ctx, now.Add(-staleAfter).Unix(), now.Unix())
+		if err != nil {
+			b.log().Warn("бот: устаревшие уведомления не отмечены", "err", err)
+			return
+		}
+		if n > 0 {
+			b.log().Info("бот: устаревшие уведомления пропущены при первом запуске", "записей", n)
+		}
+		if err := b.Store.SetMeta(ctx, outboxStartedKey, strconv.FormatInt(now.Unix(), 10)); err != nil {
+			b.log().Warn("бот: отметка первого запуска не записана", "err", err)
+			return
+		}
+	}
+	b.mu.Lock()
+	b.outboxOK = true
+	b.mu.Unlock()
+}
+
 func (b *Bot) deliver(ctx context.Context, it store.OutboxItem) {
 	mark := func() {
 		if err := b.Store.MarkSent(ctx, it.ID, b.now().Unix()); err != nil && !errors.Is(err, store.ErrNotFound) {
@@ -154,14 +201,18 @@ func (b *Bot) deliver(ctx context.Context, it store.OutboxItem) {
 		}
 		b.mu.Lock()
 		delete(b.sentTo, it.ID)
-		delete(b.fails, it.ID)
 		b.mu.Unlock()
 	}
 	if !b.enabled(it.Kind) {
 		mark()
 		return
 	}
-	chats := b.recipients(ctx, it.Kind, it.UserID)
+	chats, err := b.recipients(ctx, it.Kind, it.UserID)
+	if err != nil {
+		// Список получателей не прочитан — запись не помечается, проход повторится.
+		b.log().Warn("бот: получатели уведомления не прочитаны", "id", it.ID, "err", err)
+		return
+	}
 	text := itemText(it)
 	failed := false
 	for _, chat := range chats {
@@ -191,13 +242,11 @@ func (b *Bot) deliver(ctx context.Context, it store.OutboxItem) {
 		mark()
 		return
 	}
-	b.mu.Lock()
-	if b.fails == nil {
-		b.fails = map[int64]int{}
+	n, err := b.Store.FailOutbox(ctx, it.ID)
+	if err != nil {
+		b.log().Warn("бот: неудачный проход не записан", "id", it.ID, "err", err)
+		return
 	}
-	b.fails[it.ID]++
-	n := b.fails[it.ID]
-	b.mu.Unlock()
 	if n >= maxDeliveryFails {
 		b.log().Error("бот: уведомление не доставлено за 10 проходов, отброшено", "id", it.ID, "kind", it.Kind)
 		mark()

@@ -232,6 +232,7 @@ func TestScheduledBackupEveryNDays(t *testing.T) {
 	e := newEnv(t)
 	e.b.Cfg.BackupEveryDays = 2
 	e.b.Cfg.BackupChats = []int64{555}
+	e.user("owner", store.RoleAdmin, 555)
 	e.node.backupFiles = []nodeapi.Backup{{Name: "backup-x.tar.gz", Size: 4, Modified: time.Now().Add(time.Hour)}}
 	e.node.backupData["backup-x.tar.gz"] = "DATA"
 	ctx := context.Background()
@@ -263,6 +264,7 @@ func TestScheduledBackupFailureRetriedNoSoonerThanAnHour(t *testing.T) {
 	e := newEnv(t)
 	e.b.Cfg.BackupEveryDays = 1
 	e.b.Cfg.BackupChats = []int64{555}
+	e.user("owner", store.RoleAdmin, 555)
 	e.node.taskExit = 1
 	ctx := context.Background()
 	start := time.Unix(1_800_000_000, 0)
