@@ -321,12 +321,29 @@ func (c *Collector) autoBlock(ctx context.Context, now time.Time) error {
 				reason = store.AutoBlockTraffic
 			}
 		}
+		if reason != "" && card.AutoSkip == blockFingerprint(reason, card, now) {
+			reason = "" // админ уже снял блокировку по этой самой причине
+		}
 		if err := c.applyAutoBlock(ctx, now, cl, card, reason); err != nil {
 			c.log().Warn("сборщик: автоблокировка клиента не удалась", "client", cl.Name, "err", err)
 			errs = append(errs, fmt.Errorf("%s: %w", cl.Name, err))
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// blockFingerprint — отпечаток причины блокировки: меняется вместе со сроком,
+// лимитом или началом периода, поэтому ручная разблокировка действует только
+// на ту причину, которую админ видел.
+func blockFingerprint(reason string, card store.Card, now time.Time) string {
+	if reason == store.AutoBlockExpired {
+		until := int64(0)
+		if card.AccessUntil != nil {
+			until = *card.AccessUntil
+		}
+		return fmt.Sprintf("%s:%d", reason, until)
+	}
+	return fmt.Sprintf("%s:%d:%d", reason, periodStart(card.TrafficPeriod, now).Unix(), card.TrafficLimit)
 }
 
 func reasonText(reason string) string {
@@ -343,14 +360,12 @@ func (c *Collector) applyAutoBlock(ctx context.Context, now time.Time, cl nodeap
 	switch {
 	case was != "" && !cl.Blocked:
 		// администратор снял блок вручную — панель только забывает о нём
-		card.AutoBlock = ""
-		return c.Store.SaveCard(ctx, card)
+		return c.Store.SetAutoBlock(ctx, c.NodeID, cl.Name, "", card.AutoSkip)
 	case was == "" && !cl.Blocked && reason != "":
 		if _, err := c.Node.SetBlocked(ctx, cl.Name, true); err != nil {
 			return err
 		}
-		card.AutoBlock = reason
-		if err := c.Store.SaveCard(ctx, card); err != nil {
+		if err := c.Store.SetAutoBlock(ctx, c.NodeID, cl.Name, reason, card.AutoSkip); err != nil {
 			return err
 		}
 		c.audit(ctx, now, "автоблокировка", cl.Name, "не заблокирован", "заблокирован: "+reasonText(reason))
@@ -358,14 +373,13 @@ func (c *Collector) applyAutoBlock(ctx context.Context, now time.Time, cl nodeap
 		if _, err := c.Node.SetBlocked(ctx, cl.Name, false); err != nil {
 			return err
 		}
-		card.AutoBlock = ""
-		if err := c.Store.SaveCard(ctx, card); err != nil {
+		if err := c.Store.SetAutoBlock(ctx, c.NodeID, cl.Name, "", card.AutoSkip); err != nil {
 			return err
 		}
 		c.audit(ctx, now, "авторазблокировка", cl.Name, "заблокирован: "+reasonText(was), "не заблокирован: "+reasonGone)
 	case was != "" && cl.Blocked && reason != was:
-		card.AutoBlock = reason // причина сменилась, блок остаётся
-		return c.Store.SaveCard(ctx, card)
+		// причина сменилась, блок остаётся
+		return c.Store.SetAutoBlock(ctx, c.NodeID, cl.Name, reason, card.AutoSkip)
 	}
 	return nil
 }

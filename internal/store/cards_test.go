@@ -47,3 +47,27 @@ func TestCardUnknownNodeRejected(t *testing.T) {
 		t.Fatal("карточка несуществующего узла записана: foreign_keys не включены")
 	}
 }
+
+func TestSetAutoBlockTouchesOnlyMarks(t *testing.T) {
+	s := open(t)
+	until := int64(1_900_000_000)
+	in := Card{Node: 1, Name: "alice", Note: "заметка", AccessUntil: &until, TrafficLimit: 7, TrafficPeriod: PeriodDay, AutoBlock: AutoBlockExpired}
+	if err := s.SaveCard(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetAutoBlock(ctx, 1, "alice", "", "expired:1900000000"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.Card(ctx, 1, "alice")
+	in.AutoBlock, in.AutoSkip = "", "expired:1900000000"
+	if !reflect.DeepEqual(got, in) {
+		t.Fatalf("%+v, нужно %+v", got, in)
+	}
+	// нет карточки — не создаётся
+	if err := s.SetAutoBlock(ctx, 1, "ghost", "expired", ""); err != nil {
+		t.Fatal(err)
+	}
+	if all, _ := s.Cards(ctx, 1); len(all) != 1 {
+		t.Fatalf("создана лишняя карточка: %+v", all)
+	}
+}

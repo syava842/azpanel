@@ -3,6 +3,7 @@ package panel
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -277,5 +278,54 @@ func TestCollectorStepErrorDoesNotStopOthers(t *testing.T) {
 	}
 	if pts, _ := e.st.ResourceSeries(ctx, store.LocalNode, 0, e.now.Unix()+1, store.Minute); len(pts) != 1 {
 		t.Fatalf("ресурсы не записаны: %v", pts)
+	}
+}
+
+func TestCollectorManualUnblockSkipsSameReason(t *testing.T) {
+	e := newCollEnv(t)
+	ctx := context.Background()
+	until := e.now.Add(-time.Hour).Unix()
+	e.clients = []nodeapi.Client{{Name: "a"}}
+	// админ снял автоблокировку истёкшего клиента: панель записала отпечаток
+	e.st.SaveCard(ctx, store.Card{Node: store.LocalNode, Name: "a", Note: "н", AccessUntil: &until,
+		AutoSkip: fmt.Sprintf("expired:%d", until)})
+	e.tick(t)
+	e.advance(time.Minute)
+	e.tick(t)
+	if len(e.blocks) != 0 {
+		t.Fatalf("клиент заблокирован снова: %v", e.blocks)
+	}
+	// продлили и срок снова истёк — другой отпечаток, блокировка
+	again := e.now.Add(-time.Minute).Unix()
+	c, _ := e.st.Card(ctx, store.LocalNode, "a")
+	c.AccessUntil = &again
+	e.st.SaveCard(ctx, c)
+	e.tick(t)
+	if len(e.blocks) != 1 || e.blocks[0] != "a:true" {
+		t.Fatalf("блокировки = %v", e.blocks)
+	}
+	if c, _ = e.st.Card(ctx, store.LocalNode, "a"); c.AutoBlock != store.AutoBlockExpired || c.Note != "н" {
+		t.Fatalf("карточка = %+v", c)
+	}
+}
+
+func TestCollectorManualUnblockSkipsTrafficUntilLimitChanges(t *testing.T) {
+	e := newCollEnv(t)
+	ctx := context.Background()
+	e.clients = []nodeapi.Client{{Name: "a"}}
+	start := periodStart(store.PeriodMonth, e.now).Unix()
+	e.st.SaveCard(ctx, store.Card{Node: store.LocalNode, Name: "a", TrafficLimit: 1000, TrafficPeriod: store.PeriodMonth,
+		AutoSkip: fmt.Sprintf("traffic:%d:%d", start, 1000)})
+	e.st.AddTraffic(ctx, store.LocalNode, e.now.Add(-time.Hour).Unix(), map[string]store.Bytes{"a": {Rx: 600, Tx: 500}})
+	e.tick(t)
+	if len(e.blocks) != 0 {
+		t.Fatalf("блокировки = %v", e.blocks)
+	}
+	c, _ := e.st.Card(ctx, store.LocalNode, "a")
+	c.TrafficLimit = 1100 // лимит изменили, но и он исчерпан
+	e.st.SaveCard(ctx, c)
+	e.tick(t)
+	if len(e.blocks) != 1 {
+		t.Fatalf("блокировки = %v", e.blocks)
 	}
 }

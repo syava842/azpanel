@@ -17,7 +17,9 @@ const (
 )
 
 // Card — карточка клиента. AccessUntil nil — без срока; TrafficLimit 0 — без
-// лимита. AutoBlock непуст, когда блокировку поставила панель.
+// лимита. AutoBlock непуст, когда блокировку поставила панель. AutoSkip —
+// отпечаток причины, которую админ снял вручную: по ней сборщик не блокирует,
+// пока причина не изменится.
 type Card struct {
 	Node          int64
 	Name          string
@@ -26,18 +28,19 @@ type Card struct {
 	TrafficLimit  int64
 	TrafficPeriod string
 	AutoBlock     string
+	AutoSkip      string
 }
 
 func defaultCard(node int64, name string) Card {
 	return Card{Node: node, Name: name, TrafficPeriod: PeriodMonth}
 }
 
-const cardCols = `node_id, name, note, access_until, traffic_limit, traffic_period, auto_block`
+const cardCols = `node_id, name, note, access_until, traffic_limit, traffic_period, auto_block, auto_skip`
 
 func scanCard(sc interface{ Scan(...any) error }) (Card, error) {
 	var c Card
 	var until sql.NullInt64
-	if err := sc.Scan(&c.Node, &c.Name, &c.Note, &until, &c.TrafficLimit, &c.TrafficPeriod, &c.AutoBlock); err != nil {
+	if err := sc.Scan(&c.Node, &c.Name, &c.Note, &until, &c.TrafficLimit, &c.TrafficPeriod, &c.AutoBlock, &c.AutoSkip); err != nil {
 		return Card{}, err
 	}
 	if until.Valid {
@@ -65,8 +68,17 @@ func (s *Store) SaveCard(ctx context.Context, c Card) error {
 	if c.AccessUntil != nil {
 		until = *c.AccessUntil
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT OR REPLACE INTO client_cards (`+cardCols+`) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		c.Node, c.Name, c.Note, until, c.TrafficLimit, c.TrafficPeriod, c.AutoBlock)
+	_, err := s.db.ExecContext(ctx, `INSERT OR REPLACE INTO client_cards (`+cardCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		c.Node, c.Name, c.Note, until, c.TrafficLimit, c.TrafficPeriod, c.AutoBlock, c.AutoSkip)
+	return err
+}
+
+// SetAutoBlock точечно меняет только auto_block и auto_skip существующей
+// карточки, не трогая остальные поля: сборщик и ручная разблокировка не
+// затирают правку карточки из интерфейса. Нет карточки — ничего не делает.
+func (s *Store) SetAutoBlock(ctx context.Context, node int64, name, autoBlock, autoSkip string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE client_cards SET auto_block = ?, auto_skip = ? WHERE node_id = ? AND name = ?`,
+		autoBlock, autoSkip, node, name)
 	return err
 }
 

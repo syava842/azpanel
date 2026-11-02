@@ -34,6 +34,8 @@ CREATE TABLE resource_hour (node_id INTEGER, ts INTEGER, cpu REAL, load1 REAL,
 CREATE TABLE audit (id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, user TEXT NOT NULL, ip TEXT NOT NULL,
   action TEXT NOT NULL, target TEXT NOT NULL, before TEXT NOT NULL DEFAULT '', after TEXT NOT NULL DEFAULT '');
 CREATE INDEX audit_ts ON audit(ts);`,
+	// 2: отпечаток причины, по которой админ вручную снял автоблокировку.
+	`ALTER TABLE client_cards ADD COLUMN auto_skip TEXT NOT NULL DEFAULT '';`,
 }
 
 // SchemaVersion — версия схемы в базе; 0 у пустой.
