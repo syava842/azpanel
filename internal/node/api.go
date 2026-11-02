@@ -52,6 +52,7 @@ type API struct {
 	Warp          *WarpService               // WARP; nil — не настроен
 	Update        *UpdateService             // самообновление azpanel; nil — не настроено
 	Sync          *SyncService               // набор синхронизации и роль узла; nil — не настроены
+	Nginx         *NginxService              // правка фрагмента nginx панели; nil — не настроена
 	Services      func(ctx context.Context) ([]sysinfo.Service, error)
 	WGShow        func(ctx context.Context, iface string) ([]antizapret.WGPeer, error)
 	Kill          func(sock, name string, timeout time.Duration) (int, error)
@@ -113,6 +114,7 @@ func (a *API) Handler() http.Handler {
 	a.registerWarp(mux)
 	a.registerUpdate(mux)
 	a.registerSync(mux)
+	a.registerNginx(mux)
 	return a.auth(a.roleGate(mux))
 }
 

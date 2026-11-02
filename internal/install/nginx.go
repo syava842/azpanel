@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path"
@@ -733,4 +734,20 @@ func (n *Nginx) Disable(includeFiles ...string) error {
 		}
 		return nil
 	})
+}
+
+var snippetBaseRe = regexp.MustCompile(`^(/([A-Za-z0-9._-]+/)*)?$`)
+
+// ValidateSnippetArgs проверяет аргументы Snippet до подстановки в конфиг
+// nginx: префикс — только /сегмент/…/ из безопасных знаков, адрес — петлевой
+// IP:порт (так вписывается panel.listen). Ничего другого в конфиг не попадёт.
+func ValidateSnippetArgs(basePath, upstream string) error {
+	if !snippetBaseRe.MatchString(basePath) || strings.Contains(basePath, "..") {
+		return fmt.Errorf("base_path %q: нужен префикс вида /azpanel/ (латиница, цифры, . _ -) или пусто", basePath)
+	}
+	ap, err := netip.ParseAddrPort(upstream)
+	if err != nil || !ap.Addr().IsLoopback() {
+		return fmt.Errorf("upstream %q: нужен петлевой адрес вида 127.0.0.1:8080", upstream)
+	}
+	return nil
 }

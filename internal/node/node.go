@@ -193,6 +193,7 @@ func startAPI(ctx context.Context, exit func(), cfg config.Config, version strin
 	// telemt и WARP: чтение — агентом, изменения — задачами `azpanel internal …`
 	// вне песочницы (пишут в /etc/telemt, /usr/local/bin, /root/warper).
 	api.Telemt = &TelemtService{Env: telemt.NewEnv(), Self: paths.Binary(), ParamsDir: paramsDir}
+	api.Nginx = &NginxService{Self: paths.Binary(), ParamsDir: paramsDir}
 	api.Warp = &WarpService{Warper: &warp.Warper{}, Self: paths.Binary(), ParamsDir: paramsDir}
 	api.Update = &UpdateService{
 		Root: paths.Root(), Pub: update.ReleasePublicKey, Self: paths.Binary(), ParamsDir: paramsDir,
