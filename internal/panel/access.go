@@ -35,6 +35,7 @@ var routes = map[string]access{
 	"POST /account/2fa/codes":       accAny,
 	"POST /account/sessions/revoke": accAny,
 	"POST /account/sessions/all":    accAny,
+	"GET /account/once":             accAny,
 
 	"GET /settings/access":          accAdmin,
 	"POST /settings/access":         accAdmin,

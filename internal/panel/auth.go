@@ -151,6 +151,14 @@ func (l *Limiter) Begin(addr string) bool {
 	return true
 }
 
+// Blocked: лимит по ключу исчерпан. Попытку не засчитывает.
+func (l *Limiter) Blocked(addr string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.prune(l.Now())
+	return len(l.m[addr]) >= l.Max
+}
+
 func (l *Limiter) Reset(addr string) {
 	l.mu.Lock()
 	delete(l.m, addr)

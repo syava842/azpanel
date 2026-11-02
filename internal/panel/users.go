@@ -213,7 +213,7 @@ func (s *Server) userRole(w http.ResponseWriter, r *http.Request) {
 	u, ok := s.mutateUser(w, r, role == store.RoleUser, func(u store.User) (store.User, error) {
 		old = u.Role
 		u.Role = role
-		return u, s.Store.UpdateUser(r.Context(), u)
+		return u, s.Store.SetRole(r.Context(), u.ID, role)
 	})
 	if ok {
 		s.audit(r, "user_role", u.Login, roleText(old), roleText(role))
@@ -225,7 +225,7 @@ func (s *Server) userDisabled(w http.ResponseWriter, r *http.Request) {
 	disable := r.PostForm.Get("disabled") == "1"
 	u, ok := s.mutateUser(w, r, disable, func(u store.User) (store.User, error) {
 		u.Disabled = disable
-		if err := s.Store.UpdateUser(r.Context(), u); err != nil {
+		if err := s.Store.SetDisabled(r.Context(), u.ID, disable); err != nil {
 			return u, err
 		}
 		if disable {
@@ -260,7 +260,7 @@ func (s *Server) userResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	u, ok := s.mutateUser(w, r, false, func(u store.User) (store.User, error) {
 		u.Hash, u.MustChange = hash, true
-		if err := s.Store.UpdateUser(r.Context(), u); err != nil {
+		if err := s.Store.SetPassword(r.Context(), u.ID, hash, true); err != nil {
 			return u, err
 		}
 		return u, s.Store.DeleteUserSessions(r.Context(), u.ID, "")
@@ -278,7 +278,7 @@ func (s *Server) userReset2FA(w http.ResponseWriter, r *http.Request) {
 	sess, _ := session(r)
 	u, ok := s.mutateUser(w, r, false, func(u store.User) (store.User, error) {
 		u.TOTPSecret, u.TOTPLastStep = nil, 0
-		if err := s.Store.UpdateUser(r.Context(), u); err != nil {
+		if err := s.Store.SetTOTP(r.Context(), u.ID, nil, 0); err != nil {
 			return u, err
 		}
 		if err := s.Store.SetBackupCodes(r.Context(), u.ID, nil); err != nil {

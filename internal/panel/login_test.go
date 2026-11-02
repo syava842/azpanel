@@ -290,24 +290,25 @@ func TestWrongCodesAreLimited(t *testing.T) {
 	e := authEnv(t)
 	secret, _ := enable2FA(t, e)
 	pend := cookieOf(t, login(e, testPassword))
-	for i := 0; i < 5; i++ {
+	// Вход засчитан в тот же счётчик адреса, поэтому с адреса доступны четыре кода.
+	for i := 0; i < 4; i++ {
 		if rec := submitCode(e, pend, "000000"); rec.Code != 401 {
 			t.Fatalf("попытка %d: %d", i+1, rec.Code)
 		}
 	}
-	if len(e.sleeps) != 5 {
+	if len(e.sleeps) != 4 {
 		t.Fatalf("задержек неверного кода: %d", len(e.sleeps))
 	}
 	// Шестая — 429, даже с верным кодом.
 	if rec := submitCode(e, pend, totpNow(secret, 0)); rec.Code != 429 {
-		t.Fatalf("после 5 неверных: %d", rec.Code)
+		t.Fatalf("после исчерпания попыток: %d", rec.Code)
 	}
 	// Первый шаг с этого адреса тоже закрыт.
 	if rec := login(e, testPassword); rec.Code != 429 {
 		t.Fatalf("вход после перебора кодов: %d", rec.Code)
 	}
 	list, _, _ := e.st.AuditList(context.Background(), 50, 0, "login_2fa_failed")
-	if len(list) != 5 {
+	if len(list) != 4 {
 		t.Fatalf("записей login_2fa_failed: %d", len(list))
 	}
 }

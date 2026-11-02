@@ -7,6 +7,10 @@
   <form method="post" action="/account/2fa">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <input type="hidden" name="sealed" value="{{.Sealed}}">
+    <input type="hidden" name="exp" value="{{.Exp}}">
+    <label>Текущий пароль
+      <input type="password" name="password" autocomplete="current-password" required>
+    </label>
     <label>Код из приложения
       <input type="text" name="code" inputmode="numeric" autocomplete="one-time-code" autofocus required>
     </label>

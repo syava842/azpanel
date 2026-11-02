@@ -162,3 +162,20 @@ func TestPasswdResetsFirstAdminInDB(t *testing.T) {
 		t.Fatalf("состояние: %+v", u)
 	}
 }
+
+// Непустая база и неизвестный --user: ошибка, а не «перезапустите панель».
+func TestPasswdUnknownUserInNonEmptyDB(t *testing.T) {
+	st, admin := userEnv(t)
+	var out bytes.Buffer
+	err := cmdPanelPasswd([]string{"--user", "ghost"}, strings.NewReader("brand-new-pass1\n"), nil, &out)
+	if err == nil || !strings.Contains(err.Error(), "ghost") {
+		t.Fatalf("ждали ошибку про ghost, получили %v", err)
+	}
+	if strings.Contains(out.String(), "перезапустите") {
+		t.Fatalf("вывод: %q", out.String())
+	}
+	u, _ := st.UserByID(context.Background(), admin.ID)
+	if bcrypt.CompareHashAndPassword([]byte(u.Hash), []byte("brand-new-pass1")) == nil {
+		t.Fatal("пароль применился к чужому пользователю")
+	}
+}

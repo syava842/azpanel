@@ -20,6 +20,10 @@ var (
 	ErrNotFound = errors.New("не найдено")
 	// ErrLoginTaken — логин уже занят.
 	ErrLoginTaken = errors.New("логин уже занят")
+	// ErrPasswordChanged — пароль изменили, пока шла смена.
+	ErrPasswordChanged = errors.New("пароль уже изменён, повторите")
+	// ErrTOTPAlreadyOn — двухфакторная проверка уже включена.
+	ErrTOTPAlreadyOn = errors.New("двухфакторная проверка уже включена")
 )
 
 // User — пользователь панели. TOTPSecret — зашифрованный секрет (nil — 2FA
@@ -107,12 +111,18 @@ func (s *Store) Users(ctx context.Context) ([]User, error) {
 	return out, rows.Err()
 }
 
-// UpdateUser меняет роль, disabled, must_change, hash, totp_secret и
-// totp_last_step; логин и дата создания неизменны.
+// UpdateUser меняет все изменяемые поля строки разом. Для работы панели не
+// годится: запись из давно прочитанной структуры затирает чужие правки. Панель
+// пользуется точечными методами ниже; этот остаётся для тестов и подготовки данных.
 func (s *Store) UpdateUser(ctx context.Context, u User) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE users SET role = ?, disabled = ?, must_change = ?, hash = ?,
+	return s.setFields(ctx, `UPDATE users SET role = ?, disabled = ?, must_change = ?, hash = ?,
 		totp_secret = ?, totp_last_step = ? WHERE id = ?`,
 		u.Role, u.Disabled, u.MustChange, u.Hash, u.TOTPSecret, u.TOTPLastStep, u.ID)
+}
+
+// setFields выполняет точечный UPDATE; ErrNotFound, если строки нет.
+func (s *Store) setFields(ctx context.Context, q string, args ...any) error {
+	res, err := s.db.ExecContext(ctx, q, args...)
 	if err != nil {
 		return err
 	}
@@ -120,6 +130,67 @@ func (s *Store) UpdateUser(ctx context.Context, u User) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// SetPassword безусловно задаёт хеш и признак обязательной смены (сброс
+// администратором, командная строка).
+func (s *Store) SetPassword(ctx context.Context, id int64, hash string, mustChange bool) error {
+	return s.setFields(ctx, `UPDATE users SET hash = ?, must_change = ? WHERE id = ?`, hash, mustChange, id)
+}
+
+// ChangePassword меняет пароль, только если хеш всё ещё равен oldHash, то
+// есть с момента проверки старого пароля никто его не менял (иначе
+// ErrPasswordChanged): сброс, сделанный параллельно, не теряется.
+func (s *Store) ChangePassword(ctx context.Context, id int64, oldHash, newHash string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE users SET hash = ?, must_change = 0 WHERE id = ? AND hash = ?`, newHash, id, oldHash)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrPasswordChanged
+	}
+	return nil
+}
+
+// SetRole меняет только роль.
+func (s *Store) SetRole(ctx context.Context, id int64, role string) error {
+	return s.setFields(ctx, `UPDATE users SET role = ? WHERE id = ?`, role, id)
+}
+
+// SetDisabled меняет только признак отключения.
+func (s *Store) SetDisabled(ctx context.Context, id int64, disabled bool) error {
+	return s.setFields(ctx, `UPDATE users SET disabled = ? WHERE id = ?`, disabled, id)
+}
+
+// SetTOTP безусловно задаёт секрет 2FA и последний шаг (nil, 0 — выключить).
+func (s *Store) SetTOTP(ctx context.Context, id int64, secret []byte, lastStep int64) error {
+	return s.setFields(ctx, `UPDATE users SET totp_secret = ?, totp_last_step = ? WHERE id = ?`, secret, lastStep, id)
+}
+
+// EnableTOTP включает 2FA, только если она ещё выключена (ErrTOTPAlreadyOn).
+func (s *Store) EnableTOTP(ctx context.Context, id int64, secret []byte, lastStep int64) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE users SET totp_secret = ?, totp_last_step = ?
+		WHERE id = ? AND (totp_secret IS NULL OR length(totp_secret) = 0)`, secret, lastStep, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrTOTPAlreadyOn
+	}
+	return nil
+}
+
+// AdvanceTOTPStep продвигает последний принятый шаг, только если он больше
+// прежнего и 2FA включена. false — шаг уже принят другим запросом или 2FA
+// успели выключить.
+func (s *Store) AdvanceTOTPStep(ctx context.Context, id, step int64) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `UPDATE users SET totp_last_step = ?
+		WHERE id = ? AND totp_last_step < ? AND totp_secret IS NOT NULL AND length(totp_secret) > 0`, step, id, step)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 // DeleteUser удаляет пользователя; сессии и коды уходят каскадом, у его
@@ -209,6 +280,24 @@ func (s *Store) ClientsOf(ctx context.Context, userID int64) ([]ClientRef, error
 			return nil, err
 		}
 		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// OwnedClients — имена клиентов узла, у которых есть владелец.
+func (s *Store) OwnedClients(ctx context.Context, node int64) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT name FROM client_cards WHERE node_id = ? AND owner_id IS NOT NULL ORDER BY name`, node)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
 	}
 	return out, rows.Err()
 }

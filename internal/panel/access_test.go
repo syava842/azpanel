@@ -86,6 +86,15 @@ func TestUnlistedRoutePanics(t *testing.T) {
 }
 
 // Пользователь-не-администратор на каждом маршруте Handler().
+// accountPostWant — код ответа пользователю на POST /account/* с пустой формой.
+var accountPostWant = map[string]int{
+	"POST /account/password":        http.StatusBadRequest, // пароль не по правилам
+	"POST /account/2fa":             http.StatusBadRequest, // нет запечатанного секрета
+	"POST /account/2fa/disable":     http.StatusBadRequest, // 2FA не включена
+	"POST /account/2fa/codes":       http.StatusBadRequest, // 2FA не включена
+	"POST /account/sessions/revoke": http.StatusNotFound,   // такой своей сессии нет
+}
+
 func TestPermissionsEveryRouteAsUser(t *testing.T) {
 	e, _, user, csrf, bob := userEnv(t)
 	seen := 0
@@ -113,6 +122,11 @@ func TestPermissionsEveryRouteAsUser(t *testing.T) {
 			if code := send(e, user, csrf, m, p); code != http.StatusOK {
 				t.Errorf("%s свой: код %d, ждали 200", pattern, code)
 			}
+		case pattern == "GET /account/once":
+			// без отложенного секрета страница ведёт на /account
+			if code := get(e, user, pathAccountOnce).Code; code != http.StatusSeeOther {
+				t.Errorf("%s: код %d, ждали 303", pattern, code)
+			}
 		case strings.HasPrefix(pattern, "GET /account") || pattern == "GET /{$}":
 			m, p := concrete(pattern, ownClient, bob.ID)
 			if code := send(e, user, csrf, m, p); code != http.StatusOK {
@@ -123,14 +137,19 @@ func TestPermissionsEveryRouteAsUser(t *testing.T) {
 				t.Errorf("неизвестная страница: %d", code)
 			}
 		case strings.HasPrefix(pattern, "POST /account"):
-			// действия над собой проверяются в account_test.go; здесь — что не 403
-			m, p := concrete(pattern, ownClient, bob.ID)
+			// Без полей формы каждое действие над собой должно отказать по существу
+			// (не 403 и не 5xx): конкретный код ждём из таблицы.
 			if pattern == "POST /account/sessions/all" {
 				continue // завершает все сессии пользователя: проверяется после обхода
 			}
-			c, cs := user, csrf
-			if code := send(e, c, cs, m, p); code == http.StatusForbidden {
-				t.Errorf("%s: пользователю отказано в собственном аккаунте", pattern)
+			want, known := accountPostWant[pattern]
+			if !known {
+				t.Errorf("%s: нет ожидаемого кода в accountPostWant", pattern)
+				continue
+			}
+			m, p := concrete(pattern, ownClient, bob.ID)
+			if code := send(e, user, csrf, m, p); code != want {
+				t.Errorf("%s: код %d, ждали %d", pattern, code, want)
 			}
 		default:
 			t.Errorf("маршрут %q есть в таблице, но тест прав не знает, как его проверить", pattern)
@@ -139,8 +158,8 @@ func TestPermissionsEveryRouteAsUser(t *testing.T) {
 	if seen == 0 {
 		t.Fatal("маршрутов нет")
 	}
-	if code := send(e, user, csrf, http.MethodPost, "/account/sessions/all"); code == http.StatusForbidden {
-		t.Errorf("POST /account/sessions/all: пользователю отказано в собственном аккаунте")
+	if code := send(e, user, csrf, http.MethodPost, "/account/sessions/all"); code != http.StatusSeeOther {
+		t.Errorf("POST /account/sessions/all: код %d, ждали 303", code)
 	}
 }
 

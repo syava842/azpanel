@@ -23,7 +23,6 @@
 <h2>Карточка</h2>
 {{if not .CanManage}}
 <div class="card">
-  {{if .CardForm.Note}}<p>Заметка: {{.CardForm.Note}}</p>{{end}}
   <p>Доступ до: {{if .CardForm.Until}}{{.CardForm.Until}}{{else}}без срока{{end}}</p>
   <p>Лимит трафика: {{if eq .CardForm.LimitGB "0"}}без лимита{{else}}{{.CardForm.LimitGB}} ГБ{{end}} ({{if eq .CardForm.Period "day"}}за сутки{{else if eq .CardForm.Period "week"}}за неделю{{else}}за месяц{{end}})</p>
 </div>

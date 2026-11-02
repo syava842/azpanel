@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -233,8 +234,13 @@ func (s *Server) accountPassword(w http.ResponseWriter, r *http.Request) {
 		s.accountView(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
-	u.Hash, u.MustChange = hash, false
-	if err := s.Store.UpdateUser(r.Context(), u); err != nil {
+	// Хеш заменяется, только если он всё ещё тот, что проверен выше: сброс,
+	// сделанный администратором за это время, не затирается.
+	if err := s.Store.ChangePassword(r.Context(), u.ID, u.Hash, hash); err != nil {
+		if errors.Is(err, store.ErrPasswordChanged) {
+			s.accountView(w, r, http.StatusConflict, err.Error())
+			return
+		}
 		s.internalError(w, r, "пароль не сохранён", err)
 		return
 	}
@@ -254,10 +260,19 @@ func qrDataURI(text string) (template.URL, error) {
 	return template.URL("data:image/png;base64," + base64.StdEncoding.EncodeToString(png)), nil
 }
 
+// setupTTL — сколько действует форма включения 2FA.
+const setupTTL = 10 * time.Minute
+
+// setupAAD привязывает запечатанный секрет формы к пользователю и сроку.
+func setupAAD(userID, exp int64) []byte {
+	return []byte(fmt.Sprintf("totp-setup:%d:%d", userID, exp))
+}
+
 // setup2FA показывает шаг «отсканируйте и подтвердите»: секрет приходит в
 // скрытом поле запечатанным ключом данных, в базу попадает только после кода.
 func (s *Server) setup2FA(w http.ResponseWriter, r *http.Request, u store.User, secret []byte, status int, errText string) {
-	sealed, err := Seal(s.DataKey, secret)
+	exp := s.now().Add(setupTTL).Unix()
+	sealed, err := SealAAD(s.DataKey, secret, setupAAD(u.ID, exp))
 	if err != nil {
 		s.internalError(w, r, "секрет не запечатан", err)
 		return
@@ -268,7 +283,7 @@ func (s *Server) setup2FA(w http.ResponseWriter, r *http.Request, u store.User, 
 		s.internalError(w, r, "QR не построен", err)
 		return
 	}
-	data := map[string]any{"Sealed": base64.RawURLEncoding.EncodeToString(sealed), "QR": qr,
+	data := map[string]any{"Sealed": base64.RawURLEncoding.EncodeToString(sealed), "Exp": exp, "QR": qr,
 		"Secret": base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(secret)}
 	if errText != "" {
 		data["Error"] = errText
@@ -297,13 +312,6 @@ func (s *Server) account2FAForm(w http.ResponseWriter, r *http.Request) {
 	s.setup2FA(w, r, u, secret, http.StatusOK, "")
 }
 
-// showOnce выводит секрет, который больше не будет показан (резервные коды,
-// созданный пароль).
-func (s *Server) showOnce(w http.ResponseWriter, r *http.Request, title, note, back, backText string, items []string) {
-	s.render(w, r, http.StatusOK, "once", map[string]any{"Title": title, "Note": note, "Items": items,
-		"Back": back, "BackText": backText})
-}
-
 func (s *Server) account2FAEnable(w http.ResponseWriter, r *http.Request) {
 	u, _, ok := s.currentUser(w, r)
 	if !ok {
@@ -318,12 +326,24 @@ func (s *Server) account2FAEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(r.PostForm.Get("sealed"))
+	exp, expErr := strconv.ParseInt(r.PostForm.Get("exp"), 10, 64)
+	now := s.now().Unix()
 	var secret []byte
-	if err == nil {
-		secret, err = Open(s.DataKey, raw)
+	if err == nil && expErr == nil && exp > now && exp-now <= int64(setupTTL/time.Second) {
+		secret, err = OpenAAD(s.DataKey, raw, setupAAD(u.ID, exp))
+	} else {
+		err = errors.New("срок формы вышел")
 	}
 	if err != nil {
 		s.accountView(w, r, http.StatusBadRequest, "форма устарела, начните включение заново")
+		return
+	}
+	// Включить 2FA со свежей сессии одним кодом нельзя: нужен и пароль.
+	if good, throttled := s.verifyPassword(u, r.PostForm.Get("password")); throttled {
+		s.accountView(w, r, http.StatusTooManyRequests, "слишком много попыток, подождите 15 минут")
+		return
+	} else if !good {
+		s.setup2FA(w, r, u, secret, http.StatusUnauthorized, "пароль неверен")
 		return
 	}
 	key := fmt.Sprintf("acct:%d", u.ID)
@@ -348,8 +368,11 @@ func (s *Server) account2FAEnable(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, "резервные коды не созданы", err)
 		return
 	}
-	u.TOTPSecret, u.TOTPLastStep = sealed, step
-	if err := s.Store.UpdateUser(r.Context(), u); err != nil {
+	if err := s.Store.EnableTOTP(r.Context(), u.ID, sealed, step); err != nil {
+		if errors.Is(err, store.ErrTOTPAlreadyOn) {
+			s.accountView(w, r, http.StatusBadRequest, err.Error())
+			return
+		}
 		s.internalError(w, r, "2FA не сохранена", err)
 		return
 	}
@@ -380,20 +403,24 @@ func (s *Server) account2FADisable(w http.ResponseWriter, r *http.Request) {
 		s.accountView(w, r, http.StatusUnauthorized, "пароль неверен")
 		return
 	}
+	// Неверные коды считаются на пользователя и не снимаются верным паролем.
+	mkey := mfaKey(u.ID)
+	if !s.Limiter.Begin(mkey) {
+		s.accountView(w, r, http.StatusTooManyRequests, "слишком много попыток, подождите 15 минут")
+		return
+	}
 	code, err := s.secondFactorOK(r, u.ID)
 	if err != nil {
 		s.internalError(w, r, "второй фактор не проверен", err)
 		return
 	}
 	if !code {
+		s.Sleep(loginDelay)
 		s.accountView(w, r, http.StatusUnauthorized, "неверный код")
 		return
 	}
-	u, err = s.Store.UserByID(r.Context(), u.ID) // шаг TOTP мог обновиться
-	if err == nil {
-		u.TOTPSecret, u.TOTPLastStep = nil, 0
-		err = s.Store.UpdateUser(r.Context(), u)
-	}
+	s.Limiter.Reset(mkey)
+	err = s.Store.SetTOTP(r.Context(), u.ID, nil, 0)
 	if err == nil {
 		err = s.Store.SetBackupCodes(r.Context(), u.ID, nil)
 	}

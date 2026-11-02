@@ -202,3 +202,62 @@ func TestOwnerOf(t *testing.T) {
 		t.Fatal("владелец не снят")
 	}
 }
+
+func TestTargetedUpdatesDoNotClobber(t *testing.T) {
+	s := open(t)
+	u := mkUser(t, s, "carol", RoleAdmin)
+	if err := s.SetRole(ctx, u.ID, RoleUser); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetDisabled(ctx, u.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetPassword(ctx, u.ID, "reset", true); err != nil {
+		t.Fatal(err)
+	}
+	// смена пароля по старому хешу «h» уже невозможна: сброс не теряется
+	if err := s.ChangePassword(ctx, u.ID, "h", "mine"); !errors.Is(err, ErrPasswordChanged) {
+		t.Fatalf("ждали ErrPasswordChanged, получили %v", err)
+	}
+	got, _ := s.UserByID(ctx, u.ID)
+	if got.Role != RoleUser || !got.Disabled || got.Hash != "reset" || !got.MustChange {
+		t.Fatalf("%+v", got)
+	}
+	if err := s.ChangePassword(ctx, u.ID, "reset", "mine"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.UserByID(ctx, u.ID)
+	if got.Hash != "mine" || got.MustChange {
+		t.Fatalf("%+v", got)
+	}
+	if err := s.SetRole(ctx, 9999, RoleUser); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestTOTPStepAndEnable(t *testing.T) {
+	s := open(t)
+	u := mkUser(t, s, "dave", RoleUser)
+	if ok, _ := s.AdvanceTOTPStep(ctx, u.ID, 5); ok {
+		t.Fatal("шаг принят без 2FA")
+	}
+	if err := s.EnableTOTP(ctx, u.ID, []byte{1}, 3); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EnableTOTP(ctx, u.ID, []byte{2}, 3); !errors.Is(err, ErrTOTPAlreadyOn) {
+		t.Fatalf("%v", err)
+	}
+	if ok, _ := s.AdvanceTOTPStep(ctx, u.ID, 5); !ok {
+		t.Fatal("шаг не принят")
+	}
+	if ok, _ := s.AdvanceTOTPStep(ctx, u.ID, 5); ok {
+		t.Fatal("повтор шага принят")
+	}
+	if err := s.SetTOTP(ctx, u.ID, nil, 0); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.UserByID(ctx, u.ID)
+	if len(got.TOTPSecret) != 0 || got.TOTPLastStep != 0 {
+		t.Fatalf("%+v", got)
+	}
+}

@@ -3,6 +3,7 @@ package panel
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -131,8 +132,13 @@ func (s *Server) gate(sess Session, r *http.Request, mode guardMode) (target, ms
 	if sess.MFAPending {
 		return pathLoginMFA, "введите код двухфакторной проверки"
 	}
-	if sess.MustChange && !pathIs(r, pathAccountPassword) {
-		return pathAccountPassword, "сначала смените пароль"
+	if sess.MustChange {
+		// Смена пароля идёт первой: 2FA администратор включит после неё,
+		// иначе страница пароля и страница 2FA гоняли бы его по кругу.
+		if !pathIs(r, pathAccountPassword) {
+			return pathAccountPassword, "сначала смените пароль"
+		}
+		return "", ""
 	}
 	if s.RequireAdmin2FA && sess.IsAdmin() && !sess.Has2FA && !pathIs(r, pathAccount2FA) {
 		return pathAccount2FA, "администратору нужно включить двухфакторную проверку"
@@ -263,20 +269,33 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pending := len(u.TOTPSecret) > 0
+	if pending && s.Limiter.Blocked(mfaKey(u.ID)) {
+		// Пароль верен, но коды этого пользователя уже перебирали: новая
+		// ждущая сессия дала бы ещё попытки.
+		s.Log.Warn("вход заблокирован: слишком много неверных кодов 2FA", "user", truncateRunes(u.Login, maxLoggedName), "remote", host)
+		s.renderLogin(w, r, http.StatusTooManyRequests, user, "слишком много попыток, подождите 15 минут")
+		return
+	}
 	if err := s.issueSession(w, r, u, pending); err != nil {
 		s.Log.Error("сессия не создана", "err", err)
 		s.errorPage(w, r, http.StatusInternalServerError, "внутренняя ошибка")
 		return
 	}
-	s.Limiter.Reset(host) // второй шаг считает свои попытки заново
 	if pending {
+		// Счётчики не сбрасываются: верный пароль не должен обнулять
+		// перебор кода. Сброс — только верным кодом в mfaSubmit.
 		http.Redirect(w, r, pathLoginMFA, http.StatusSeeOther)
 		return
 	}
+	s.Limiter.Reset(host)
 	s.Log.Info("вход", "user", truncateRunes(u.Login, maxLoggedName), "remote", host)
 	s.auditAs(r, truncateRunes(u.Login, maxLoggedName), "login", "", "", "")
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
+
+// mfaKey — ключ счётчика неверных кодов пользователя: общий для всех адресов
+// и сессий, не снимается верным паролем.
+func mfaKey(userID int64) string { return fmt.Sprintf("mfa:%d", userID) }
 
 func (s *Server) mfaForm(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, http.StatusOK, "mfa", nil)
@@ -322,11 +341,11 @@ func (s *Server) checkSecondFactor(r *http.Request, userID int64, code string) (
 		if !ok {
 			return false, false, nil
 		}
-		u.TOTPLastStep = step
-		if err := s.Store.UpdateUser(ctx, u); err != nil {
+		advanced, err := s.Store.AdvanceTOTPStep(ctx, userID, step)
+		if err != nil {
 			return false, false, err
 		}
-		return true, false, nil
+		return advanced, false, nil
 	}
 	s.loginSem <- struct{}{} // сверка резервного кода — bcrypt
 	ok, err = s.Store.UseBackupCode(ctx, userID, code)
@@ -337,7 +356,8 @@ func (s *Server) checkSecondFactor(r *http.Request, userID int64, code string) (
 func (s *Server) mfaSubmit(w http.ResponseWriter, r *http.Request) {
 	sess, _ := session(r)
 	host := remoteHost(r)
-	if !s.Limiter.Begin(host) {
+	mkey := mfaKey(sess.UserID)
+	if !s.Limiter.Begin(host) || !s.Limiter.Begin(mkey) {
 		if s.shouldLogBlocked(host) {
 			s.Log.Warn("вход заблокирован: слишком много попыток", "remote", host)
 		}
@@ -368,6 +388,7 @@ func (s *Server) mfaSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Limiter.Reset(host)
+	s.Limiter.Reset(mkey)
 	name := truncateRunes(sess.User, maxLoggedName)
 	s.Log.Info("вход", "user", name, "remote", host, "backup_code", backup)
 	s.auditAs(r, name, "login", "", "", "")

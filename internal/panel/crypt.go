@@ -20,7 +20,10 @@ func newGCM(key []byte) (cipher.AEAD, error) {
 }
 
 // Seal шифрует plain AES-256-GCM; nonce записан в начале результата.
-func Seal(key, plain []byte) ([]byte, error) {
+func Seal(key, plain []byte) ([]byte, error) { return SealAAD(key, plain, nil) }
+
+// SealAAD — Seal с привязкой к aad: расшифровать можно только с тем же aad.
+func SealAAD(key, plain, aad []byte) ([]byte, error) {
 	g, err := newGCM(key)
 	if err != nil {
 		return nil, err
@@ -29,11 +32,14 @@ func Seal(key, plain []byte) ([]byte, error) {
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, err
 	}
-	return g.Seal(nonce, nonce, plain, nil), nil
+	return g.Seal(nonce, nonce, plain, aad), nil
 }
 
 // Open расшифровывает результат Seal; подмена данных или чужой ключ — ошибка.
-func Open(key, sealed []byte) ([]byte, error) {
+func Open(key, sealed []byte) ([]byte, error) { return OpenAAD(key, sealed, nil) }
+
+// OpenAAD расшифровывает результат SealAAD; другой aad — ошибка.
+func OpenAAD(key, sealed, aad []byte) ([]byte, error) {
 	g, err := newGCM(key)
 	if err != nil {
 		return nil, err
@@ -41,7 +47,7 @@ func Open(key, sealed []byte) ([]byte, error) {
 	if len(sealed) < g.NonceSize()+g.Overhead() {
 		return nil, errors.New("зашифрованные данные слишком короткие")
 	}
-	plain, err := g.Open(nil, sealed[:g.NonceSize()], sealed[g.NonceSize():], nil)
+	plain, err := g.Open(nil, sealed[:g.NonceSize()], sealed[g.NonceSize():], aad)
 	if err != nil {
 		return nil, errors.New("не удалось расшифровать: данные повреждены или ключ неверен")
 	}

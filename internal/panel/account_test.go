@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base32"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -74,6 +75,7 @@ func TestAccountPasswordChange(t *testing.T) {
 
 var (
 	sealedRe = regexp.MustCompile(`name="sealed" value="([^"]+)"`)
+	expRe    = regexp.MustCompile(`name="exp" value="([0-9]+)"`)
 	secretRe = regexp.MustCompile(`<code>([A-Z2-7]+)</code>`)
 )
 
@@ -85,6 +87,10 @@ func enableViaPages(t *testing.T, e *testEnv, c *http.Cookie, csrf string) (secr
 		t.Fatalf("страница включения: %d %s", rec.Code, body)
 	}
 	sealed := sealedRe.FindStringSubmatch(body)
+	exp := expRe.FindStringSubmatch(body)
+	if exp == nil {
+		t.Fatalf("нет срока формы: %s", body)
+	}
 	sec := secretRe.FindStringSubmatch(body)
 	if sealed == nil || sec == nil {
 		t.Fatalf("нет секрета или запечатанного поля: %s", body)
@@ -94,17 +100,18 @@ func enableViaPages(t *testing.T, e *testEnv, c *http.Cookie, csrf string) (secr
 		t.Fatal(err)
 	}
 	// неверный код — секрет не сохранён
-	if rec := post(e, c, "/account/2fa", form(csrf, "sealed", sealed[1], "code", "000000")); rec.Code != 400 {
+	if rec := post(e, c, "/account/2fa", form(csrf, "sealed", sealed[1], "exp", exp[1], "password", testPassword, "code", "000000")); rec.Code != 400 {
 		t.Fatalf("неверный код: %d", rec.Code)
 	}
 	if u, _ := e.st.UserByID(context.Background(), e.admin.ID); len(u.TOTPSecret) != 0 {
 		t.Fatal("секрет сохранён без подтверждения")
 	}
-	rec = post(e, c, "/account/2fa", form(csrf, "sealed", sealed[1], "code", totpNow(secret, 0)))
-	if rec.Code != 200 {
-		t.Fatalf("включение: %d %s", rec.Code, rec.Body)
+	rec = post(e, c, "/account/2fa", form(csrf, "sealed", sealed[1], "exp", exp[1], "password", testPassword, "code", totpNow(secret, 0)))
+	code, page := followOnce(e, c, rec)
+	if code != 200 {
+		t.Fatalf("включение: %d %s", code, page)
 	}
-	codes = codesIn(rec.Body.String())
+	codes = codesIn(page)
 	return secret, codes
 }
 
@@ -150,10 +157,10 @@ func TestAccountNewBackupCodes(t *testing.T) {
 	if rec := post(e, c, "/account/2fa/codes", form(csrf, "password", "wrong-password")); rec.Code != 401 {
 		t.Fatalf("неверный пароль: %d", rec.Code)
 	}
-	rec := post(e, c, "/account/2fa/codes", form(csrf, "password", testPassword))
-	fresh := codesIn(rec.Body.String())
-	if rec.Code != 200 || len(fresh) != 10 {
-		t.Fatalf("%d, кодов %d", rec.Code, len(fresh))
+	code, page := followOnce(e, c, post(e, c, "/account/2fa/codes", form(csrf, "password", testPassword)))
+	fresh := codesIn(page)
+	if code != 200 || len(fresh) != 10 {
+		t.Fatalf("%d, кодов %d", code, len(fresh))
 	}
 	if ok, _ := e.st.UseBackupCode(context.Background(), e.admin.ID, codes[0]); ok {
 		t.Error("старый код действует")
@@ -199,8 +206,17 @@ func TestAccountSessions(t *testing.T) {
 }
 
 func adminPost(e *testEnv, c *http.Cookie, csrf, path string, kv ...string) (code int, body string) {
-	rec := post(e, c, path, form(csrf, kv...))
-	return rec.Code, rec.Body.String()
+	return followOnce(e, c, post(e, c, path, form(csrf, kv...)))
+}
+
+// followOnce: ответ-переход на страницу «показать один раз» заменяется самой
+// страницей (она отдаётся один раз: повторный GET ведёт на /account).
+func followOnce(e *testEnv, c *http.Cookie, rec *httptest.ResponseRecorder) (int, string) {
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != pathAccountOnce {
+		return rec.Code, rec.Body.String()
+	}
+	page := get(e, c, pathAccountOnce)
+	return page.Code, page.Body.String()
 }
 
 func TestUsersCreate(t *testing.T) {

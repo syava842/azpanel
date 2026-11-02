@@ -149,9 +149,11 @@ func userReset(ctx context.Context, st *store.Store, login, pw string, now time.
 // пароля при входе (для пароля, который человек задал сам, не нужно).
 func resetUser(ctx context.Context, st *store.Store, u store.User, hash string, mustChange bool, now time.Time) error {
 	had2FA := len(u.TOTPSecret) > 0
-	u.Hash, u.MustChange = hash, mustChange
-	u.TOTPSecret, u.TOTPLastStep = nil, 0
-	if err := st.UpdateUser(ctx, u); err != nil {
+	// Точечные записи: процесс консоли не должен затирать чужие поля строки.
+	if err := st.SetPassword(ctx, u.ID, hash, mustChange); err != nil {
+		return err
+	}
+	if err := st.SetTOTP(ctx, u.ID, nil, 0); err != nil {
 		return err
 	}
 	if err := st.SetBackupCodes(ctx, u.ID, nil); err != nil {
@@ -234,7 +236,15 @@ func resetFirstAdmin(ctx context.Context, login, hash string, now time.Time) (st
 		}
 	}
 	if target == nil {
-		return "", nil
+		if len(us) == 0 {
+			return "", nil // база пуста: пароль подхватит перенос при запуске панели
+		}
+		// Пользователи есть, а цели нет: перенос при перезапуске не сработает,
+		// и сообщать «перезапустите панель» было бы неправдой.
+		if login != "" {
+			return "", fmt.Errorf("пользователя %q нет в базе панели: пароль не применён", login)
+		}
+		return "", errors.New("в базе панели нет администратора: пароль не применён")
 	}
 	if err := resetUser(ctx, st, *target, hash, false, now); err != nil {
 		return "", err

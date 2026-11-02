@@ -94,6 +94,7 @@ type Server struct {
 	registered []string   // шаблоны маршрутов Handler(): сверяются с таблицей прав
 	usersMu    sync.Mutex // действия над пользователями — по одному (защита последнего администратора)
 	access     accessState
+	once       onceStore // секреты «показать один раз»
 
 	loginSem      chan struct{} // ограничивает одновременные bcrypt
 	mfaMu         sync.Mutex    // сверка кода 2FA и запись принятого шага — одним куском
@@ -151,6 +152,7 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /account/2fa/codes", s.accountNewCodes)
 	s.route(mux, "POST /account/sessions/revoke", s.accountRevoke)
 	s.route(mux, "POST /account/sessions/all", s.accountLogoutAll)
+	s.route(mux, "GET /account/once", s.oncePage)
 
 	s.route(mux, "GET /users", s.usersPage)
 	s.route(mux, "POST /users", s.userCreate)
