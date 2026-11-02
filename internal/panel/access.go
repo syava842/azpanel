@@ -130,6 +130,10 @@ var routes = map[string]access{
 	"POST /update":       accAdmin,
 	"POST /update/check": accAdmin,
 
+	"GET /proxy":              accAdmin,
+	"POST /proxy":             accAdmin,
+	"POST /proxy/{id}/delete": accAdmin,
+
 	"GET /warp":          accAdmin,
 	"POST /warp/domains": accAdmin,
 	"POST /warp/ips":     accAdmin,

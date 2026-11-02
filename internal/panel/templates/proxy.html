@@ -1,0 +1,54 @@
+{{define "content"}}
+<h1>Прокси</h1>
+<p>Российские VPS с оригинальным прокси AntiZapret. Адрес прокси разрешается в <code>{{.AllowFile}}</code>: при добавлении панель дописывает его туда и запускает применение (doall). Панель на сам VPS не ходит.</p>
+{{if .CheckErr}}<div class="error">{{.CheckErr}}</div>{{end}}
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Имя</th><th>Адрес</th><th>Заметка</th><th>Добавлен</th><th>В {{.AllowFile}}</th><th></th></tr></thead>
+  <tbody>
+  {{range .Rows}}
+  <tr>
+    <td>{{.Name}}</td>
+    <td><code>{{.IP}}</code></td>
+    <td>{{.Note}}</td>
+    <td>{{.Created}}</td>
+    <td>{{if .Unknown}}<span class="warn">не проверено</span>{{else if .InFile}}<span class="ok">есть</span>{{else}}<span class="bad">нет</span>{{end}}</td>
+    <td>
+      <form method="post" action="{{url .DeleteHref}}" class="inline">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+        <button type="submit" class="danger">Удалить</button>
+      </form>
+      <div class="muted">{{if .ByPanel}}при удалении строка уйдёт из списка{{else}}строка добавлена не панелью и останется{{end}}</div>
+    </td>
+  </tr>
+  {{else}}
+  <tr><td colspan="6" class="muted">Прокси не добавлены.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+
+<h2>Добавить прокси</h2>
+<form method="post" action="{{url "/proxy"}}" class="card narrow">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label>Имя
+    <input type="text" name="name" value="{{.Form.Name}}" maxlength="64" required>
+  </label>
+  <label>Адрес VPS (IPv4)
+    <input type="text" name="ip" value="{{.Form.IP}}" placeholder="203.0.113.5" inputmode="decimal" required>
+  </label>
+  <label>Заметка
+    <input type="text" name="note" value="{{.Form.Note}}" maxlength="200">
+  </label>
+  <button type="submit">Добавить и применить</button>
+  <p class="muted">Адрес будет дописан как <code>адрес/32</code>, затем запустится задача doall.</p>
+</form>
+
+<h2>Установка на VPS</h2>
+<div class="card">
+  <p>На российском VPS от root выполните оригинальный установщик AntiZapret:</p>
+  <pre><code>{{.Command}}</code></pre>
+  <p>На вопросы об адресе OpenVPN и WireGuard сервера введите {{if .ServerAddr}}<code>{{.ServerAddr}}</code>{{else}}<b>IP этого сервера</b>{{end}}{{if not .ServerAddr}} (внешний адрес сервера с панелью; в настройках AntiZapret он не задан){{else}} — адрес сервера с панелью{{end}}.</p>
+</div>
+{{end}}

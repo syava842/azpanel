@@ -102,6 +102,16 @@ CREATE TABLE groups (
   failover INTEGER NOT NULL DEFAULT 0,
   failover_after INTEGER NOT NULL DEFAULT 120,
   created INTEGER NOT NULL DEFAULT 0);`,
+	// 8: российские VPS-прокси. Адрес прокси дописывается в allow-ips.txt;
+	// added_by_panel — строку в файл добавила панель, а не оператор, поэтому
+	// при удалении прокси её можно убрать обратно.
+	`CREATE TABLE proxies (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  ip TEXT NOT NULL UNIQUE,
+  note TEXT NOT NULL DEFAULT '',
+  created INTEGER NOT NULL DEFAULT 0,
+  added_by_panel INTEGER NOT NULL DEFAULT 0);`,
 }
 
 // SchemaVersion — версия схемы в базе; 0 у пустой.

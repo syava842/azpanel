@@ -336,6 +336,11 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /antizapret/update", s.azStart)
 	s.route(mux, "POST /antizapret/update/restore", s.azRestore)
 
+	// Российские VPS-прокси: адрес дописывается в allow-ips.txt.
+	s.route(mux, "GET /proxy", s.proxyPage)
+	s.route(mux, "POST /proxy", s.proxyAdd)
+	s.route(mux, "POST /proxy/{id}/delete", s.proxyDelete)
+
 	// telemt (MTProxy): состояние, пользователи, ссылки, установка, обновление.
 	s.route(mux, "GET /telemt", s.telemtPage)
 	s.route(mux, "POST /telemt/users", s.telemtAddUser)
