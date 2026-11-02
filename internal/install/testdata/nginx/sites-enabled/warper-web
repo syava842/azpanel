@@ -1,0 +1,58 @@
+# AZ-WARP Web Panel — HTTPS на порту 6060, домен vpn.test
+# Минимальный server-блок на 80 для автопродления Let's Encrypt
+server {
+    listen 80;
+    server_name vpn.test;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
+    location / {
+        return 404;
+    }
+}
+
+server {
+    listen 6060 ssl http2;
+    server_name vpn.test;
+
+    ssl_certificate /etc/letsencrypt/live/vpn.test/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/vpn.test/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_session_cache shared:WarperSSL:5m;
+    ssl_session_timeout 1d;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "same-origin" always;
+
+    client_max_body_size 2M;
+    access_log /var/log/nginx/warper-web.access.log;
+    error_log /var/log/nginx/warper-web.error.log;
+
+    location /status/ {
+        proxy_pass http://127.0.0.1:1234;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Script-Name /status;
+        proxy_redirect off;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:16060;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+        proxy_buffering off;
+        proxy_cache off;
+        chunked_transfer_encoding on;
+    }
+}

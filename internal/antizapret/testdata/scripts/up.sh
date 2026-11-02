@@ -1,0 +1,487 @@
+#!/bin/bash
+set -e
+shopt -s nullglob
+
+cd /root/antizapret
+
+./down.sh
+
+source setup
+
+# Out IP protection
+if [[ -n "$ANTIZAPRET_OUT_IP" ]]; then
+	iptables -w -I INPUT 1 -d $ANTIZAPRET_OUT_IP -m conntrack --ctstate NEW -j DROP
+fi
+if [[ -n "$VPN_OUT_IP" && "$VPN_OUT_IP" != "$ANTIZAPRET_OUT_IP" ]]; then
+	iptables -w -I INPUT 1 -d $VPN_OUT_IP -m conntrack --ctstate NEW -j DROP
+fi
+
+if [[ -z "$DEFAULT_INTERFACE" ]]; then
+	DEFAULT_INTERFACE="$(ip route get 1.2.3.4 2>/dev/null | grep -oP 'dev \K\S+')"
+	if [[ -z "$DEFAULT_INTERFACE" ]]; then
+		echo 'Default network interface not found!'
+		exit 1
+	fi
+	DEFAULT_IP="$(ip route get 1.2.3.4 2>/dev/null | grep -oP 'src \K\S+')"
+	if [[ -z "$DEFAULT_IP" ]]; then
+		echo 'Default IPv4 address not found!'
+		exit 2
+	fi
+fi
+
+if [[ -z "$ANTIZAPRET_OUT_INTERFACE" ]]; then
+	ANTIZAPRET_OUT_INTERFACE=$DEFAULT_INTERFACE
+	if [[ -z "$ANTIZAPRET_OUT_IP" ]]; then
+		ANTIZAPRET_OUT_IP=$DEFAULT_IP
+	fi
+fi
+
+if [[ -z "$VPN_OUT_INTERFACE" ]]; then
+	VPN_OUT_INTERFACE=$DEFAULT_INTERFACE
+	if [[ -z "$VPN_OUT_IP" ]]; then
+		VPN_OUT_IP=$DEFAULT_IP
+	fi
+fi
+
+[[ "$ALTERNATIVE_CLIENT_IP" == 'y' ]] && IP="${CLIENT_IP:-172}" || IP=10
+[[ "$ALTERNATIVE_FAKE_IP" == 'y' ]] && FAKE_IP="${FAKE_IP:-198.18}" || FAKE_IP="$IP.30"
+
+WARP_MTU="${WARP_MTU:-1280}"
+
+# WARP AntiZapret
+ANTIZAPRET_WARP_INTERFACE=warp-antizapret
+ANTIZAPRET_WARP_PATH="/etc/wireguard/$ANTIZAPRET_WARP_INTERFACE.conf"
+
+if [[ "$ANTIZAPRET_WARP" == '2' || "$ANTIZAPRET_WARP" == '3' || "$ANTIZAPRET_WARP" == '4' ]]; then
+	set +e
+	echo "Starting $ANTIZAPRET_WARP_INTERFACE..."
+	if [[ -z "$ANTIZAPRET_WARP_PRIVATE_KEY" || -z "$ANTIZAPRET_WARP_PUBLIC_KEY" || -z "$ANTIZAPRET_WARP_ENDPOINT" || -z "$ANTIZAPRET_WARP_ADDRESS" ]]; then
+		ANTIZAPRET_WARP_PRIVATE_KEY=$(wg genkey)
+		KEY=$(echo "$ANTIZAPRET_WARP_PRIVATE_KEY" | wg pubkey)
+		REG=$(curl -sSfL --connect-timeout 10 -X POST "https://api.cloudflareclient.com/v0a5641/reg" \
+			-H 'Content-Type: application/json' \
+			-d "{\"key\": \"$KEY\"}")
+
+		ANTIZAPRET_WARP_PUBLIC_KEY=$(echo "$REG" | jq -r '.config.peers[0].public_key')
+		ANTIZAPRET_WARP_ENDPOINT=$(echo "$REG" | jq -r '.config.peers[0].endpoint.host')
+		ANTIZAPRET_WARP_ADDRESS="$(echo "$REG" | jq -r '.config.interface.addresses.v4')/32"
+	fi
+	ANTIZAPRET_WARP_IP="${ANTIZAPRET_WARP_ADDRESS%%/*}"
+
+	[[ "$ANTIZAPRET_WARP" == '3' || "$ANTIZAPRET_WARP" == '4' ]] && ANTIZAPRET_FWMARK="fwmark 0x2 "
+
+	echo "[Interface]
+PrivateKey = $ANTIZAPRET_WARP_PRIVATE_KEY
+Address = $ANTIZAPRET_WARP_ADDRESS
+MTU = $WARP_MTU
+Table = 1000
+PostUp = ip rule add from $IP.29.0.0/16 to $IP.29.0.0/16 lookup main priority 5000 || true
+PostUp = ip rule add from $IP.29.0.0/16 ${ANTIZAPRET_FWMARK}lookup 1000 priority 10000 || true
+PostDown = ip rule del from $IP.29.0.0/16 to $IP.29.0.0/16 priority 5000
+PostDown = ip rule del from $IP.29.0.0/16 ${ANTIZAPRET_FWMARK}lookup 1000 priority 10000
+
+[Peer]
+PublicKey = $ANTIZAPRET_WARP_PUBLIC_KEY
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = 15
+Endpoint = $ANTIZAPRET_WARP_ENDPOINT" > $ANTIZAPRET_WARP_PATH
+
+	wg-quick up $ANTIZAPRET_WARP_INTERFACE 2>/dev/null
+
+	if [[ $? -eq 0 ]]; then
+		echo "Started $ANTIZAPRET_WARP_INTERFACE: $ANTIZAPRET_WARP_ENDPOINT connected"
+		if [[ "$ANTIZAPRET_WARP" == '2' ]]; then
+			ANTIZAPRET_OUT_INTERFACE=$ANTIZAPRET_WARP_INTERFACE
+			ANTIZAPRET_OUT_IP=$ANTIZAPRET_WARP_IP
+		fi
+	else
+		if [[ "$WARP_PROTECTION" == 'y' ]]; then
+			echo "Starting $ANTIZAPRET_WARP_INTERFACE failed! Blocking traffic"
+			iptables -w -t raw -A PREROUTING -s $IP.29.0.0/16 -j DROP
+		else
+			echo "Starting $ANTIZAPRET_WARP_INTERFACE failed! Use $DEFAULT_INTERFACE"
+		fi
+	fi
+	set -e
+else
+	rm -f $ANTIZAPRET_WARP_PATH
+fi
+
+# WARP VPN
+VPN_WARP_INTERFACE=warp-vpn
+VPN_WARP_PATH="/etc/wireguard/$VPN_WARP_INTERFACE.conf"
+
+if [[ "$VPN_WARP" == '2' || "$VPN_WARP" == '3' ]]; then
+	set +e
+	echo "Starting $VPN_WARP_INTERFACE..."
+	if [[ -z "$VPN_WARP_PRIVATE_KEY" || -z "$VPN_WARP_PUBLIC_KEY" || -z "$VPN_WARP_ENDPOINT" || -z "$VPN_WARP_ADDRESS" ]]; then
+		VPN_WARP_PRIVATE_KEY=$(wg genkey)
+		KEY=$(echo "$VPN_WARP_PRIVATE_KEY" | wg pubkey)
+		REG=$(curl -sSfL --connect-timeout 10 -X POST "https://api.cloudflareclient.com/v0a5641/reg" \
+			-H 'Content-Type: application/json' \
+			-d "{\"key\": \"$KEY\"}")
+
+		VPN_WARP_PUBLIC_KEY=$(echo "$REG" | jq -r '.config.peers[0].public_key')
+		VPN_WARP_ENDPOINT=$(echo "$REG" | jq -r '.config.peers[0].endpoint.host')
+		VPN_WARP_ADDRESS="$(echo "$REG" | jq -r '.config.interface.addresses.v4')/32"
+	fi
+	VPN_WARP_IP="${VPN_WARP_ADDRESS%%/*}"
+
+	[[ "$VPN_WARP" == '3' ]] && VPN_FWMARK="fwmark 0x2 "
+
+	echo "[Interface]
+PrivateKey = $VPN_WARP_PRIVATE_KEY
+Address = $VPN_WARP_ADDRESS
+MTU = $WARP_MTU
+Table = 2000
+PostUp = ip rule add from $IP.28.0.0/16 to $IP.28.0.0/16 lookup main priority 5000 || true
+PostUp = ip rule add from $IP.28.0.0/16 ${VPN_FWMARK}lookup 2000 priority 10000 || true
+PostDown = ip rule del from $IP.28.0.0/16 to $IP.28.0.0/16 priority 5000
+PostDown = ip rule del from $IP.28.0.0/16 ${VPN_FWMARK}lookup 2000 priority 10000
+
+[Peer]
+PublicKey = $VPN_WARP_PUBLIC_KEY
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = 15
+Endpoint = $VPN_WARP_ENDPOINT" > $VPN_WARP_PATH
+
+	wg-quick up $VPN_WARP_INTERFACE 2>/dev/null
+
+	if [[ $? -eq 0 ]]; then
+		echo "Started $VPN_WARP_INTERFACE: $VPN_WARP_ENDPOINT connected"
+		if [[ "$VPN_WARP" == '2' ]]; then
+			VPN_OUT_INTERFACE=$VPN_WARP_INTERFACE
+			VPN_OUT_IP=$VPN_WARP_IP
+		fi
+	else
+		if [[ "$WARP_PROTECTION" == 'y' ]]; then
+			echo "Starting $VPN_WARP_INTERFACE failed! Blocking traffic"
+			iptables -w -t raw -A PREROUTING -s $IP.28.0.0/16 -j DROP
+		else
+			echo "Starting $VPN_WARP_INTERFACE failed! Use $DEFAULT_INTERFACE"
+		fi
+	fi
+	set -e
+else
+	rm -f $VPN_WARP_PATH
+fi
+
+# WARP DNS
+DNS_WARP_INTERFACE=warp-dns
+DNS_WARP_PATH="/etc/wireguard/$DNS_WARP_INTERFACE.conf"
+
+if [[ "$DNS_WARP" == 'y' ]]; then
+	set +e
+	echo "Starting $DNS_WARP_INTERFACE..."
+	if [[ -z "$DNS_WARP_PRIVATE_KEY" || -z "$DNS_WARP_PUBLIC_KEY" || -z "$DNS_WARP_ENDPOINT" || -z "$DNS_WARP_ADDRESS" ]]; then
+		DNS_WARP_PRIVATE_KEY=$(wg genkey)
+		KEY=$(echo "$DNS_WARP_PRIVATE_KEY" | wg pubkey)
+		REG=$(curl -sSfL --connect-timeout 10 -X POST "https://api.cloudflareclient.com/v0a5641/reg" \
+			-H 'Content-Type: application/json' \
+			-d "{\"key\": \"$KEY\"}")
+
+		DNS_WARP_PUBLIC_KEY=$(echo "$REG" | jq -r '.config.peers[0].public_key')
+		DNS_WARP_ENDPOINT=$(echo "$REG" | jq -r '.config.peers[0].endpoint.host')
+		DNS_WARP_ADDRESS="$(echo "$REG" | jq -r '.config.interface.addresses.v4')/32"
+	fi
+	DNS_WARP_IP="${DNS_WARP_ADDRESS%%/*}"
+	DNS_WARP_UID="$(id -u knot-resolver)"
+
+	echo "[Interface]
+PrivateKey = $DNS_WARP_PRIVATE_KEY
+Address = $DNS_WARP_ADDRESS
+MTU = $WARP_MTU
+Table = 3000
+PostUp = ip rule add uidrange $DNS_WARP_UID-$DNS_WARP_UID to $IP.28.0.0/15 lookup main priority 5000 || true
+PostUp = ip rule add uidrange $DNS_WARP_UID-$DNS_WARP_UID lookup 3000 priority 10000 || true
+PostDown = ip rule del uidrange $DNS_WARP_UID-$DNS_WARP_UID to $IP.28.0.0/15 lookup main priority 5000
+PostDown = ip rule del uidrange $DNS_WARP_UID-$DNS_WARP_UID lookup 3000 priority 10000
+
+[Peer]
+PublicKey = $DNS_WARP_PUBLIC_KEY
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = 15
+Endpoint = $DNS_WARP_ENDPOINT" > $DNS_WARP_PATH
+
+	wg-quick up $DNS_WARP_INTERFACE 2>/dev/null
+
+	if [[ $? -eq 0 ]]; then
+		echo "Started $DNS_WARP_INTERFACE: $DNS_WARP_ENDPOINT connected"
+		if [[ -z "$DNS_WARP_IP" ]]; then
+			iptables -w -t nat -A POSTROUTING -o $DNS_WARP_INTERFACE -j MASQUERADE
+		else
+			iptables -w -t nat -A POSTROUTING -o $DNS_WARP_INTERFACE -j SNAT --to-source $DNS_WARP_IP
+		fi
+	else
+		echo "Starting $DNS_WARP_INTERFACE failed! Use $DEFAULT_INTERFACE"
+	fi
+	set -e
+else
+	rm -f $DNS_WARP_PATH
+fi
+
+# Default policy
+iptables -w -P INPUT ACCEPT
+iptables -w -P FORWARD ACCEPT
+iptables -w -P OUTPUT ACCEPT
+ip6tables -w -P INPUT ACCEPT
+ip6tables -w -P FORWARD ACCEPT
+ip6tables -w -P OUTPUT ACCEPT
+
+# INPUT connection tracking
+iptables -w -I INPUT 1 -m conntrack --ctstate INVALID -j DROP
+ip6tables -w -I INPUT 1 -m conntrack --ctstate INVALID -j DROP
+
+# FORWARD connection tracking
+iptables -w -I FORWARD 1 -m conntrack --ctstate INVALID -j DROP
+ip6tables -w -I FORWARD 1 -m conntrack --ctstate INVALID -j DROP
+
+# OUTPUT connection tracking
+iptables -w -I OUTPUT 1 -m conntrack --ctstate INVALID -j DROP
+ip6tables -w -I OUTPUT 1 -m conntrack --ctstate INVALID -j DROP
+
+# Torrent guard
+if [[ "$TORRENT_GUARD" == 'y' ]]; then
+	ipset create antizapret-torrent hash:ip timeout 60 -exist
+	iptables -w -I FORWARD 2 -s $IP.28.0.0/16 -p tcp -m string --string 'GET ' --algo kmp --to 100 -m string --string 'info_hash=' --algo bm -m string --string 'peer_id=' --algo bm -m string --string 'port=' --algo bm -j SET --add-set antizapret-torrent src --exist
+	iptables -w -I FORWARD 3 -s $IP.28.0.0/16 -p udp -m string --string 'BitTorrent protocol' --algo kmp --to 100 -j SET --add-set antizapret-torrent src --exist
+	iptables -w -I FORWARD 4 -s $IP.28.0.0/16 -p udp -m string --string 'd1:ad2:id20:' --algo kmp --to 100 -j SET --add-set antizapret-torrent src --exist
+	iptables -w -I FORWARD 5 -s $IP.28.0.0/16 -m set --match-set antizapret-torrent src -j DROP
+fi
+
+# Restrict forwarding
+if [[ "$RESTRICT_FORWARD" == 'y' ]]; then
+	{
+		echo 'create antizapret-forward hash:net -exist'
+		echo 'flush antizapret-forward'
+		if [[ -f result/forward-ips.txt ]]; then
+			while read -r line; do
+				echo "add antizapret-forward $line"
+			done < result/forward-ips.txt
+		fi
+	} | ipset restore
+	iptables -w -I FORWARD 2 -s $IP.29.0.0/16 -m connmark --mark 0x1 -m set ! --match-set antizapret-forward dst -j DROP
+fi
+
+# Drop forwarding
+{
+	echo 'create antizapret-drop hash:net -exist'
+	echo 'flush antizapret-drop'
+	if [[ -f result/drop-ips.txt ]]; then
+		while read -r cidr; do
+			echo "add antizapret-drop $cidr"
+		done < result/drop-ips.txt
+	fi
+} | ipset restore
+iptables -w -I FORWARD 2 -s $IP.28.0.0/15 -m set --match-set antizapret-drop dst -j DROP
+
+# Client and server isolation
+if [[ "$CLIENT_ISOLATION" == 'y' ]]; then
+	iptables -w -I FORWARD 2 -s $IP.28.0.0/15 -d $IP.28.0.0/15 -j DROP
+	iptables -w -I INPUT 2 -s $IP.28.0.0/15 -p tcp ! --dport 53 -j DROP
+	iptables -w -I INPUT 3 -s $IP.28.0.0/15 -p udp ! --dport 53 -j DROP
+fi
+
+# SSH protection
+if [[ "$SSH_PROTECTION" == 'y' ]]; then
+	iptables -w -I INPUT 2 -p tcp --dport ssh -m conntrack --ctstate NEW -m hashlimit --hashlimit-above 5/hour --hashlimit-burst 5 --hashlimit-mode srcip --hashlimit-srcmask 24 --hashlimit-name antizapret-ssh --hashlimit-htable-expire 60000 -j DROP
+	ip6tables -w -I INPUT 2 -p tcp --dport ssh -m conntrack --ctstate NEW -m hashlimit --hashlimit-above 5/hour --hashlimit-burst 5 --hashlimit-mode srcip --hashlimit-srcmask 64 --hashlimit-name antizapret-ssh6 --hashlimit-htable-expire 60000 -j DROP
+fi
+
+# Attack protection
+if [[ "$ATTACK_PROTECTION" == 'y' ]]; then
+	{
+		echo 'create antizapret-allow hash:net -exist'
+		echo 'flush antizapret-allow'
+		if [[ -f result/allow-ips.txt ]]; then
+			while read -r line; do
+				echo "add antizapret-allow $line"
+			done < result/allow-ips.txt
+		fi
+	} | ipset restore
+	ipset create antizapret-block hash:ip timeout 600 -exist
+	ipset create antizapret-watch hash:ip,port timeout 600 -exist
+	iptables -w -I INPUT 2 -i $DEFAULT_INTERFACE -m set --match-set antizapret-allow src -j ACCEPT
+	iptables -w -I INPUT 3 -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -m set ! --match-set antizapret-watch src,dst -m hashlimit --hashlimit-above 20/hour --hashlimit-burst 20 --hashlimit-mode srcip --hashlimit-srcmask 24 --hashlimit-name antizapret-scan --hashlimit-htable-expire 600000 -j SET --add-set antizapret-block src --exist
+	iptables -w -I INPUT 4 -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -m hashlimit --hashlimit-above 100000/hour --hashlimit-burst 100000 --hashlimit-mode srcip --hashlimit-name antizapret-ddos --hashlimit-htable-expire 600000 -j SET --add-set antizapret-block src --exist
+	iptables -w -I INPUT 5 -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -m set --match-set antizapret-block src -j DROP
+	iptables -w -I INPUT 6 -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -j SET --add-set antizapret-watch src,dst --exist
+	ipset create antizapret-allow6 hash:net family inet6 -exist
+	ipset create antizapret-block6 hash:ip timeout 600 family inet6 -exist
+	ipset create antizapret-watch6 hash:ip,port timeout 600 family inet6 -exist
+	ip6tables -w -I INPUT 2 -i $DEFAULT_INTERFACE -m set --match-set antizapret-allow6 src -j ACCEPT
+	ip6tables -w -I INPUT 3 -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -m set ! --match-set antizapret-watch6 src,dst -m hashlimit --hashlimit-above 20/hour --hashlimit-burst 20 --hashlimit-mode srcip --hashlimit-srcmask 64 --hashlimit-name antizapret-scan6 --hashlimit-htable-expire 600000 -j SET --add-set antizapret-block6 src --exist
+	ip6tables -w -I INPUT 4 -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -m hashlimit --hashlimit-above 100000/hour --hashlimit-burst 100000 --hashlimit-mode srcip --hashlimit-name antizapret-ddos6 --hashlimit-htable-expire 600000 -j SET --add-set antizapret-block6 src --exist
+	ip6tables -w -I INPUT 5 -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -m set --match-set antizapret-block6 src -j DROP
+	ip6tables -w -I INPUT 6 -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -j SET --add-set antizapret-watch6 src,dst --exist
+fi
+
+# Scan protection
+if [[ "$SCAN_PROTECTION" == 'y' ]]; then
+	iptables -w -t raw -A PREROUTING -i $DEFAULT_INTERFACE -p icmp --icmp-type echo-request -j DROP
+	iptables -w -t raw -A OUTPUT -o $DEFAULT_INTERFACE -p tcp --tcp-flags RST RST -j DROP
+	iptables -w -t raw -A OUTPUT -o $DEFAULT_INTERFACE -p icmp --icmp-type port-unreachable -j DROP
+	ip6tables -w -t raw -A PREROUTING -i $DEFAULT_INTERFACE -p icmpv6 --icmpv6-type echo-request -j DROP
+	ip6tables -w -t raw -A OUTPUT -o $DEFAULT_INTERFACE -p tcp --tcp-flags RST RST -j DROP
+	ip6tables -w -t raw -A OUTPUT -o $DEFAULT_INTERFACE -p icmpv6 --icmpv6-type port-unreachable -j DROP
+fi
+
+# Deny input
+{
+	echo 'create antizapret-deny hash:net -exist'
+	echo 'flush antizapret-deny'
+	if [[ -f result/deny-ips.txt ]]; then
+		while read -r cidr; do
+			echo "add antizapret-deny $cidr"
+		done < result/deny-ips.txt
+	fi
+} | ipset restore
+iptables -w -t raw -A PREROUTING -i $DEFAULT_INTERFACE -m set --match-set antizapret-deny src -j DROP
+
+# Clamp TCP MSS
+iptables -w -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+iptables -w -t mangle -A OUTPUT ! -o lo -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+ip6tables -w -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+ip6tables -w -t mangle -A OUTPUT ! -o lo -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+
+# Disable TCP Timestamps
+iptables -w -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPOPTSTRIP --strip-options timestamp
+ip6tables -w -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPOPTSTRIP --strip-options timestamp
+
+# NOTRACK loopback
+iptables -w -t raw -A PREROUTING -i lo -j NOTRACK
+iptables -w -t raw -A OUTPUT -o lo -j NOTRACK
+ip6tables -w -t raw -A PREROUTING -i lo -j NOTRACK
+ip6tables -w -t raw -A OUTPUT -o lo -j NOTRACK
+
+# OpenVPN TCP port redirection for backup connections
+if [[ "$OPENVPN_BACKUP_TCP" == 'y' ]]; then
+	iptables -w -t nat -A PREROUTING -i $DEFAULT_INTERFACE -p tcp --dport 80 -j REDIRECT --to-ports 50080
+	iptables -w -t nat -A PREROUTING -i $DEFAULT_INTERFACE -p tcp --dport 443 -j REDIRECT --to-ports 50443
+	iptables -w -t nat -A PREROUTING -i $DEFAULT_INTERFACE -p tcp --dport 504 -j REDIRECT --to-ports 50443
+	iptables -w -t nat -A PREROUTING -i $DEFAULT_INTERFACE -p tcp --dport 508 -j REDIRECT --to-ports 50080
+fi
+
+# OpenVPN UDP port redirection for backup connections
+if [[ "$OPENVPN_BACKUP_UDP" == 'y' ]]; then
+	iptables -w -t nat -A PREROUTING -i $DEFAULT_INTERFACE -p udp --dport 80 -j REDIRECT --to-ports 50080
+	iptables -w -t nat -A PREROUTING -i $DEFAULT_INTERFACE -p udp --dport 443 -j REDIRECT --to-ports 50443
+	iptables -w -t nat -A PREROUTING -i $DEFAULT_INTERFACE -p udp --dport 504 -j REDIRECT --to-ports 50443
+	iptables -w -t nat -A PREROUTING -i $DEFAULT_INTERFACE -p udp --dport 508 -j REDIRECT --to-ports 50080
+fi
+
+# WireGuard/AmneziaWG port redirection for backup connections
+if [[ "$WIREGUARD_BACKUP" == 'y' ]]; then
+	iptables -w -t nat -A PREROUTING -i $DEFAULT_INTERFACE -p udp --dport 540 -j REDIRECT --to-ports 51443
+	iptables -w -t nat -A PREROUTING -i $DEFAULT_INTERFACE -p udp --dport 580 -j REDIRECT --to-ports 51080
+fi
+
+# AmneziaWG redirection ports to WireGuard
+iptables -w -t nat -A PREROUTING -i $DEFAULT_INTERFACE -p udp --dport 52080 -j REDIRECT --to-ports 51080
+iptables -w -t nat -A PREROUTING -i $DEFAULT_INTERFACE -p udp --dport 52443 -j REDIRECT --to-ports 51443
+
+# AntiZapret DNS redirection to Knot Resolver
+iptables -w -t nat -A PREROUTING -s $IP.29.0.0/16 -p udp --dport 53 -j DNAT --to-destination 127.1.1.1
+iptables -w -t nat -A PREROUTING -s $IP.29.0.0/16 -p tcp --dport 53 -j DNAT --to-destination 127.1.1.1
+
+# VPN DNS redirection to Knot Resolver
+if [[ "$VPN_DNS" == '1' ]]; then
+	iptables -w -t nat -A PREROUTING -s $IP.28.0.0/16 -p udp --dport 53 -j DNAT --to-destination 127.2.2.2
+	iptables -w -t nat -A PREROUTING -s $IP.28.0.0/16 -p tcp --dport 53 -j DNAT --to-destination 127.2.2.2
+fi
+
+# Block DoT/DoQ
+if [[ "$VPN_DNS" == '1' ]]; then
+	iptables -w -t raw -A PREROUTING -s $IP.28.0.0/15 -p tcp --dport 853 -j DROP
+	iptables -w -t raw -A PREROUTING -s $IP.28.0.0/15 -p udp --dport 853 -j DROP
+else
+	iptables -w -t raw -A PREROUTING -s $IP.29.0.0/16 -p tcp --dport 853 -j DROP
+	iptables -w -t raw -A PREROUTING -s $IP.29.0.0/16 -p udp --dport 853 -j DROP
+fi
+
+# Restrict forwarding
+if [[ "$RESTRICT_FORWARD" == 'y' ]]; then
+	iptables -w -t nat -A PREROUTING -s $IP.29.0.0/16 ! -d $FAKE_IP.0.0/15 -j CONNMARK --set-mark 0x1
+fi
+
+# Mapping fake IP to real IP
+iptables -w -t nat -S ANTIZAPRET-MAPPING &>/dev/null || iptables -w -t nat -N ANTIZAPRET-MAPPING
+iptables -w -t nat -A PREROUTING -s $IP.28.0.0/15 -d $FAKE_IP.0.0/15 -j ANTIZAPRET-MAPPING
+
+# WARP
+iptables -w -t mangle -S ANTIZAPRET-WARP &>/dev/null || iptables -w -t mangle -N ANTIZAPRET-WARP
+iptables -w -t mangle -A PREROUTING -s $IP.28.0.0/15 -d $FAKE_IP.0.0/15 -j ANTIZAPRET-WARP
+if [[ "$ANTIZAPRET_WARP" == '3' || "$ANTIZAPRET_WARP" == '4' ]]; then
+	if [[ -z "$ANTIZAPRET_WARP_IP" ]]; then
+		iptables -w -t nat -A POSTROUTING -s $IP.29.0.0/16 -m mark --mark 0x2 -o $ANTIZAPRET_WARP_INTERFACE -j MASQUERADE
+	else
+		iptables -w -t nat -A POSTROUTING -s $IP.29.0.0/16 -m mark --mark 0x2 -o $ANTIZAPRET_WARP_INTERFACE -j SNAT --to-source $ANTIZAPRET_WARP_IP
+	fi
+fi
+if [[ "$VPN_WARP" == '3' ]]; then
+	if [[ -z "$VPN_WARP_IP" ]]; then
+		iptables -w -t nat -A POSTROUTING -s $IP.28.0.0/16 -m mark --mark 0x2 -o $VPN_WARP_INTERFACE -j MASQUERADE
+	else
+		iptables -w -t nat -A POSTROUTING -s $IP.28.0.0/16 -m mark --mark 0x2 -o $VPN_WARP_INTERFACE -j SNAT --to-source $VPN_WARP_IP
+	fi
+fi
+
+# SNAT/MASQUERADE VPN
+if [[ "$ANTIZAPRET_OUT_INTERFACE" == "$VPN_OUT_INTERFACE" && "$ANTIZAPRET_OUT_IP" == "$VPN_OUT_IP" ]]; then
+	if [[ -z "$ANTIZAPRET_OUT_IP" ]]; then
+		iptables -w -t nat -A POSTROUTING -s $IP.28.0.0/15 -o $ANTIZAPRET_OUT_INTERFACE -j MASQUERADE
+	else
+		iptables -w -t nat -A POSTROUTING -s $IP.28.0.0/15 -o $ANTIZAPRET_OUT_INTERFACE -j SNAT --to-source $ANTIZAPRET_OUT_IP
+	fi
+elif [[ "$ANTIZAPRET_WARP" == '3' || "$ANTIZAPRET_WARP" == '4' ]]; then
+	if [[ -z "$ANTIZAPRET_OUT_IP" ]]; then
+		iptables -w -t nat -A POSTROUTING -s $IP.29.0.0/16 -m mark ! --mark 0x2 -o $ANTIZAPRET_OUT_INTERFACE -j MASQUERADE
+	else
+		iptables -w -t nat -A POSTROUTING -s $IP.29.0.0/16 -m mark ! --mark 0x2 -o $ANTIZAPRET_OUT_INTERFACE -j SNAT --to-source $ANTIZAPRET_OUT_IP
+	fi
+	if [[ -z "$VPN_OUT_IP" ]]; then
+		iptables -w -t nat -A POSTROUTING -s $IP.28.0.0/16 -o $VPN_OUT_INTERFACE -j MASQUERADE
+	else
+		iptables -w -t nat -A POSTROUTING -s $IP.28.0.0/16 -o $VPN_OUT_INTERFACE -j SNAT --to-source $VPN_OUT_IP
+	fi
+else
+	if [[ -z "$ANTIZAPRET_OUT_IP" ]]; then
+		iptables -w -t nat -A POSTROUTING -s $IP.29.0.0/16 -o $ANTIZAPRET_OUT_INTERFACE -j MASQUERADE
+	else
+		iptables -w -t nat -A POSTROUTING -s $IP.29.0.0/16 -o $ANTIZAPRET_OUT_INTERFACE -j SNAT --to-source $ANTIZAPRET_OUT_IP
+	fi
+	if [[ -z "$VPN_OUT_IP" ]]; then
+		iptables -w -t nat -A POSTROUTING -s $IP.28.0.0/16 -o $VPN_OUT_INTERFACE -j MASQUERADE
+	else
+		iptables -w -t nat -A POSTROUTING -s $IP.28.0.0/16 -o $VPN_OUT_INTERFACE -j SNAT --to-source $VPN_OUT_IP
+	fi
+fi
+
+# Network tuning
+TXQUEUELEN="${TXQUEUELEN:-10000}"
+CPU_MASK=$(printf '%x' $(( (1 << $(nproc)) - 1 )))
+MTU="${MTU:-1420}"
+for dev in $(ls /sys/class/net); do
+	[[ "$dev" == "lo" || "$dev" == *docker* ]] && continue
+	if [[ -e "/sys/class/net/$dev/device" ]]; then
+		# Set TX queue length
+		ip link set "$dev" txqueuelen "$TXQUEUELEN"
+		# Enable SoftIRQ CPU balance
+		echo "$CPU_MASK" | tee /sys/class/net/$dev/queues/rx-*/rps_cpus >/dev/null
+	else
+		# Set MTU if current is greater
+		if [[ $(cat /sys/class/net/$dev/mtu) -gt $MTU ]]; then
+			ip link set "$dev" mtu "$MTU"
+		fi
+	fi
+done
+
+# Clear Knot Resolver cache
+count="$(echo 'cache.clear()' | socat - /run/knot-resolver/control/1 | grep -oE '[0-9]+' || echo 0)"
+echo "AntiZapret DNS cache cleared: $count entries"
+count="$(echo 'cache.clear()' | socat - /run/knot-resolver/control/2 | grep -oE '[0-9]+' || echo 0)"
+echo "VPN DNS cache cleared: $count entries"
+
+./custom-up.sh "$@" || true
+
+exit 0

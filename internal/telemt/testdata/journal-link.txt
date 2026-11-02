@@ -1,0 +1,2 @@
+Oct 27 05:26:56 node-a telemt[358]: MAESTRO: Proxy links (192.0.2.94)
+Oct 27 05:26:56 node-a telemt[358]: MAESTRO: EE-TLS: tg://proxy?server=192.0.2.94&port=902&secret=ee00112233445566778899aabbccddeeff7777772e6578616d706c652e636f6d

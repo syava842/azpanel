@@ -1,0 +1,29 @@
+# Created by StatusOpenVPN
+server {
+    listen 80;
+    server_name vpn.test;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name vpn.test;
+
+    ssl_certificate     /etc/letsencrypt/live/vpn.test/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/vpn.test/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+
+    location /status/ {
+        proxy_pass http://127.0.0.1:1234;
+        client_max_body_size 512m;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Script-Name /status;
+
+        proxy_redirect off;
+    }
+}
