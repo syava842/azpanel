@@ -1,0 +1,54 @@
+# Пример /etc/telemt/config.toml для telemt 3.5.x: структура по установщику
+# telemt-deploy.sh и сверке с 94 (02.11.2026). Составлен вручную; секрет и
+# домен заменены (секрет 00112233…ff, домен www.example.com).
+
+[general]
+use_middle_proxy = false
+log_level = "silent"
+beobachten = false
+direct_relay_copy_buf_c2s_bytes = 4096
+direct_relay_copy_buf_s2c_bytes = 16384
+crypto_pending_buffer = 16384
+
+[general.modes]
+classic = false
+secure = false
+tls = true
+
+[general.links]
+show_link = ["user"]
+
+[general.telemetry]
+core_enabled = false
+user_enabled = false
+
+[network]
+ipv4 = true
+ipv6 = false
+stun_use = false
+
+[server]
+max_connections = 4000
+
+#[[server.listeners]]
+#ip = "::"
+#port = 902
+
+[[server.listeners]]
+ip = "0.0.0.0"
+port = 902
+
+[server.api]
+enabled = false
+
+[timeouts]
+client_keepalive = 15
+client_ack = 60
+
+[censorship]
+tls_domain = "www.example.com"
+unknown_sni_action = "mask"
+
+# Пользователи: имя = секрет (32 hex).
+[access.users]
+user = "00112233445566778899aabbccddeeff"

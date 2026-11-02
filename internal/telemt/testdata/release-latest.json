@@ -1,0 +1,87 @@
+{
+  "tag_name": "3.5.16",
+  "name": "3.5.16 Verfassungsgericht",
+  "draft": false,
+  "prerelease": false,
+  "html_url": "https://github.com/telemt/telemt/releases/tag/3.5.16",
+  "assets": [
+    {
+      "name": "telemt",
+      "size": 13927880,
+      "digest": "sha256:ebaec212fd5556ceca7fb0fcc4d3d23c01a8883d20a4cbc567219022d57c2a0b",
+      "browser_download_url": "https://github.com/telemt/telemt/releases/download/3.5.16/telemt"
+    },
+    {
+      "name": "telemt-aarch64-linux-gnu.tar.gz",
+      "size": 6266777,
+      "digest": "sha256:1e1bc87f05923b9673cbbaf34a3e50f7fdcf7d496cd24efcdb34c278ed18a659",
+      "browser_download_url": "https://github.com/telemt/telemt/releases/download/3.5.16/telemt-aarch64-linux-gnu.tar.gz"
+    },
+    {
+      "name": "telemt-aarch64-linux-gnu.tar.gz.sha256",
+      "size": 98,
+      "digest": "sha256:18c1c7fde7200b324cc09a3aba8bd501315880ee0826350f161735b01cbd539e",
+      "browser_download_url": "https://github.com/telemt/telemt/releases/download/3.5.16/telemt-aarch64-linux-gnu.tar.gz.sha256"
+    },
+    {
+      "name": "telemt-aarch64-linux-musl.tar.gz",
+      "size": 6250631,
+      "digest": "sha256:33d7b2aa55f8852ddcc59e0fa8f5ad9bca3ce94d9fea6665b918e9ae91820ae3",
+      "browser_download_url": "https://github.com/telemt/telemt/releases/download/3.5.16/telemt-aarch64-linux-musl.tar.gz"
+    },
+    {
+      "name": "telemt-aarch64-linux-musl.tar.gz.sha256",
+      "size": 99,
+      "digest": "sha256:d62683e6205f6f61ed124dec97ebbdd7b8769f3733836d3c223eed03e6f0bfa6",
+      "browser_download_url": "https://github.com/telemt/telemt/releases/download/3.5.16/telemt-aarch64-linux-musl.tar.gz.sha256"
+    },
+    {
+      "name": "telemt-x86_64-linux-gnu.tar.gz",
+      "size": 6788311,
+      "digest": "sha256:e6f46b2f3becf29bfd555cec8a059e429f7c082c1af402499b3a7940cf8ebd34",
+      "browser_download_url": "https://github.com/telemt/telemt/releases/download/3.5.16/telemt-x86_64-linux-gnu.tar.gz"
+    },
+    {
+      "name": "telemt-x86_64-linux-gnu.tar.gz.sha256",
+      "size": 97,
+      "digest": "sha256:4fd667727c9113e032064b7f49d196c30e4a742c8370e00735af8afd979d3f0f",
+      "browser_download_url": "https://github.com/telemt/telemt/releases/download/3.5.16/telemt-x86_64-linux-gnu.tar.gz.sha256"
+    },
+    {
+      "name": "telemt-x86_64-linux-musl.tar.gz",
+      "size": 6863659,
+      "digest": "sha256:05d7c32eff5990285657408cf383614d845ecc06aac0d5adc02a86d72c907146",
+      "browser_download_url": "https://github.com/telemt/telemt/releases/download/3.5.16/telemt-x86_64-linux-musl.tar.gz"
+    },
+    {
+      "name": "telemt-x86_64-linux-musl.tar.gz.sha256",
+      "size": 98,
+      "digest": "sha256:db1c9356c236a6748cff5a134188ee424458c4e1ce0cba15356fa5cfdf25d0df",
+      "browser_download_url": "https://github.com/telemt/telemt/releases/download/3.5.16/telemt-x86_64-linux-musl.tar.gz.sha256"
+    },
+    {
+      "name": "telemt-x86_64-v3-linux-gnu.tar.gz",
+      "size": 6795158,
+      "digest": "sha256:26c8e5791b9ee69a6b1c09d3b490cbe13a152f7977501f36d9d4a6f1056ac39b",
+      "browser_download_url": "https://github.com/telemt/telemt/releases/download/3.5.16/telemt-x86_64-v3-linux-gnu.tar.gz"
+    },
+    {
+      "name": "telemt-x86_64-v3-linux-gnu.tar.gz.sha256",
+      "size": 100,
+      "digest": "sha256:7d98bacce012f013bff7e525907346655c11251911eca4cab0ae921714d30ca8",
+      "browser_download_url": "https://github.com/telemt/telemt/releases/download/3.5.16/telemt-x86_64-v3-linux-gnu.tar.gz.sha256"
+    },
+    {
+      "name": "telemt-x86_64-v3-linux-musl.tar.gz",
+      "size": 6874909,
+      "digest": "sha256:3a09b8a6baf28400edede1603fd0f1b90423e7b2ebc8208cd58317677c24ab7f",
+      "browser_download_url": "https://github.com/telemt/telemt/releases/download/3.5.16/telemt-x86_64-v3-linux-musl.tar.gz"
+    },
+    {
+      "name": "telemt-x86_64-v3-linux-musl.tar.gz.sha256",
+      "size": 101,
+      "digest": "sha256:48d75ff55e4e5bb55d4a107039761a1d94165a7efd1f336d667da77081f082a3",
+      "browser_download_url": "https://github.com/telemt/telemt/releases/download/3.5.16/telemt-x86_64-v3-linux-musl.tar.gz.sha256"
+    }
+  ]
+}

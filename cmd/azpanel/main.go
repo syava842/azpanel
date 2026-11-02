@@ -50,6 +50,8 @@ func run(args []string) int {
 		return report(cmdUser(args[1:], os.Stdout))
 	case "limit":
 		return report(cmdLimit(args[1:], os.Stdout))
+	case "internal":
+		return report(cmdInternal(args[1:], os.Stdout))
 	case "sessions":
 		return report(runSessions())
 	case "install":
