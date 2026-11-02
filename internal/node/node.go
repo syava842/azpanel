@@ -136,9 +136,16 @@ func startAPI(ctx context.Context, exit func(), cfg config.Config, version strin
 		return nil, errors.New("NODE_TOKEN в secrets.env не 64 hex-символа — удалите строку и повторите azpanel install")
 	}
 	n := cfg.Node
+	// Файлы параметров задач (секреты) лежат в одном каталоге; оставшиеся от
+	// несостоявшихся запусков убираются при старте и после каждой задачи.
+	paramsDir := filepath.Join(paths.Data(), "params")
+	if removed := SweepParams(paramsDir, paramsMaxAge); removed > 0 {
+		log.Warn("удалены устаревшие файлы параметров задач", "count", removed)
+	}
 	tasks := &Tasks{
 		Dir: n.AntiZapretDir, LogDir: filepath.Join(paths.Log(), "tasks"),
 		StatePath: filepath.Join(paths.Data(), "tasks.json"), Log: log, Now: time.Now, Ctx: ctx,
+		OnFinish: func() { SweepParams(paramsDir, paramsMaxAge) },
 	}
 	if err := tasks.Load(); err != nil {
 		log.Error("список задач не прочитан — задачи начаты заново", "err", err)
@@ -185,7 +192,6 @@ func startAPI(ctx context.Context, exit func(), cfg config.Config, version strin
 	}
 	// telemt и WARP: чтение — агентом, изменения — задачами `azpanel internal …`
 	// вне песочницы (пишут в /etc/telemt, /usr/local/bin, /root/warper).
-	paramsDir := filepath.Join(paths.Data(), "params")
 	api.Telemt = &TelemtService{Env: telemt.NewEnv(), Self: paths.Binary(), ParamsDir: paramsDir}
 	api.Warp = &WarpService{Warper: &warp.Warper{}, Self: paths.Binary(), ParamsDir: paramsDir}
 	api.Update = &UpdateService{

@@ -24,7 +24,7 @@ type Runner func(ctx context.Context, name string, args ...string) ([]byte, erro
 func ExecRunner(ctx context.Context, name string, args ...string) ([]byte, error) {
 	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
 	if err != nil {
-		return out, fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
+		return out, fmt.Errorf("%s %s: %w", name, RedactSecrets(strings.Join(args, " ")), err)
 	}
 	return out, nil
 }
@@ -101,7 +101,7 @@ func (e *Env) settle() time.Duration {
 
 func (e *Env) logf(format string, a ...any) {
 	if e.Log != nil {
-		fmt.Fprintf(e.Log, format+"\n", a...)
+		fmt.Fprint(e.Log, RedactSecrets(fmt.Sprintf(format, a...))+"\n")
 	}
 }
 
@@ -114,10 +114,16 @@ func (e *Env) ReadConfig() (*Doc, error) {
 	return ParseConfig(data)
 }
 
+// queryTimeout — предел опросов (telemt --version, systemctl show, journalctl):
+// зависшая команда не должна подвешивать GET /v1/telemt и задачи.
+const queryTimeout = 10 * time.Second
+
 var versionRe = regexp.MustCompile(`\d+\.\d+\.\d+`)
 
 // Version — версия установленного бинарника (из «telemt --version»).
 func (e *Env) Version(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
 	out, err := e.run(ctx, e.binary(), "--version")
 	if err != nil {
 		return "", err
@@ -127,6 +133,15 @@ func (e *Env) Version(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("в выводе telemt --version нет номера версии: %q", firstLine(string(out)))
 	}
 	return v, nil
+}
+
+var secretLikeRe = regexp.MustCompile(`\b[0-9a-fA-F]{32}\b`)
+
+// RedactSecrets затирает в тексте 32-значные hex-секреты: текст уходит в
+// журнал задачи и в ответы панели. Ошибка не должна нести секрет, даже если
+// команду запустили с ним в аргументах.
+func RedactSecrets(s string) string {
+	return secretLikeRe.ReplaceAllString(s, "********")
 }
 
 func firstLine(s string) string {
@@ -139,6 +154,8 @@ func firstLine(s string) string {
 
 // UnitState — ActiveState и NRestarts службы.
 func (e *Env) UnitState(ctx context.Context) (active string, restarts int, err error) {
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
 	out, err := e.run(ctx, "systemctl", "show", e.unit(), "-p", "ActiveState", "-p", "NRestarts")
 	if err != nil {
 		return "", 0, err
@@ -161,6 +178,8 @@ func (e *Env) UnitState(ctx context.Context) (active string, restarts int, err e
 
 // Journal — журнал службы с указанного момента.
 func (e *Env) Journal(ctx context.Context, since time.Time) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
 	out, err := e.run(ctx, "journalctl", "-u", e.unit(), "--no-pager", "--since", since.Local().Format("2006-01-02 15:04:05"))
 	return string(out), err
 }

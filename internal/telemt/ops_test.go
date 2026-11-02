@@ -348,6 +348,64 @@ func TestInstall(t *testing.T) {
 	if s.count("systemctl enable --now telemt") != 1 {
 		t.Fatalf("вызовы: %v", s.calls)
 	}
+	// Настоящий секрет в аргументы дочерних процессов не попадает, но стоит в конфиге.
+	for _, c := range s.calls {
+		if strings.Contains(c, testSecret) {
+			t.Errorf("секрет в аргументах команды: %s", c)
+		}
+	}
+	doc, err := ParseConfig([]byte(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	us := doc.Users()
+	if len(us) != 1 || us[0].Name != "user" || us[0].Secret != testSecret {
+		t.Fatalf("секрет пользователя в конфиге: %+v", us)
+	}
+}
+
+// Сбой telemt --init: ни текст ошибки, ни журнал задачи не несут секрета, ни
+// настоящего, ни одноразового.
+func TestInstallInitFailureDoesNotLeakSecret(t *testing.T) {
+	s := newStand(t, "", "3.5.16")
+	s.freeNow = true
+	var log bytes.Buffer
+	s.env.Log = &log
+	var seen []string
+	s.env.Run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "--init" {
+			seen = append(seen, strings.Join(args, " "))
+			// Как ExecRunner: ошибка с аргументами, вывод тоже с секретом.
+			return []byte("init: secret 00112233445566778899aabbccddeeff rejected\nline2"), fmt.Errorf("%s %s: exit status 1", name, strings.Join(args, " "))
+		}
+		return s.run(ctx, name, args...)
+	}
+	err := s.env.Install(context.Background(), InstallParams{Port: 902, Domain: "www.example.com", Secret: testSecret})
+	if err == nil {
+		t.Fatal("ждали ошибку")
+	}
+	if len(seen) != 1 {
+		t.Fatalf("--init вызван %d раз", len(seen))
+	}
+	tmp := seen[0][strings.Index(seen[0], "--secret ")+len("--secret "):][:32]
+	for _, leak := range []string{testSecret, tmp, "00112233445566778899aabbccddeeff"} {
+		if strings.Contains(err.Error(), leak) || strings.Contains(log.String(), leak) {
+			t.Errorf("секрет %s в ошибке или журнале:\n%v\n%s", leak[:6], err, log.String())
+		}
+	}
+	if strings.Contains(seen[0], testSecret) {
+		t.Error("настоящий секрет передан telemt --init")
+	}
+}
+
+func TestExecRunnerErrorRedactsSecret(t *testing.T) {
+	_, err := ExecRunner(context.Background(), "/nonexistent/azpanel-telemt", "--secret", testSecret, "--user", "u")
+	if err == nil || strings.Contains(err.Error(), testSecret) {
+		t.Fatalf("ошибка запуска несёт секрет: %v", err)
+	}
+	if got := RedactSecrets("a " + testSecret + " b"); strings.Contains(got, testSecret) {
+		t.Fatal(got)
+	}
 }
 
 func TestInstallRefusals(t *testing.T) {
@@ -456,5 +514,91 @@ func TestCompareVersions(t *testing.T) {
 		if got := CompareVersions(c.a, c.b); got != c.want {
 			t.Errorf("%s vs %s = %d", c.a, c.b, got)
 		}
+	}
+}
+
+func TestApplyKeepsFiveConfigBackups(t *testing.T) {
+	s := newStand(t, "3.5.7", "3.5.16")
+	tick := int64(1_700_000_000)
+	s.env.Now = func() time.Time { tick++; return time.Unix(tick, 0) }
+	for i := 1; i <= 8; i++ {
+		err := s.env.Apply(context.Background(), ApplyParams{Op: "add", Name: fmt.Sprintf("u%d", i), Secret: fmt.Sprintf("%032x", i)})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	list, _ := filepath.Glob(s.env.Config + ".bak-*")
+	if len(list) != keepConfigBackups {
+		t.Fatalf("копий конфига %d, ждали %d: %v", len(list), keepConfigBackups, list)
+	}
+}
+
+// Сбой установки убирает бинарник и конфиг: повтор не упирается в «уже установлен».
+func TestInstallFailureCleansUpAndAllowsRetry(t *testing.T) {
+	s := newStand(t, "", "3.5.16")
+	s.freeNow = true
+	s.active = "failed"
+	s.onRun = func(s *stand, name string, args []string) {
+		switch {
+		case len(args) > 0 && args[0] == "--init":
+			cfg := "[server]\nport = 902\n\n[censorship]\ntls_domain = \"www.example.com\"\n\n[access.users]\nuser = \"" + testSecret + "\"\n"
+			os.MkdirAll(filepath.Dir(s.env.Config), 0o755)
+			os.WriteFile(s.env.Config, []byte(cfg), 0o640)
+		case name == "systemctl" && len(args) > 0 && args[0] == "enable":
+			s.freeNow = false
+		}
+	}
+	err := s.env.Install(context.Background(), InstallParams{Port: 902, Domain: "www.example.com", Secret: testSecret})
+	if err == nil {
+		t.Fatal("ждали провал проверки")
+	}
+	if s.env.Installed() || s.binContent() != "" {
+		t.Fatal("следы неудавшейся установки остались")
+	}
+	if s.count("systemctl disable --now telemt") != 1 {
+		t.Fatalf("запущенную службу надо остановить: %v", s.calls)
+	}
+	s.active = "active"
+	s.freeNow = true
+	if err := s.env.Install(context.Background(), InstallParams{Port: 902, Domain: "www.example.com", Secret: testSecret}); err != nil {
+		t.Fatalf("повтор после сбоя: %v", err)
+	}
+}
+
+// Юнит уже перезапускался раньше (NRestarts > 0): это не провал установки.
+func TestInstallBaselineIsCurrentRestartCount(t *testing.T) {
+	s := newStand(t, "", "3.5.16")
+	s.freeNow = true
+	s.restarts = 4
+	s.onRun = func(s *stand, name string, args []string) {
+		switch {
+		case len(args) > 0 && args[0] == "--init":
+			cfg := "[server]\nport = 902\n\n[censorship]\ntls_domain = \"www.example.com\"\n\n[access.users]\nuser = \"" + testSecret + "\"\n"
+			os.MkdirAll(filepath.Dir(s.env.Config), 0o755)
+			os.WriteFile(s.env.Config, []byte(cfg), 0o640)
+		case name == "systemctl" && len(args) > 0 && args[0] == "enable":
+			s.freeNow = false
+		}
+	}
+	if err := s.env.Install(context.Background(), InstallParams{Port: 902, Domain: "www.example.com", Secret: testSecret}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestQueriesHaveDeadline(t *testing.T) {
+	s := newStand(t, "3.5.7", "3.5.16")
+	var deadlines int
+	inner := s.env.Run
+	s.env.Run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if _, ok := ctx.Deadline(); ok {
+			deadlines++
+		}
+		return inner(ctx, name, args...)
+	}
+	s.env.Version(context.Background())
+	s.env.UnitState(context.Background())
+	s.env.Journal(context.Background(), time.Now())
+	if deadlines != 3 {
+		t.Fatalf("опросов со сроком: %d из 3", deadlines)
 	}
 }

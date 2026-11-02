@@ -108,6 +108,9 @@ type Tasks struct {
 	PollEvery time.Duration
 	// Timeouts — предел времени по виду задачи; nil — DefaultTaskTimeouts.
 	Timeouts map[string]time.Duration
+	// OnFinish вызывается (в отдельной горутине) после окончания любой задачи:
+	// уборка файлов параметров, оставшихся от несостоявшихся запусков.
+	OnFinish func()
 
 	mu      sync.Mutex
 	tasks   []Task // от старых к новым
@@ -478,6 +481,9 @@ func (t *Tasks) finish(id string, code *int, interrupted, timedOut bool) {
 		t.running = ""
 	}
 	t.saveLocked()
+	if t.OnFinish != nil {
+		go t.OnFinish()
+	}
 }
 
 func (t *Tasks) runningLocked() (Task, bool) {

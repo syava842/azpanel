@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"time"
 
@@ -202,6 +203,7 @@ func (e *Env) Apply(ctx context.Context, p ApplyParams) error {
 	if err := fsutil.WriteFileAtomic(e.config(), doc.Bytes(), st.Mode().Perm()); err != nil {
 		return err
 	}
+	e.pruneConfigBackups(keepConfigBackups)
 	e.logf("конфиг обновлён (копия: %s), перезапускаю", backup)
 	if err := e.restart(ctx); err != nil {
 		e.logf("проверка не прошла: %v — возвращаю прежний конфиг", err)
@@ -317,15 +319,36 @@ func (e *Env) Install(ctx context.Context, p InstallParams) error {
 	if err := os.Rename(staged, bin); err != nil {
 		return err
 	}
+	// Бинарника и конфига до установки не было (Installed() проверена выше):
+	// при сбое убираем свои следы, иначе повтор упрётся в «уже установлен».
+	done, started := false, false
+	defer func() {
+		if done {
+			return
+		}
+		e.logf("установка не удалась — убираю бинарник и конфиг")
+		if started {
+			_, _ = e.run(context.WithoutCancel(ctx), "systemctl", "disable", "--now", e.unit())
+		}
+		os.Remove(bin)
+		os.Remove(e.config())
+	}()
 	if v, err := e.Version(ctx); err != nil {
 		return fmt.Errorf("установленный бинарник не запускается: %w", err)
 	} else {
 		e.logf("установлен %s версии %s", bin, v)
 	}
 	dir := filepath.Dir(e.config())
+	// Настоящий секрет в аргументы дочернего процесса не попадает: argv виден в
+	// /proc/<pid>/cmdline любому пользователю узла и в тексте ошибки. --init
+	// получает одноразовый секрет, а настоящий ставит tuneConfig правкой конфига.
+	tmpSecret, err := NewSecret()
+	if err != nil {
+		return err
+	}
 	if out, err := e.run(ctx, bin, "--init", "--port", strconv.Itoa(p.Port), "--domain", p.Domain,
-		"--secret", p.Secret, "--user", p.User, "--config-dir", dir, "--no-start"); err != nil {
-		return fmt.Errorf("telemt --init завершился с ошибкой: %w (%s)", err, firstLine(string(out)))
+		"--secret", tmpSecret, "--user", p.User, "--config-dir", dir, "--no-start"); err != nil {
+		return fmt.Errorf("telemt --init завершился с ошибкой: %s (%s)", RedactSecrets(err.Error()), RedactSecrets(firstLine(string(out))))
 	}
 	if err := e.tuneConfig(p); err != nil {
 		return err
@@ -338,16 +361,24 @@ func (e *Env) Install(ctx context.Context, p InstallParams) error {
 	if out, err := e.run(ctx, "systemctl", "daemon-reload"); err != nil {
 		return fmt.Errorf("daemon-reload: %w (%s)", err, firstLine(string(out)))
 	}
+	// Счётчик перезапусков до запуска: юнит мог существовать раньше, и ноль в
+	// качестве точки отсчёта дал бы ложный провал.
+	baseline := 0
+	if _, n, err := e.UnitState(ctx); err == nil {
+		baseline = n
+	}
 	since := e.now()
+	started = true
 	if out, err := e.run(ctx, "systemctl", "enable", "--now", e.unit()); err != nil {
 		return fmt.Errorf("служба не запустилась: %w (%s)", err, firstLine(string(out)))
 	}
-	if err := e.verify(ctx, since, 0); err != nil {
+	if err := e.verify(ctx, since, baseline); err != nil {
 		return err
 	}
 	if err := e.CheckPortListening(ctx, p.Port); err != nil {
 		return err
 	}
+	done = true
 	e.logf("telemt установлен: порт %d, домен %s", p.Port, p.Domain)
 	return nil
 }
@@ -369,6 +400,13 @@ func (e *Env) tuneConfig(p InstallParams) error {
 	}
 	doc, err := ParseConfig(data)
 	if err != nil {
+		return err
+	}
+	// Секрет первого пользователя: --init записал одноразовый, ставим настоящий.
+	if err := doc.RemoveUser(p.User); err != nil {
+		return fmt.Errorf("пользователь %s в конфиге после --init: %w", p.User, err)
+	}
+	if err := doc.AddUser(p.User, p.Secret); err != nil {
 		return err
 	}
 	sets := []struct{ section, key, raw string }{
@@ -400,4 +438,22 @@ func (e *Env) tuneConfig(p InstallParams) error {
 		return err
 	}
 	return fsutil.WriteFileAtomic(e.config(), doc.Bytes(), st.Mode().Perm())
+}
+
+// keepConfigBackups — сколько копий config.toml.bak-* хранится: в каждой полные
+// секреты пользователей, копить их без предела незачем.
+const keepConfigBackups = 5
+
+// pruneConfigBackups оставляет n последних копий конфига (имя несёт время).
+func (e *Env) pruneConfigBackups(n int) {
+	list, err := filepath.Glob(e.config() + ".bak-*")
+	if err != nil || len(list) <= n {
+		return
+	}
+	sort.Strings(list)
+	for _, f := range list[:len(list)-n] {
+		if err := os.Remove(f); err == nil {
+			e.logf("старая копия конфига удалена: %s", filepath.Base(f))
+		}
+	}
 }

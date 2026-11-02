@@ -30,6 +30,7 @@ func writeParamsFile(dir string, v any) (string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
+	SweepParams(dir, paramsMaxAge)
 	data, err := json.Marshal(v)
 	if err != nil {
 		return "", err
@@ -89,4 +90,29 @@ func (a *API) launchExtTask(w http.ResponseWriter, kind string, argv []string, p
 	}
 	a.Log.Info("задача запущена", "id", t.ID, "kind", kind)
 	return t, true
+}
+
+// paramsMaxAge — как долго файл параметров может ждать своей задачи: задача
+// читает и удаляет его в первую секунду, оставшийся дольше — след сбоя.
+const paramsMaxAge = time.Hour
+
+// SweepParams удаляет файлы params-*.json старше maxAge. Они остаются, если
+// systemd-run не стартовал или режим internal упал до чтения параметров, а в
+// них секреты (ключи WireGuard, пароли, ссылки). Возвращает число удалённых.
+func SweepParams(dir string, maxAge time.Duration) int {
+	list, err := filepath.Glob(filepath.Join(dir, "params-*.json"))
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, f := range list {
+		st, err := os.Lstat(f)
+		if err != nil || !st.Mode().IsRegular() || time.Since(st.ModTime()) < maxAge {
+			continue
+		}
+		if os.Remove(f) == nil {
+			n++
+		}
+	}
+	return n
 }
