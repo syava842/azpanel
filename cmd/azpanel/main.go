@@ -80,7 +80,7 @@ func runNode() int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := node.Run(ctx, cfg, hookFiles(cfg).Ensure); err != nil {
+	if err := node.Run(ctx, cfg, version, hookFiles(cfg).Ensure); err != nil {
 		fmt.Fprintln(os.Stderr, "azpanel node:", err)
 		return 1
 	}

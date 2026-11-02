@@ -18,6 +18,7 @@ import (
 	"github.com/syava842/azpanel/internal/config"
 	"github.com/syava842/azpanel/internal/fsutil"
 	"github.com/syava842/azpanel/internal/paths"
+	"github.com/syava842/azpanel/internal/secrets"
 )
 
 const nodeUnitName = "azpanel-node.service"
@@ -55,6 +56,9 @@ func Defaults() Options {
 	}
 }
 
+// NodeUnit — юнит агента. Сам агент пишет только в /opt/azpanel; остальные
+// пути на запись нужны client.sh (PKI EasyRSA, профили, конфиги WireGuard)
+// и установке хука (скрипты OpenVPN). «-» — каталога может не быть.
 func NodeUnit(bin string) string {
 	return `[Unit]
 Description=azpanel: агент узла AntiZapret
@@ -67,6 +71,10 @@ Restart=on-failure
 RestartSec=3
 RuntimeDirectory=azpanel
 RuntimeDirectoryMode=0755
+ProtectSystem=strict
+ReadWritePaths=/opt/azpanel -/etc/openvpn -/etc/wireguard -/root/antizapret
+PrivateTmp=true
+NoNewPrivileges=true
 
 [Install]
 WantedBy=multi-user.target
@@ -96,10 +104,11 @@ func InstallNode(o Options) error {
 	fmt.Fprintf(o.Out, `Будет установлено:
   %s — каталоги bin, etc, log, data, backup
   %s — служба azpanel-node (включится и перезапустится)
+  %s — токен API агента (если его ещё нет); API — только с этого сервера
   хук лимита в %s: custom-client-connect.sh, custom-client-disconnect.sh
     (перед первой правкой — копии .bak-azpanel)
 Лимитов после установки нет: все клиенты подключаются как раньше.
-`, paths.Root(), unit, o.ScriptsDir)
+`, paths.Root(), unit, paths.SecretsFile(), o.ScriptsDir)
 	if !o.Yes && !confirm(o.In, o.Out, "Продолжить? [y/N]: ") {
 		return errors.New("установка отменена")
 	}
@@ -118,6 +127,9 @@ func InstallNode(o Options) error {
 		if err := config.Save(paths.ConfigFile(), config.Default()); err != nil {
 			return err
 		}
+	}
+	if err := ensureNodeToken(paths.SecretsFile()); err != nil {
+		return fmt.Errorf("токен узла: %w", err)
 	}
 	if err := fsutil.WriteFileAtomic(unit, []byte(NodeUnit(paths.Binary())), 0o644); err != nil {
 		return err
@@ -204,4 +216,21 @@ func waitAgent() error {
 		time.Sleep(200 * time.Millisecond)
 	}
 	return err
+}
+
+// ensureNodeToken создаёт NODE_TOKEN, если его нет. Существующий не
+// меняется: панель уже знает его.
+func ensureNodeToken(path string) error {
+	m, err := secrets.Load(path)
+	if err != nil {
+		return err
+	}
+	if m[secrets.NodeToken] != "" {
+		return nil
+	}
+	t, err := secrets.NewToken()
+	if err != nil {
+		return err
+	}
+	return secrets.Set(path, secrets.NodeToken, t)
 }

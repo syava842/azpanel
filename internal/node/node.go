@@ -2,7 +2,11 @@ package node
 
 import (
 	"context"
+	"encoding/hex"
+	"errors"
+	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -12,6 +16,8 @@ import (
 	"github.com/syava842/azpanel/internal/limits"
 	"github.com/syava842/azpanel/internal/logx"
 	"github.com/syava842/azpanel/internal/paths"
+	"github.com/syava842/azpanel/internal/secrets"
+	"github.com/syava842/azpanel/internal/sysinfo"
 )
 
 // hookCheckEvery — как часто проверять, что хук на месте: повторный
@@ -20,7 +26,7 @@ const hookCheckEvery = time.Minute
 
 // Run — режим «azpanel node». ensureHook ставит хук в скрипты OpenVPN и
 // сообщает, было ли изменение.
-func Run(ctx context.Context, cfg config.Config, ensureHook func() (bool, error)) error {
+func Run(ctx context.Context, cfg config.Config, version string, ensureHook func() (bool, error)) error {
 	maxBytes := int64(cfg.Log.MaxSizeMB) << 20
 	nodeW, err := logx.Open(filepath.Join(paths.Log(), "node.log"), maxBytes, cfg.Log.Keep)
 	if err != nil {
@@ -78,6 +84,14 @@ func Run(ctx context.Context, cfg config.Config, ensureHook func() (bool, error)
 		Peer:    PeerChecker(),
 	}
 	go p.Run(ctx, time.Duration(cfg.Node.PollSeconds)*time.Second)
+	if cfg.Node.APIListen != "" {
+		stop, err := startAPI(cfg, version, tr, log)
+		if err != nil {
+			log.Error("API агента не запущен — панель узел не увидит, хук работает", "err", err)
+		} else {
+			defer stop()
+		}
+	}
 	go func() {
 		tk := time.NewTicker(hookCheckEvery)
 		defer tk.Stop()
@@ -95,4 +109,64 @@ func Run(ctx context.Context, cfg config.Config, ensureHook func() (bool, error)
 	err = srv.Serve(ln)
 	log.Info("агент остановлен")
 	return err
+}
+
+// startAPI запускает HTTP API для панели. Его сбой не трогает хук: лимиты
+// и блокировки работают и без API. При остановке службы systemd гасит и
+// дочерние процессы — client.sh, запущенный в эту секунду, оборвётся.
+func startAPI(cfg config.Config, version string, tr *Tracker, log *slog.Logger) (func(), error) {
+	sec, err := secrets.Load(paths.SecretsFile())
+	if err != nil {
+		return nil, err
+	}
+	token := sec[secrets.NodeToken]
+	if token == "" {
+		return nil, errors.New("в secrets.env нет NODE_TOKEN — его создаёт azpanel install")
+	}
+	if b, err := hex.DecodeString(token); err != nil || len(b) != 32 {
+		return nil, errors.New("NODE_TOKEN в secrets.env не 64 hex-символа — удалите строку и повторите azpanel install")
+	}
+	n := cfg.Node
+	api := &API{
+		Token: token, Version: version, Tracker: tr, LimitsPath: paths.LimitsFile(),
+		Inventory:     antizapret.Inventory{PKI: n.EasyRSAPKI, WireGuardDir: n.WireGuardDir},
+		ClientSh:      &antizapret.ClientSh{Dir: n.AntiZapretDir, Timeout: time.Duration(n.ClientShTimeoutS) * time.Second},
+		AntiZapretDir: n.AntiZapretDir,
+		SocketDir:     n.OpenVPNSocketDir,
+		Sampler:       &sysinfo.Sampler{Proc: "/proc", DiskPath: "/"},
+		WGShow:        antizapret.WGShow,
+		Kill:          antizapret.KillClient,
+		Log:           log,
+		Now:           time.Now,
+	}
+	api.Services = func(ctx context.Context) ([]sysinfo.Service, error) {
+		kresd, err := sysinfo.KresdUnits(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return sysinfo.Services(ctx, sysinfo.ServiceUnits(kresd, api.WireGuardEnabled()))
+	}
+	ln, err := net.Listen("tcp", n.APIListen)
+	if err != nil {
+		return nil, err
+	}
+	srv := &http.Server{
+		Handler:           api.Handler(),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      time.Duration(n.ClientShTimeoutS)*time.Second + time.Minute,
+		IdleTimeout:       time.Minute,
+		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
+	}
+	go func() {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("API агента остановлен с ошибкой", "err", err)
+		}
+	}()
+	log.Info("API агента запущен", "listen", n.APIListen)
+	return func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		srv.Shutdown(ctx)
+	}, nil
 }

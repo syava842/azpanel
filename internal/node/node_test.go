@@ -56,7 +56,7 @@ func TestRunAnswersHook(t *testing.T) {
 	var hooked atomic.Bool
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, cfg, func() (bool, error) { hooked.Store(true); return true, nil })
+		done <- Run(ctx, cfg, "test", func() (bool, error) { hooked.Store(true); return true, nil })
 	}()
 
 	var r agentproto.Response

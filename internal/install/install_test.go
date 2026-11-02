@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/syava842/azpanel/internal/paths"
+	"github.com/syava842/azpanel/internal/secrets"
 )
 
 const stock = "#!/bin/bash\n\nexit 0"
@@ -71,6 +72,29 @@ func TestInstallNode(t *testing.T) {
 				t.Errorf("%s: %v, ждали %v", dir, st.Mode().Perm(), mode)
 			}
 		}
+	}
+	sec, err := secrets.Load(paths.SecretsFile())
+	if err != nil || len(sec[secrets.NodeToken]) != 64 {
+		t.Fatalf("токен узла: %v", err)
+	}
+	for _, line := range []string{"ProtectSystem=strict", "ReadWritePaths=/opt/azpanel -/etc/openvpn -/etc/wireguard -/root/antizapret", "PrivateTmp=true", "NoNewPrivileges=true"} {
+		if !strings.Contains(string(unit), line) {
+			t.Fatalf("в юните нет %q:\n%s", line, unit)
+		}
+	}
+}
+
+func TestInstallNodeKeepsToken(t *testing.T) {
+	o, _ := setup(t)
+	os.MkdirAll(paths.Etc(), 0o700)
+	if err := secrets.Set(paths.SecretsFile(), secrets.NodeToken, "OLDTOKEN"); err != nil {
+		t.Fatal(err)
+	}
+	if err := InstallNode(o); err != nil {
+		t.Fatal(err)
+	}
+	if sec, _ := secrets.Load(paths.SecretsFile()); sec[secrets.NodeToken] != "OLDTOKEN" {
+		t.Fatal("токен заменён")
 	}
 }
 
