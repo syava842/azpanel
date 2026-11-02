@@ -297,6 +297,15 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /antizapret/update", s.azStart)
 	s.route(mux, "POST /antizapret/update/restore", s.azRestore)
 
+	// telemt (MTProxy): состояние, пользователи, ссылки, установка, обновление.
+	s.route(mux, "GET /telemt", s.telemtPage)
+	s.route(mux, "POST /telemt/users", s.telemtAddUser)
+	s.route(mux, "POST /telemt/users/{name}/delete", s.telemtRemoveUser)
+	s.route(mux, "POST /telemt/users/{name}/link", s.telemtShowLink)
+	s.route(mux, "POST /telemt/restart", s.telemtRestart)
+	s.route(mux, "POST /telemt/update", s.telemtUpdate)
+	s.route(mux, "POST /telemt/install", s.telemtInstall)
+
 	s.route(mux, "GET /{$}", s.clientsList)
 	s.route(mux, "/", func(w http.ResponseWriter, r *http.Request) {
 		s.errorPage(w, r, http.StatusNotFound, "страница не найдена")

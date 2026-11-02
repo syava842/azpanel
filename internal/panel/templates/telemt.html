@@ -1,0 +1,112 @@
+{{define "content"}}
+<h1>telemt (MTProxy)</h1>
+{{if .StatusErr}}<div class="error">{{.StatusErr}}</div>{{end}}
+
+{{with .Link}}
+<div class="card">
+  <h2>Ссылка пользователя {{.Name}}</h2>
+  <p class="warn">Ссылка содержит секрет: любой, кто её получил, подключается к прокси. Страница не сохраняется в кеше; не пересылайте ссылку открытыми каналами.</p>
+  {{if .QR}}<p><img src="{{.QR}}" alt="QR-код ссылки" width="256" height="256"></p>{{end}}
+  <p>Сервер: <code>{{.Server}}</code>, порт <code>{{.Port}}</code></p>
+  <p><code>{{.Link}}</code></p>
+  {{/* внешние ссылки прокси Telegram, а не адреса панели: url не нужен */}}
+  <p>{{with .LinkHref}}<a href="{{.}}">Открыть в Telegram</a>{{end}}{{with .WebHref}} · <a href="{{.}}" rel="noreferrer">Открыть через t.me</a>{{end}}</p>
+</div>
+{{end}}
+
+{{with .St}}
+{{if .Installed}}
+<h2>Состояние</h2>
+<div class="card">
+  <p>Служба: {{if eq .ActiveState "active"}}<span class="ok">{{.ActiveState}}</span>{{else}}<span class="bad">{{if .ActiveState}}{{.ActiveState}}{{else}}неизвестно{{end}}</span>{{end}}
+     · версия {{if .Version}}<code>{{.Version}}</code>{{else}}неизвестна{{end}}
+     · порт {{.Port}} · маскировка <code>{{.Domain}}</code>
+     · перезапусков службы: {{.NRestarts}}</p>
+  {{with $.Grew}}<p class="bad">telemt перезапускался сам (рост числа перезапусков заметен {{.}}). Проверьте журнал службы.</p>{{end}}
+  {{if .Error}}<p class="warn">{{.Error}}</p>{{end}}
+  <form method="post" action="{{url "/telemt/restart"}}" class="inline">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <button type="submit">Перезапустить telemt</button>
+  </form>
+</div>
+
+<h2>Версия</h2>
+{{if $.RelErr}}<div class="error">{{$.RelErr}}</div>{{end}}
+{{with $.Rel}}
+<div class="card">
+  <p>Установлена: <code>{{.Current}}</code> · последняя: <code>{{.Latest}}</code> <small class="muted">(проверено {{$.RelChecked}})</small></p>
+  {{if .UpdateAvailable}}
+  <form method="post" action="{{url "/telemt/update"}}">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <p class="warn">Прежний бинарник сохранится как telemt.prev, конфиг не меняется. Через 15 секунд после перезапуска агент проверит службу и ссылку; не прошло — вернёт прежнюю версию.</p>
+    <label><input type="checkbox" name="confirm" value="1"> Подтверждаю обновление</label>
+    <button type="submit">Обновить до {{.Latest}}</button>
+  </form>
+  {{else}}<p class="ok">Обновлений нет.</p>{{end}}
+</div>
+{{end}}
+
+<h2>Пользователи</h2>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Имя</th><th>Секрет</th><th>Ссылка</th><th></th></tr></thead>
+  <tbody>
+  {{range $.Users}}
+  <tr>
+    <td>{{.Name}}</td>
+    <td><code>{{.Masked}}</code></td>
+    <td>
+      <form method="post" action="{{url "/telemt/users/" .Name "/link"}}" class="inline">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+        <input type="text" name="server" placeholder="адрес сервера (пусто — из журнала telemt)" spellcheck="false">
+        <button type="submit">Показать ссылку и QR</button>
+      </form>
+    </td>
+    <td>
+      <form method="post" action="{{url "/telemt/users/" .Name "/delete"}}" class="inline">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+        <label class="inline"><input type="checkbox" name="confirm" value="1"> подтверждаю</label>
+        <button type="submit">Удалить</button>
+      </form>
+    </td>
+  </tr>
+  {{else}}
+  <tr><td colspan="4" class="muted">Пользователей нет.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+
+<h2>Добавить пользователя</h2>
+<form method="post" action="{{url "/telemt/users"}}" class="card">
+  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+  <label>Имя <input type="text" name="name" required maxlength="64" spellcheck="false"></label>
+  <label>Ключ <small class="muted">пусто — сгенерировать; можно вставить 32 hex или ключ/ссылку целиком (домен должен совпасть с маскировкой)</small>
+    <input type="password" name="secret" autocomplete="off" spellcheck="false"></label>
+  <p class="muted">После добавления telemt перезапускается задачей и проверяется; не прошло — прежний конфиг возвращается.</p>
+  <button type="submit">Добавить</button>
+</form>
+
+{{else}}
+<h2>telemt не установлен</h2>
+<form method="get" action="{{url "/telemt"}}" class="card">
+  <label>Проверить порт <input type="number" name="port" value="{{$.Port}}" min="1" max="65535"></label>
+  <button type="submit">Проверить</button>
+  {{if $.PreErr}}<span class="warn">{{$.PreErr}}</span>{{end}}
+  {{with $.Pre}}{{if .PortFree}}<span class="ok">Порт {{.Port}} свободен.</span>{{else}}<span class="bad">Порт {{.Port}} занят.</span>{{end}}{{end}}
+  {{if $.BusyPorts}}<p class="warn">Заняты: {{$.BusyPorts}} (порты 80, 443, 504, 508 бывают заняты OpenVPN и nginx).</p>{{end}}
+</form>
+<form method="post" action="{{url "/telemt/install"}}" class="card">
+  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+  <label>Порт <input type="number" name="port" value="{{if index $.Typed "port"}}{{index $.Typed "port"}}{{else}}{{$.Port}}{{end}}" min="1" max="65535"></label>
+  <label>Домен маскировки (tls_domain) <input type="text" name="domain" value="{{index $.Typed "domain"}}" required spellcheck="false" placeholder="www.example.com"></label>
+  <label>Имя первого пользователя <input type="text" name="user" value="{{index $.Typed "user"}}" placeholder="user"></label>
+  <label>Ключ <small class="muted">пусто — сгенерировать, 32 hex</small> <input type="password" name="secret" autocomplete="off" spellcheck="false"></label>
+  <label>Максимум соединений <input type="number" name="max_connections" value="{{index $.Typed "max_connections"}}" placeholder="4000"></label>
+  <label>Делитель буферов <input type="number" name="buf_divisor" value="{{index $.Typed "buf_divisor"}}" placeholder="16"></label>
+  <label><input type="checkbox" name="skip_domain_dns" value="1"> не проверять DNS домена маскировки</label>
+  <button type="submit">Установить</button>
+</form>
+{{end}}
+{{end}}
+{{end}}
