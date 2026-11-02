@@ -38,10 +38,10 @@ func humanDuration(d time.Duration) string {
 	return fmt.Sprintf("%d с", s)
 }
 
-// formatTime — время в поясе сервера, до минуты; nil — прочерк.
+// formatTime — время UTC, до минуты, с подписью; nil — прочерк.
 func formatTime(t *time.Time) string {
 	if t == nil || t.IsZero() {
 		return "—"
 	}
-	return t.Local().Format("2006-01-02 15:04")
+	return t.UTC().Format("2006-01-02 15:04") + " UTC"
 }

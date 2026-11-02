@@ -182,3 +182,19 @@ func (s *Server) forgetAutoBlock(r *http.Request, c nodeapi.Client) {
 		s.Log.Warn("отметка автоблокировки не снята", "client", c.Name, "err", err)
 	}
 }
+
+// makeManualBlock: администратор заблокировал клиента, которого панель уже
+// заблокировала сама, — блок становится ручным (auto_block пуст), и продление
+// срока его не снимет. Отпечаток причины остаётся как был.
+func (s *Server) makeManualBlock(r *http.Request, c nodeapi.Client) {
+	if s.Store == nil {
+		return
+	}
+	card, err := s.Store.Card(r.Context(), s.NodeID, c.Name)
+	if err != nil || card.AutoBlock == "" {
+		return
+	}
+	if err := s.Store.SetAutoBlock(r.Context(), s.NodeID, c.Name, "", card.AutoSkip); err != nil {
+		s.Log.Warn("отметка автоблокировки не снята", "client", c.Name, "err", err)
+	}
+}

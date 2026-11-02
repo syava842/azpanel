@@ -62,9 +62,9 @@ func certText(t *time.Time) (text string, soon bool) {
 	}
 	days := int(time.Until(*t).Hours() / 24)
 	if time.Until(*t) < 0 {
-		return t.Local().Format("2006-01-02") + " (истёк)", true
+		return t.UTC().Format("2006-01-02") + " UTC (истёк)", true
 	}
-	return fmt.Sprintf("%s (осталось %d дн.)", t.Local().Format("2006-01-02"), days), days < certWarnDays
+	return fmt.Sprintf("%s UTC (осталось %d дн.)", t.UTC().Format("2006-01-02"), days), days < certWarnDays
 }
 
 func newSessionRow(x nodeapi.Session) sessionRow {
@@ -226,6 +226,7 @@ func (s *Server) createClient(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	existed, known := s.clientExists(r, name)
 	if _, err := s.Node.CreateClient(r.Context(), nodeapi.CreateClient{Name: name, Kind: kind, Days: days}); err != nil {
 		s.Log.Warn("действие", "user", s.user(r), "op", "create", "client", name, "err", err)
 		st, tx := s.nodeErr(err)
@@ -234,7 +235,40 @@ func (s *Server) createClient(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Log.Info("действие", "user", s.user(r), "op", "create", "client", name, "detail", kind)
 	s.audit(r, "create", name, "", kind)
+	if known && !existed {
+		s.dropStaleHistory(r, name)
+	}
 	redirectMsg(w, r, clientHref(name), "created")
+}
+
+// clientExists: есть ли клиент с таким именем у агента; второе значение —
+// удалось ли узнать (нет — историю не трогаем).
+func (s *Server) clientExists(r *http.Request, name string) (exists, known bool) {
+	if s.Store == nil {
+		return false, false
+	}
+	list, err := s.Node.Clients(r.Context())
+	if err != nil {
+		return false, false
+	}
+	for _, c := range list {
+		if c.Name == name {
+			return true, true
+		}
+	}
+	return false, true
+}
+
+// dropStaleHistory: нового клиента с именем, которого у агента не было,
+// карточка и трафик прежнего владельца имени (удалённого мимо панели) не
+// должны блокировать и считаться в лимит.
+func (s *Server) dropStaleHistory(r *http.Request, name string) {
+	if err := s.Store.DeleteCard(r.Context(), s.NodeID, name); err != nil {
+		s.Log.Warn("старая карточка не удалена", "client", name, "err", err)
+	}
+	if err := s.Store.DeleteTraffic(r.Context(), s.NodeID, name); err != nil {
+		s.Log.Warn("старый трафик не удалён", "client", name, "err", err)
+	}
 }
 
 func (s *Server) user(r *http.Request) string {
@@ -459,7 +493,13 @@ func (s *Server) block(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if blocked {
-		s.done(w, r, c, "block", "не заблокирован", fmt.Sprintf("заблокирован, разорвано сессий: %d", res.Killed), "blocked", res.Killed)
+		// ручной блок поверх автоблока становится ручным: сборщик его не снимет
+		s.makeManualBlock(r, c)
+		after := fmt.Sprintf("заблокирован, разорвано сессий: %d", res.Killed)
+		if c.WireGuard {
+			after += " (только OpenVPN)"
+		}
+		s.done(w, r, c, "block", "не заблокирован", after, "blocked", res.Killed)
 		return
 	}
 	s.forgetAutoBlock(r, c)

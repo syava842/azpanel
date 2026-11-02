@@ -129,7 +129,7 @@ func (s *Server) monitor(w http.ResponseWriter, r *http.Request) {
 		}
 		rows := make([]denialRow, 0, len(dens))
 		for _, d := range dens {
-			rows = append(rows, denialRow{Time: d.Time.Local().Format("2006-01-02 15:04:05"), Name: d.Name,
+			rows = append(rows, denialRow{Time: d.Time.UTC().Format("2006-01-02 15:04:05") + " UTC", Name: d.Name,
 				Href: clientHref(d.Name), Instance: d.Instance, Addr: d.Addr, Reason: denialReason(d)})
 		}
 		data["Denials"] = rows

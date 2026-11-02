@@ -86,8 +86,9 @@ func LineChart(series []Series, from, to time.Time, unit string) template.HTML {
 		case 4:
 			anchor = "end"
 		}
-		fmt.Fprintf(&b, `<text class="axis" x="%.1f" y="%d" text-anchor="%s">%s</text>`, px(t), chartH-6, anchor, t.Local().Format(layout))
+		fmt.Fprintf(&b, `<text class="axis" x="%.1f" y="%d" text-anchor="%s">%s</text>`, px(t), chartH-6, anchor, t.UTC().Format(layout))
 	}
+	fmt.Fprintf(&b, `<text class="axis" x="%d" y="15" text-anchor="end">UTC</text>`, chartW-chartRight)
 	// линии
 	for i, s := range series {
 		var path strings.Builder

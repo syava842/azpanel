@@ -10,7 +10,10 @@ import (
 	"github.com/syava842/azpanel/internal/store"
 )
 
-const auditPageSize = 100
+const (
+	auditPageSize = 100
+	auditMaxPage  = 100000 // дальше (page-1)*100 приближается к переполнению int
+)
 
 // audit пишет действие в журнал базы: время, пользователь сессии, IP,
 // действие, объект, «было → стало». Без базы (Store nil) ничего не делает;
@@ -54,6 +57,9 @@ func (s *Server) auditPage(w http.ResponseWriter, r *http.Request) {
 	if err != nil || page < 1 {
 		page = 1
 	}
+	if page > auditMaxPage {
+		page = auditMaxPage
+	}
 	list, total, err := s.Store.AuditList(r.Context(), auditPageSize, (page-1)*auditPageSize, q)
 	if err != nil {
 		s.Log.Error("журнал действий не прочитан", "err", err)
@@ -63,7 +69,7 @@ func (s *Server) auditPage(w http.ResponseWriter, r *http.Request) {
 	rows := make([]auditRow, 0, len(list))
 	for _, e := range list {
 		rows = append(rows, auditRow{
-			Time: time.Unix(e.TS, 0).Local().Format("2006-01-02 15:04:05"),
+			Time: time.Unix(e.TS, 0).UTC().Format("2006-01-02 15:04:05"),
 			User: e.User, IP: e.IP, Action: e.Action, Target: e.Target, Before: e.Before, After: e.After,
 		})
 	}

@@ -9,7 +9,7 @@
 </div>
 <div class="table-wrap">
 <table>
-  <thead><tr><th>Время</th><th>Пользователь</th><th>IP</th><th>Действие</th><th>Объект</th><th>Было → стало</th></tr></thead>
+  <thead><tr><th>Время (UTC)</th><th>Пользователь</th><th>IP</th><th>Действие</th><th>Объект</th><th>Было → стало</th></tr></thead>
   <tbody>
   {{range .Rows}}
   <tr><td>{{.Time}}</td><td>{{.User}}</td><td>{{.IP}}</td><td>{{.Action}}</td><td>{{.Target}}</td><td>{{if or .Before .After}}{{.Before}} → {{.After}}{{end}}</td></tr>
