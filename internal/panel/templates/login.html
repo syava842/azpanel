@@ -1,0 +1,12 @@
+{{define "content"}}
+<h1>Вход</h1>
+<form method="post" action="/login" class="card narrow">
+  <label>Имя
+    <input type="text" name="user" value="{{.FormUser}}" autocomplete="username" autofocus required>
+  </label>
+  <label>Пароль
+    <input type="password" name="password" autocomplete="current-password" required>
+  </label>
+  <button type="submit">Войти</button>
+</form>
+{{end}}

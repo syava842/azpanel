@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azpanel</title>
+<link rel="stylesheet" href="/static/style.css">
+{{block "head" .}}{{end}}
+</head>
+<body>
+<header class="top">
+  <span class="brand">azpanel <small>{{.Version}}</small></span>
+  {{if .User}}
+  <nav>
+    <a href="/">Клиенты</a>
+    <a href="/monitor">Сейчас</a>
+  </nav>
+  <form method="post" action="/logout" class="inline">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <button type="submit" class="link">Выйти</button>
+  </form>
+  {{end}}
+</header>
+<main>
+  {{if .Msg}}<div class="flash">{{.Msg}}</div>{{end}}
+  {{if .Error}}<div class="error">{{.Error}}</div>{{end}}
+  {{template "content" .}}
+</main>
+</body>
+</html>
