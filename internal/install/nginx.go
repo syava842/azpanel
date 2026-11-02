@@ -439,6 +439,59 @@ type Nginx struct {
 	Readlink  func(link string) (string, error)
 	Run       func(name string, args ...string) ([]byte, error) // вывод — общий
 	Now       func() time.Time
+	// ReadDir — чтение каталога (nil — os.ReadDir).
+	ReadDir func(dir string) ([]os.DirEntry, error)
+}
+
+// OldBackups — файлы вида *.bak-* в sites-enabled: nginx подключает каталог
+// целиком, и такая копия работает вторым конфигом.
+func (n *Nginx) OldBackups() []string {
+	read := n.ReadDir
+	if read == nil {
+		read = os.ReadDir
+	}
+	dir := path.Join(n.dir(), "sites-enabled")
+	ents, err := read(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range ents {
+		if !e.IsDir() && isBackupName(e.Name()) {
+			out = append(out, path.Join(dir, e.Name()))
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// MoveBackups переносит файлы в BackupDir: сначала копия, потом удаление
+// оригинала; существующая копия с тем же именем не затирается (имя получает
+// метку времени).
+func (n *Nginx) MoveBackups(files []string) error {
+	if len(files) == 0 {
+		return nil
+	}
+	if err := n.MkdirAll(n.backupDir(), 0o700); err != nil {
+		return fmt.Errorf("каталог копий %s: %w", n.backupDir(), err)
+	}
+	for _, f := range files {
+		data, err := n.ReadFile(f)
+		if err != nil {
+			return fmt.Errorf("чтение %s: %w", f, err)
+		}
+		dst := path.Join(n.backupDir(), path.Base(filepath.ToSlash(f)))
+		if _, err := n.ReadFile(dst); err == nil {
+			dst += "." + n.Now().UTC().Format("20060102T150405Z")
+		}
+		if err := n.WriteFile(dst, data, 0o600); err != nil {
+			return fmt.Errorf("копия %s: %w", dst, err)
+		}
+		if err := n.Remove(f); err != nil {
+			return fmt.Errorf("удаление %s: %w", f, err)
+		}
+	}
+	return nil
 }
 
 func runCombined(name string, args ...string) ([]byte, error) {

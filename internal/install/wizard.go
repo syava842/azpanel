@@ -150,6 +150,11 @@ func (w *Wizard) Run() error {
 		return err
 	}
 	if w.Interactive {
+		if len(p.bakFiles) > 0 {
+			if p.moveBak, err = w.yesno("Перенести их в "+w.Nginx.backupDir(), true); err != nil {
+				return err
+			}
+		}
 		if err := w.askAdmin(&a, p); err != nil {
 			return err
 		}
@@ -698,6 +703,10 @@ type plan struct {
 	adminExists bool
 	generated   bool
 	listen      string
+	// bakFiles — копии *.bak-* в sites-enabled (nginx читает их как конфиги);
+	// moveBak — перенести их в каталог копий мастера.
+	bakFiles []string
+	moveBak  bool
 	// finishFn достраивает конфиг и шаги по ответам, полученным после plan.
 	finishFn func(a *Answers, p *plan) error
 }
@@ -783,6 +792,18 @@ func (w *Wizard) plan(a *Answers, servers []NginxServer) (*plan, error) {
 		p.lines = append(p.lines, "панель слушает только "+cfg.Panel.Listen+" (доступ через SSH-туннель), nginx не меняется")
 	}
 
+	if a.Access == AccessPath || a.Access == AccessPort {
+		p.bakFiles = w.Nginx.OldBackups()
+		if len(p.bakFiles) > 0 {
+			w.printf("Внимание: в %s лежат копии конфигов, которые nginx читает как рабочие (дубли server-блоков):\n", path.Join(w.Nginx.dir(), "sites-enabled"))
+			for _, f := range p.bakFiles {
+				w.printf("  %s\n", f)
+			}
+			if !w.Interactive {
+				w.printf("Перенесите их вручную в %s (в неинтерактивном режиме мастер их не трогает).\n", w.Nginx.backupDir())
+			}
+		}
+	}
 	p.cfg = cfg
 	p.adminExists = w.Host.AdminExists(a.Admin)
 	p.finishFn = w.buildSteps
@@ -888,6 +909,9 @@ func (w *Wizard) buildSteps(a *Answers, p *plan) error {
 	add("хук лимита", h.InstallHook)
 	if a.Access == AccessPort {
 		add("сертификат", func() error { return w.issueCert(a, p) })
+	}
+	if p.moveBak {
+		add("перенос копий .bak из sites-enabled", func() error { return w.Nginx.MoveBackups(p.bakFiles) })
 	}
 	switch a.Access {
 	case AccessPath:

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -588,5 +589,68 @@ func TestCertPathRejectsNginxSyntax(t *testing.T) {
 	var a Answers
 	if err := a.set(KeyCert, "/etc/letsencrypt/live/x.ru/fullchain.pem"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// bakEnv — nginx во временном каталоге с рабочим конфигом и его копией .bak-.
+func bakEnv(t *testing.T, input string, interactive bool) (*wizEnv, string) {
+	t.Helper()
+	env := map[string]string{
+		"AZPANEL_MODE": "panel+node", "AZPANEL_ACCESS": "path", "AZPANEL_DOMAIN": "vpn.test", "AZPANEL_TLS": "existing",
+	}
+	e := newWizEnv(t, input, interactive, env)
+	dir := t.TempDir()
+	e.w.Nginx.Dir = dir
+	_, orig := copyTestdata(t, "vpn.test")
+	bak := path.Join(dir, "sites-enabled", "vpn.test.bak-20261001")
+	main := filepath.Join(dir, "sites-enabled", "vpn.test")
+	writeReal(t, main, orig)
+	writeReal(t, bak, orig)
+	e.fs.files[main], e.fs.files[bak] = []byte(orig), []byte(orig)
+	e.fs.initial[main], e.fs.initial[bak] = true, true
+	return e, bak
+}
+
+func TestWizardBakFilesWarnedNotMovedNonInteractive(t *testing.T) {
+	e, bak := bakEnv(t, "", false)
+	if err := e.w.Run(); err != nil {
+		t.Fatalf("%v\n%s", err, e.out)
+	}
+	out := e.out.String()
+	if !strings.Contains(out, "Внимание") || !strings.Contains(out, "vpn.test.bak-20261001") {
+		t.Fatalf("нет предупреждения:\n%s", out)
+	}
+	if _, ok := e.fs.files[bak]; !ok {
+		t.Fatal("в неинтерактивном режиме копия не должна переноситься")
+	}
+}
+
+func TestWizardBakFilesMovedOnAnswerYes(t *testing.T) {
+	// Ответы: 1 тип, адрес, домен, доступ, затем вопрос о копиях (Enter = да).
+	e, bak := bakEnv(t, "1\n\n\n\n\n\n\n\n\n\n\n\ny\n", true)
+	// Кандидат один и сертификат существующий: диалог проходит на умолчаниях.
+	err := e.w.Run()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, e.out)
+	}
+	if !strings.Contains(e.out.String(), "Перенести их в /opt/azpanel/backup/nginx") {
+		t.Fatalf("вопроса нет:\n%s", e.out)
+	}
+	if _, ok := e.fs.files[bak]; ok {
+		t.Fatal("копия осталась в sites-enabled")
+	}
+	if _, ok := e.fs.files["/opt/azpanel/backup/nginx/vpn.test.bak-20261001"]; !ok {
+		t.Fatalf("копия не перенесена: %v", e.fs.keys())
+	}
+}
+
+func TestWizardBakFilesKeptOnAnswerNo(t *testing.T) {
+	e, bak := bakEnv(t, "1\n\n\n\nn\n\n\n\n\n\n\n\ny\n", true)
+	_ = e.w.Run()
+	if !strings.Contains(e.out.String(), "Перенести их в") {
+		t.Fatalf("вопроса нет:\n%s", e.out)
+	}
+	if _, ok := e.fs.files[bak]; !ok {
+		t.Fatal("копия перенесена вопреки ответу")
 	}
 }
