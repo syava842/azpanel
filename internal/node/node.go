@@ -137,9 +137,14 @@ func startAPI(ctx context.Context, cfg config.Config, version string, tr *Tracke
 		log.Error("список задач не прочитан — задачи начаты заново", "err", err)
 	}
 	go tasks.RunRotation(ctx)
+	routing := &antizapret.Routing{
+		ConfigDir: filepath.Join(n.AntiZapretDir, "config"),
+		Backups:   &antizapret.Backups{Dir: filepath.Join(paths.Backup(), "antizapret")},
+	}
 	api := &API{
-		Tasks: tasks,
-		Token: token, Version: version, Tracker: tr, LimitsPath: paths.LimitsFile(),
+		Tasks:   tasks,
+		Routing: routing,
+		Token:   token, Version: version, Tracker: tr, LimitsPath: paths.LimitsFile(),
 		Inventory:     antizapret.Inventory{PKI: n.EasyRSAPKI, WireGuardDir: n.WireGuardDir},
 		ClientSh:      &antizapret.ClientSh{Dir: n.AntiZapretDir, Timeout: time.Duration(n.ClientShTimeoutS) * time.Second},
 		AntiZapretDir: n.AntiZapretDir,

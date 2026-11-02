@@ -41,8 +41,9 @@ type API struct {
 	AntiZapretDir string
 	SocketDir     string
 	Sampler       *sysinfo.Sampler
-	Denials       *Denials // отказы хука; nil — журнал пуст
-	Tasks         *Tasks   // фоновые задачи AntiZapret
+	Denials       *Denials            // отказы хука; nil — журнал пуст
+	Tasks         *Tasks              // фоновые задачи AntiZapret
+	Routing       *antizapret.Routing // списки config/*.txt; nil — не настроены
 	Services      func(ctx context.Context) ([]sysinfo.Service, error)
 	WGShow        func(ctx context.Context, iface string) ([]antizapret.WGPeer, error)
 	Kill          func(sock, name string, timeout time.Duration) (int, error)
@@ -75,6 +76,12 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/routing/apply", a.applyRouting)
 	mux.HandleFunc("POST /v1/antizapret/restart", a.restartAntiZapret)
 	mux.HandleFunc("POST /v1/clients/profiles/rebuild", a.rebuildProfiles)
+	mux.HandleFunc("GET /v1/routing/files", a.routingFiles)
+	mux.HandleFunc("GET /v1/routing/files/{name}", a.routingLines)
+	mux.HandleFunc("PATCH /v1/routing/files/{name}", a.routingPatch)
+	mux.HandleFunc("PUT /v1/routing/files/{name}", a.routingPut)
+	mux.HandleFunc("GET /v1/routing/backups/{name}", a.routingBackups)
+	mux.HandleFunc("POST /v1/routing/backups/{name}/{stamp}/restore", a.routingRestore)
 	return a.auth(mux)
 }
 
@@ -87,7 +94,11 @@ func (a *API) auth(next http.Handler) http.Handler {
 			writeErr(w, http.StatusUnauthorized, "нужен токен узла")
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, maxAPIBody)
+		limit := int64(maxAPIBody)
+		if strings.HasPrefix(r.URL.Path, "/v1/routing/files/") && (r.Method == http.MethodPut || r.Method == http.MethodPatch) {
+			limit = maxRoutingBody
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		next.ServeHTTP(w, r)
 	})
 }

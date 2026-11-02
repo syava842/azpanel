@@ -278,3 +278,125 @@ func (c *HTTPClient) raw(ctx context.Context, method, path string, in any) ([]by
 	}
 	return body, err
 }
+
+// --- списки маршрутизации (config/*.txt) ---
+
+// RoutingFile — один список. Kind: hosts, ips, rpz; пусто — файл не относится
+// к спискам и только читается. Lines — записи без комментариев и пустых строк.
+type RoutingFile struct {
+	Name  string `json:"name"`
+	Kind  string `json:"kind"`
+	Title string `json:"title"`
+	Lines int    `json:"lines"`
+	Bytes int64  `json:"bytes"`
+}
+
+// RoutingPage — страница записей списка; Total — сколько нашлось по фильтру.
+type RoutingPage struct {
+	Name   string   `json:"name"`
+	Lines  []string `json:"lines"`
+	Total  int      `json:"total"`
+	Offset int      `json:"offset"`
+	Limit  int      `json:"limit"`
+}
+
+// RoutingLineError — ошибка строки. Line считается с единицы в присланном
+// списке (PATCH add) или тексте (PUT content).
+type RoutingLineError struct {
+	Line   int    `json:"line"`
+	Value  string `json:"value"`
+	Reason string `json:"reason"`
+}
+
+// RoutingPatch — правка списка по строкам.
+type RoutingPatch struct {
+	Add    []string `json:"add"`
+	Remove []string `json:"remove"`
+}
+
+// RoutingPatchResult — итог PATCH. Ошибки строк приходят с кодом 200 и
+// applied=false: файл не менялся.
+type RoutingPatchResult struct {
+	Applied bool               `json:"applied"`
+	Added   int                `json:"added"`
+	Removed int                `json:"removed"`
+	Skipped int                `json:"skipped"`
+	Errors  []RoutingLineError `json:"errors"`
+}
+
+// RoutingPut — полная замена содержимого (файлы до 1 МБ).
+type RoutingPut struct {
+	Content string `json:"content"`
+}
+
+// RoutingPutResult — итог PUT. applied=false при ошибках строк.
+type RoutingPutResult struct {
+	Applied bool               `json:"applied"`
+	Lines   int                `json:"lines"` // записей в новом файле
+	Errors  []RoutingLineError `json:"errors"`
+}
+
+// RoutingBackup — копия списка, сделанная перед записью. Stamp — UTC-метка
+// вида 20261102T101500.123Z.
+type RoutingBackup struct {
+	Stamp string `json:"stamp"`
+	Bytes int64  `json:"bytes"`
+}
+
+// RoutingListOpts — параметры страницы списка. Limit 0 — по умолчанию (200),
+// не больше 1000.
+type RoutingListOpts struct {
+	Query  string
+	Offset int
+	Limit  int
+}
+
+// RoutingFiles — списки каталога config.
+func (c *HTTPClient) RoutingFiles(ctx context.Context) ([]RoutingFile, error) {
+	var v []RoutingFile
+	return v, c.do(ctx, http.MethodGet, "/v1/routing/files", nil, &v)
+}
+
+// RoutingLines — страница записей списка с фильтром по подстроке.
+func (c *HTTPClient) RoutingLines(ctx context.Context, name string, o RoutingListOpts) (RoutingPage, error) {
+	q := url.Values{}
+	if o.Query != "" {
+		q.Set("q", o.Query)
+	}
+	if o.Offset > 0 {
+		q.Set("offset", strconv.Itoa(o.Offset))
+	}
+	if o.Limit > 0 {
+		q.Set("limit", strconv.Itoa(o.Limit))
+	}
+	path := "/v1/routing/files/" + url.PathEscape(name)
+	if len(q) > 0 {
+		path += "?" + q.Encode()
+	}
+	var v RoutingPage
+	return v, c.do(ctx, http.MethodGet, path, nil, &v)
+}
+
+// PatchRouting добавляет и удаляет строки списка.
+func (c *HTTPClient) PatchRouting(ctx context.Context, name string, p RoutingPatch) (RoutingPatchResult, error) {
+	var v RoutingPatchResult
+	return v, c.do(ctx, http.MethodPatch, "/v1/routing/files/"+url.PathEscape(name), p, &v)
+}
+
+// ReplaceRouting заменяет список целиком; для файла больше 1 МБ — 413.
+func (c *HTTPClient) ReplaceRouting(ctx context.Context, name, content string) (RoutingPutResult, error) {
+	var v RoutingPutResult
+	return v, c.do(ctx, http.MethodPut, "/v1/routing/files/"+url.PathEscape(name), RoutingPut{Content: content}, &v)
+}
+
+// RoutingBackups — копии списка, новые сверху (до 20).
+func (c *HTTPClient) RoutingBackups(ctx context.Context, name string) ([]RoutingBackup, error) {
+	var v []RoutingBackup
+	return v, c.do(ctx, http.MethodGet, "/v1/routing/backups/"+url.PathEscape(name), nil, &v)
+}
+
+// RestoreRouting возвращает копию на место списка; прежняя версия тоже копируется.
+func (c *HTTPClient) RestoreRouting(ctx context.Context, name, stamp string) (RoutingFile, error) {
+	var v RoutingFile
+	return v, c.do(ctx, http.MethodPost, "/v1/routing/backups/"+url.PathEscape(name)+"/"+url.PathEscape(stamp)+"/restore", nil, &v)
+}
