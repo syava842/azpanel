@@ -135,10 +135,25 @@ func TestNormalizeRPZ(t *testing.T) {
 			t.Errorf("%q: %q, %v; ожидалось %q", in, got, err, want)
 		}
 	}
+	// Формы, которые parse.sh передаёт в kresd как есть: грамматику зоны не проверяем.
+	pass := map[string]string{
+		"example.com 3600 CNAME .":        "example.com 3600 CNAME .",
+		"example.com IN CNAME .":          "example.com IN CNAME .",
+		"example.com CNAME rpz-drop.":     "example.com CNAME rpz-drop.",
+		"example.com CNAME rpz-tcp-only.": "example.com CNAME rpz-tcp-only.",
+		"$TTL 86400":                      "$TTL 86400",
+		"@ SOA . . (1 1 1 1 86400)":       "@ SOA . . (1 1 1 1 86400)",
+		"localhost  A 127.0.0.1":          "localhost A 127.0.0.1",
+	}
+	for in, want := range pass {
+		if got, err := normalizeEntry(KindRPZ, "deny-rpz.txt", in); err != nil || got != want {
+			t.Errorf("%q: %q, %v; ожидалось %q", in, got, err, want)
+		}
+	}
 	for _, in := range []string{
-		"example.com", "example.com CNAME", "example.com A 1.2.3.4", "example.com CNAME a b",
-		"localhost CNAME .", "example.com CNAME bad_target.com", "*.*.example.com CNAME .",
-		"$TTL 3600", "example.com CNAME localhost",
+		"$INCLUDE /etc/passwd", "$include /x", "$GENERATE 1-3 a$ A 1.2.3.4",
+		"a.example.com CNAME .\nb.example.com CNAME .", "a.example.com\x00 CNAME .", "a\x1b CNAME .",
+		strings.Repeat("a", maxRPZLine+1) + " CNAME .", "\xff\xfe CNAME .",
 	} {
 		if got, err := normalizeEntry(KindRPZ, "deny-rpz.txt", in); err == nil {
 			t.Errorf("%q должно отклоняться, получено %q", in, got)
@@ -203,7 +218,7 @@ func TestNameValidation(t *testing.T) {
 		if _, err := r.Patch(n, []string{"a.com"}, nil); !errors.Is(err, ErrNoList) {
 			t.Errorf("Patch(%q): %v", n, err)
 		}
-		if _, _, err := r.Replace(n, "a.com"); !errors.Is(err, ErrNoList) {
+		if _, _, err := r.Replace(n, "a.com", ""); !errors.Is(err, ErrNoList) {
 			t.Errorf("Replace(%q): %v", n, err)
 		}
 		if _, err := r.BackupList(n); !errors.Is(err, ErrNoList) {
@@ -307,7 +322,7 @@ func TestPatchUnknownKindReadOnly(t *testing.T) {
 	if _, err := r.Patch("notes.txt", []string{"a.com"}, nil); !errors.Is(err, ErrReadOnly) {
 		t.Fatal(err)
 	}
-	if _, _, err := r.Replace("notes.txt", "a"); !errors.Is(err, ErrReadOnly) {
+	if _, _, err := r.Replace("notes.txt", "a", ""); !errors.Is(err, ErrReadOnly) {
 		t.Fatal(err)
 	}
 }
@@ -334,7 +349,7 @@ func runtimeHasUnixModes() bool { return os.PathSeparator == '/' }
 
 func TestReplace(t *testing.T) {
 	r := newRouting(t, map[string]string{"include-hosts.txt": "old.example.com\n"})
-	n, errs, err := r.Replace("include-hosts.txt", "# новый\r\nA.Example.com\r\n\r\n   \r\nb.example.com\r\n")
+	n, errs, err := r.Replace("include-hosts.txt", "# новый\r\nA.Example.com\r\n\r\n   \r\nb.example.com\r\n", "")
 	if err != nil || len(errs) != 0 || n != 2 {
 		t.Fatal(n, errs, err)
 	}
@@ -343,7 +358,7 @@ func TestReplace(t *testing.T) {
 	}
 	// Ошибки — построчно, файл цел.
 	before := readFile(t, r, "include-hosts.txt")
-	n, errs, err = r.Replace("include-hosts.txt", "ok.example.com\nbad_host\n\nx\n")
+	n, errs, err = r.Replace("include-hosts.txt", "ok.example.com\nbad_host\n\nx\n", "")
 	if err != nil || n != 0 || len(errs) != 2 || errs[0].Line != 2 || errs[1].Line != 4 {
 		t.Fatal(n, errs, err)
 	}
@@ -351,7 +366,7 @@ func TestReplace(t *testing.T) {
 		t.Fatal("файл изменён при ошибке")
 	}
 	// Пустой текст очищает файл.
-	if _, errs, err := r.Replace("include-hosts.txt", ""); err != nil || len(errs) != 0 || readFile(t, r, "include-hosts.txt") != "" {
+	if _, errs, err := r.Replace("include-hosts.txt", "", ""); err != nil || len(errs) != 0 || readFile(t, r, "include-hosts.txt") != "" {
 		t.Fatal(errs, err)
 	}
 }
@@ -359,12 +374,12 @@ func TestReplace(t *testing.T) {
 func TestReplaceTooLarge(t *testing.T) {
 	r := newRouting(t, map[string]string{"include-hosts.txt": "a.example.com\n"})
 	big := strings.Repeat("a.example.com\n", MaxReplaceBytes/14+10)
-	if _, _, err := r.Replace("include-hosts.txt", big); !errors.Is(err, ErrTooLarge) {
+	if _, _, err := r.Replace("include-hosts.txt", big, ""); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("содержимое больше 1 МБ: %v", err)
 	}
 	// Файл на диске больше 1 МБ — тоже отказ.
 	os.WriteFile(filepath.Join(r.ConfigDir, "include-hosts.txt"), []byte(big), 0o640)
-	if _, _, err := r.Replace("include-hosts.txt", "a.example.com\n"); !errors.Is(err, ErrTooLarge) {
+	if _, _, err := r.Replace("include-hosts.txt", "a.example.com\n", ""); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("большой файл: %v", err)
 	}
 }
@@ -372,7 +387,7 @@ func TestReplaceTooLarge(t *testing.T) {
 func TestBackupsEvictAfter20AndRestore(t *testing.T) {
 	r := newRouting(t, map[string]string{"include-hosts.txt": "v0.example.com\n"})
 	for i := 1; i <= 21; i++ {
-		if _, errs, err := r.Replace("include-hosts.txt", fmt.Sprintf("v%d.example.com\n", i)); err != nil || len(errs) != 0 {
+		if _, errs, err := r.Replace("include-hosts.txt", fmt.Sprintf("v%d.example.com\n", i), ""); err != nil || len(errs) != 0 {
 			t.Fatal(errs, err)
 		}
 	}

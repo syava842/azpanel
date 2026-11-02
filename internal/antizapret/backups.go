@@ -49,9 +49,17 @@ func (b *Backups) Save(name string, data []byte) (string, error) {
 		return "", err
 	}
 	at := b.now()
+	// Порядок копий — порядок создания: метка не меньше уже существующих,
+	// даже если часы ушли назад (NTP). Права 0600: в копиях бывают секреты
+	// (ключи WARP в setup).
+	if list, err := b.List(name); err == nil && len(list) > 0 {
+		if last, err := time.Parse(stampLayout, list[0].Stamp); err == nil && !at.After(last) {
+			at = last.Add(time.Millisecond)
+		}
+	}
 	for i := 0; i < 1000; i++ {
 		stamp := at.Format(stampLayout)
-		f, err := os.OpenFile(filepath.Join(b.Dir, name+"."+stamp), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o640)
+		f, err := os.OpenFile(filepath.Join(b.Dir, name+"."+stamp), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if errors.Is(err, os.ErrExist) {
 			at = at.Add(time.Millisecond) // две записи в одну миллисекунду
 			continue

@@ -106,7 +106,7 @@ func TestSetupValueValidation(t *testing.T) {
 		{"TXQUEUELEN", "0"}: "0", {"TXQUEUELEN", "100000"}: "100000",
 		{"VPN_DNS", "1"}:     "1",
 		{"OPENVPN_HOST", ""}: "", {"OPENVPN_HOST", "VPN.Example.com"}: "vpn.example.com",
-		{"WIREGUARD_HOST", "203.0.113.5"}: "203.0.113.5", {"WIREGUARD_HOST", "2001:db8::1"}: "2001:db8::1",
+		{"WIREGUARD_HOST", "203.0.113.5"}: "203.0.113.5",
 	}
 	for in, want := range good {
 		got, err := checkSetupValue(in[0], in[1])
@@ -120,7 +120,7 @@ func TestSetupValueValidation(t *testing.T) {
 		{"WARP_MTU", "1279"}, {"WARP_MTU", "1501"}, {"WARP_MTU", "abc"}, {"WARP_MTU", "1280.5"}, {"WARP_MTU", "01300"}, {"WARP_MTU", "+1300"},
 		{"TXQUEUELEN", "-1"}, {"TXQUEUELEN", "100001"},
 		{"VPN_DNS", "0"}, {"VPN_DNS", "10"},
-		{"OPENVPN_HOST", "vpn"}, {"OPENVPN_HOST", "a b.example.com"}, {"OPENVPN_HOST", "x.com;rm -rf"}, {"OPENVPN_HOST", "fe80::1%eth0"},
+		{"OPENVPN_HOST", "vpn"}, {"OPENVPN_HOST", "a b.example.com"}, {"OPENVPN_HOST", "x.com;rm -rf"}, {"OPENVPN_HOST", "fe80::1%eth0"}, {"WIREGUARD_HOST", "2001:db8::1"}, {"OPENVPN_HOST", "::1"}, {"OPENVPN_HOST", "::ffff:1.2.3.4"},
 		{"OPENVPN_HOST", "vpn.example.com\nX=1"}, {"OPENVPN_HOST", "$(id).example.com"},
 		// Только показ, секреты и неизвестные.
 		{"ALTERNATIVE_FAKE_IP", "y"}, {"MTU", "1400"}, {"WIREGUARD_ENABLE", "n"}, {"SETUP_DATE", "x"},

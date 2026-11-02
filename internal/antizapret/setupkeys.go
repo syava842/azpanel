@@ -211,6 +211,9 @@ var setupKeyRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 type SetupFile struct {
 	Path    string
 	Backups *Backups
+	// Busy вызывается под замком перед записью; ошибка (обычно *BusyError)
+	// отклоняет запись. nil — писать можно всегда.
+	Busy func() error
 
 	mu sync.Mutex
 }
@@ -364,6 +367,11 @@ func (s *SetupFile) Set(values map[string]string) (SetupResult, error) {
 	if len(changed) == 0 {
 		return SetupResult{Changed: []string{}, Apply: []string{}}, nil
 	}
+	if s.Busy != nil {
+		if err := s.Busy(); err != nil {
+			return SetupResult{}, err
+		}
+	}
 	out := strings.Join(lines, "\n")
 	if trailingNL || appended {
 		out += "\n"
@@ -441,8 +449,8 @@ func checkHost(v string) (string, error) {
 		return "", nil
 	}
 	if a, err := netip.ParseAddr(v); err == nil {
-		if a.Zone() != "" {
-			return "", errors.New("адрес с зоной не принимается")
+		if !a.Is4() {
+			return "", errors.New("нужен IPv4-адрес: AntiZapret работает только по IPv4")
 		}
 		return a.String(), nil
 	}

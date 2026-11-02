@@ -1,6 +1,8 @@
 package antizapret
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -10,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/syava842/azpanel/internal/fsutil"
 )
@@ -28,7 +31,15 @@ var (
 	ErrNoList   = errors.New("такого списка нет")
 	ErrTooLarge = errors.New("файл слишком большой для правки целиком — редактируйте по строкам")
 	ErrReadOnly = errors.New("файл не относится к спискам маршрутизации — правка запрещена")
+	// ErrChanged — файл изменился с тех пор, как его прочитали (base_sha256 не совпал).
+	ErrChanged = errors.New("файл изменился с момента открытия — откройте его заново и повторите правку")
 )
+
+// BusyError — правка отложена: идёт задача, которая сама читает или пишет
+// эти файлы (doall, restart). Запись в это время может быть потеряна.
+type BusyError struct{ Reason string }
+
+func (e *BusyError) Error() string { return e.Reason }
 
 var routingNameRe = regexp.MustCompile(`^[a-z0-9-]+\.txt$`)
 
@@ -106,8 +117,43 @@ type Page struct {
 type Routing struct {
 	ConfigDir string // /root/antizapret/config
 	Backups   *Backups
+	// Busy вызывается под замком перед любой записью; ошибка (обычно
+	// *BusyError) отклоняет запись. nil — писать можно всегда.
+	Busy func() error
 
 	mu sync.Mutex
+}
+
+func (r *Routing) checkBusy() error {
+	if r.Busy == nil {
+		return nil
+	}
+	return r.Busy()
+}
+
+// SHA256 — отпечаток содержимого файла в hex.
+func SHA256(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+// Raw возвращает файл как есть (с комментариями и пустыми строками) и его
+// отпечаток для проверки при последующей замене. Больше MaxReplaceBytes — ErrTooLarge.
+func (r *Routing) Raw(name string) (content, sum string, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	p, err := r.path(name)
+	if err != nil {
+		return "", "", err
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return "", "", err
+	}
+	if len(data) > MaxReplaceBytes {
+		return "", "", ErrTooLarge
+	}
+	return string(data), SHA256(data), nil
 }
 
 // path проверяет имя и находит его среди обычных файлов каталога; путь из
@@ -164,7 +210,7 @@ func (r *Routing) Lines(name, q string, offset, limit int) (Page, error) {
 	q = strings.ToLower(strings.TrimSpace(q))
 	page := Page{Lines: []string{}}
 	for _, line := range splitLines(data) {
-		if !isEntry(kind, line) {
+		if !isEntry(kind, name, line) {
 			continue
 		}
 		t := strings.TrimSpace(line)
@@ -197,6 +243,9 @@ func (r *Routing) Patch(name string, add, remove []string) (PatchResult, error) 
 		return PatchResult{}, ErrReadOnly
 	}
 	var res PatchResult
+	if err := r.checkBusy(); err != nil {
+		return PatchResult{}, err
+	}
 
 	// Сначала проверка присланного: ошибки не зависят от содержимого файла.
 	adds := make([]string, 0, len(add))
@@ -205,7 +254,7 @@ func (r *Routing) Patch(name string, add, remove []string) (PatchResult, error) 
 		if t == "" {
 			continue
 		}
-		if !isEntry(kind, t) {
+		if !isEntry(kind, name, t) {
 			res.Errors = append(res.Errors, LineError{Line: i + 1, Value: t, Reason: "комментарии не добавляются — только записи"})
 			continue
 		}
@@ -241,7 +290,7 @@ func (r *Routing) Patch(name string, add, remove []string) (PatchResult, error) 
 		matched := map[string]bool{}
 		kept := make([]string, 0, len(lines))
 		for _, line := range lines {
-			if isEntry(kind, line) {
+			if isEntry(kind, name, line) {
 				t := strings.TrimSpace(line)
 				hit := ""
 				if want[t] {
@@ -273,7 +322,7 @@ func (r *Routing) Patch(name string, add, remove []string) (PatchResult, error) 
 	if len(adds) > 0 {
 		have := make(map[string]bool, len(lines))
 		for _, line := range lines {
-			if !isEntry(kind, line) {
+			if !isEntry(kind, name, line) {
 				continue
 			}
 			t := strings.TrimSpace(line)
@@ -306,7 +355,10 @@ func (r *Routing) Patch(name string, add, remove []string) (PatchResult, error) 
 // Replace заменяет файл целиком. Каждая строка проверяется; строки-записи
 // приводятся к каноническому виду, \r убирается. Ошибки — построчно, файл
 // не меняется. Возвращает число записей в новом файле.
-func (r *Routing) Replace(name, content string) (int, []LineError, error) {
+//
+// baseSHA — отпечаток прочитанного текста (Raw); не пусто и не совпал с
+// текущим файлом — ErrChanged, файл не меняется.
+func (r *Routing) Replace(name, content, baseSHA string) (int, []LineError, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	p, err := r.path(name)
@@ -327,11 +379,17 @@ func (r *Routing) Replace(name, content string) (int, []LineError, error) {
 	if len(old) > MaxReplaceBytes {
 		return 0, nil, ErrTooLarge
 	}
+	if err := r.checkBusy(); err != nil {
+		return 0, nil, err
+	}
+	if baseSHA != "" && !strings.EqualFold(baseSHA, SHA256(old)) {
+		return 0, nil, ErrChanged
+	}
 	lines := splitLines([]byte(strings.ReplaceAll(content, "\r", "")))
 	var errs []LineError
 	entries := 0
 	for i, line := range lines {
-		if !isEntry(kind, line) {
+		if !isEntry(kind, name, line) {
 			if strings.TrimSpace(line) == "" {
 				lines[i] = ""
 			}
@@ -370,6 +428,9 @@ func (r *Routing) Restore(name, stamp string) error {
 	defer r.mu.Unlock()
 	p, err := r.path(name)
 	if err != nil {
+		return err
+	}
+	if err := r.checkBusy(); err != nil {
 		return err
 	}
 	saved, err := r.Backups.Read(name, stamp)
@@ -412,9 +473,12 @@ func joinLines(lines []string) []byte {
 	return []byte(strings.Join(lines, "\n") + "\n")
 }
 
-// isEntry — строка является записью, а не комментарием или пустой.
-// parse.sh убирает пробелы и \r; комментарии — «#», у rpz — «;».
-func isEntry(kind, line string) bool {
+// isEntry — строка является записью, а не комментарием или пустой. Как в
+// parse.sh: у hosts и ips пробелы и \r убираются, и строка, начинающаяся со
+// знака препинания, выбрасывается (это и есть комментарии: «#», «;», «//»,
+// «!»); исключение — одиночная «.» в include-hosts и include-warp-hosts.
+// У rpz выбрасываются только строки на «;».
+func isEntry(kind, name, line string) bool {
 	t := strings.TrimSpace(line)
 	if t == "" {
 		return false
@@ -422,7 +486,15 @@ func isEntry(kind, line string) bool {
 	if kind == KindRPZ {
 		return t[0] != ';'
 	}
-	return t[0] != '#'
+	if t == "." && (name == "include-hosts.txt" || name == "include-warp-hosts.txt") {
+		return true
+	}
+	return !isPunct(t[0])
+}
+
+// isPunct — ASCII-знак препинания, как [[:punct:]] в sed.
+func isPunct(c byte) bool {
+	return c > ' ' && c < 0x7f && !(c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z')
 }
 
 // normalizeEntry проверяет строку-запись и возвращает её канонический вид.
@@ -434,7 +506,8 @@ func isEntry(kind, line string) bool {
 //   - ips: awk берёт только a.b.c.d/N, N от 1 до 32; одиночный адрес без
 //     маски awk отбросил бы молча, поэтому он приводится к /32;
 //   - rpz: строки идут в зону Knot Resolver как есть (после удаления \r и
-//     строк с «;»), поэтому проверяется вид «<домен> CNAME <цель>».
+//     строк с «;»), поэтому грамматика зоны не проверяется — только
+//     управляющие символы, длина и директивы, читающие файлы.
 func normalizeEntry(kind, name, s string) (string, error) {
 	switch kind {
 	case KindHosts:
@@ -519,29 +592,37 @@ func normalizeIP(s string) (string, error) {
 	return pfx.Masked().String(), nil
 }
 
+// maxRPZLine — предел длины строки зоны.
+const maxRPZLine = 2048
+
+// normalizeRPZ: parse.sh переносит строки зоны в kresd как есть, поэтому
+// допустимы любые формы (с TTL и классом, rpz-drop., $TTL, SOA). Отклоняются
+// управляющие символы (включая перевод строки), слишком длинные строки и
+// директивы $INCLUDE и $GENERATE. Привычная форма «<имя> CNAME <цель>»
+// приводится к нижнему регистру, прочие — только к одинарным пробелам.
 func normalizeRPZ(s string) (string, error) {
-	f := strings.Fields(s)
-	if len(f) != 3 || !strings.EqualFold(f[1], "CNAME") {
-		return "", errors.New("нужен вид «<домен> CNAME <цель>»")
+	if !utf8.ValidString(s) {
+		return "", errors.New("строка не в кодировке UTF-8")
 	}
-	owner := strings.ToLower(f[0])
-	wild := strings.HasPrefix(owner, "*.")
-	if wild {
-		owner = owner[2:]
+	if len(s) > maxRPZLine {
+		return "", fmt.Errorf("строка длиннее %d символов", maxRPZLine)
 	}
-	if err := validateDomain(owner); err != nil {
-		return "", fmt.Errorf("домен: %w", err)
-	}
-	if wild {
-		owner = "*." + owner
-	}
-	target := strings.ToLower(f[2])
-	if target != "." && target != "rpz-passthru." {
-		if err := validateDomain(strings.TrimSuffix(target, ".")); err != nil {
-			return "", fmt.Errorf("цель (., rpz-passthru. или домен): %w", err)
+	for _, c := range s {
+		if c < ' ' && c != '\t' || c == 0x7f {
+			return "", errors.New("управляющий символ или перевод строки в правиле")
 		}
 	}
-	return owner + " CNAME " + target, nil
+	f := strings.Fields(s)
+	if len(f) == 0 {
+		return "", errors.New("пустое правило")
+	}
+	if d := strings.ToUpper(f[0]); d == "$INCLUDE" || d == "$GENERATE" {
+		return "", fmt.Errorf("директива %s не принимается: она читает файлы или порождает записи", d)
+	}
+	if len(f) == 3 && strings.EqualFold(f[1], "CNAME") {
+		return strings.ToLower(f[0]) + " CNAME " + strings.ToLower(f[2]), nil
+	}
+	return strings.Join(f, " "), nil
 }
 
 // File — сведения об одном списке.
@@ -560,7 +641,7 @@ func (r *Routing) fileInfo(name string) (RoutingFile, error) {
 	kind := KindOf(name)
 	n := 0
 	for _, line := range splitLines(data) {
-		if isEntry(kind, line) {
+		if isEntry(kind, name, line) {
 			n++
 		}
 	}
