@@ -144,9 +144,14 @@ func startAPI(ctx context.Context, cfg config.Config, version string, tr *Tracke
 	// Пока идёт doall, parse.sh переписывает config/*.txt (sed -i) и может
 	// затереть правку; setup читают doall и restart.
 	routing.Busy = busyDuring(tasks, TaskDoall)
+	azVer := &antizapret.VersionService{
+		GitHub: &antizapret.GitHub{}, Dir: n.AntiZapretDir,
+		Record: antizapret.InstalledFile{Path: filepath.Join(paths.Data(), "antizapret.json")},
+	}
 	api := &API{
-		Tasks:   tasks,
-		Routing: routing,
+		Tasks:     tasks,
+		Routing:   routing,
+		AZVersion: azVer,
 		Setup: &antizapret.SetupFile{
 			Path:    filepath.Join(n.AntiZapretDir, "setup"),
 			Backups: routing.Backups,
