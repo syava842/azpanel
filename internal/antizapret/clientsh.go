@@ -103,6 +103,7 @@ func execClientSh(ctx context.Context, dir string, args ...string) ([]byte, erro
 	cmd := exec.CommandContext(ctx, filepath.Join(dir, "client.sh"), args...)
 	cmd.Dir = dir
 	cmd.Stdin = nil // /dev/null: read в client.sh сразу получит EOF
+	ownProcessGroup(cmd)
 	cmd.WaitDelay = 5 * time.Second
 	return cmd.CombinedOutput()
 }
