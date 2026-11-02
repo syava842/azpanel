@@ -20,6 +20,10 @@ const (
 	flapMinChanges = 3 // или столько смен подряд (больше двух)
 	defaultEvery   = time.Minute
 	stepTimeout    = 30 * time.Second
+	clientTimeout  = 3 * time.Minute  // на одного клиента: агент может ждать client.sh до двух минут
+	dbWriteTimeout = 10 * time.Second // запись в базу после вызова агента, мимо отмены ctx
+	defaultHistory = 30
+	wgSkipEvery    = 24 * time.Hour
 	reasonExpired  = "срок действия истёк"
 	reasonTraffic  = "лимит трафика исчерпан"
 	reasonGone     = "причина блокировки ушла"
@@ -42,6 +46,8 @@ type Collector struct {
 	lastTick time.Time
 	lastHour int64 // час (Unix/3600) последнего успешного Rollup
 	online   int
+
+	wgNoted map[string]time.Time // когда в журнал писали «WG-клиент пропущен» (под tickMu)
 
 	mu    sync.Mutex // защищает историю адресов и результат Flapping
 	addrs map[string]*peerAddrs
@@ -109,15 +115,18 @@ func (c *Collector) Tick(ctx context.Context) error {
 	defer c.tickMu.Unlock()
 	now := c.now().UTC()
 	var errs []error
-	step := func(name string, f func(context.Context) error) {
-		sctx, cancel := context.WithTimeout(ctx, stepTimeout)
+	step := func(name string, timeout time.Duration, f func(context.Context) error) {
+		sctx, cancel := ctx, context.CancelFunc(func() {})
+		if timeout > 0 {
+			sctx, cancel = context.WithTimeout(ctx, timeout)
+		}
 		defer cancel()
 		if err := f(sctx); err != nil {
 			c.log().Warn("сборщик: шаг не выполнен", "шаг", name, "err", err)
 			errs = append(errs, fmt.Errorf("%s: %w", name, err))
 		}
 	}
-	step("сессии", func(ctx context.Context) error {
+	step("сессии", stepTimeout, func(ctx context.Context) error {
 		s, err := c.Node.Sessions(ctx)
 		if err != nil {
 			return err
@@ -125,9 +134,10 @@ func (c *Collector) Tick(ctx context.Context) error {
 		c.trackAddrs(now, s)
 		return c.collectTraffic(ctx, now, s)
 	})
-	step("ресурсы", func(ctx context.Context) error { return c.collectResources(ctx, now) })
-	step("свёртка", func(ctx context.Context) error { return c.rollup(ctx, now) })
-	step("автоблокировка", func(ctx context.Context) error { return c.autoBlock(ctx, now) })
+	step("ресурсы", stepTimeout, func(ctx context.Context) error { return c.collectResources(ctx, now) })
+	step("свёртка", stepTimeout, func(ctx context.Context) error { return c.rollup(ctx, now) })
+	// у автоблокировки свои тайм-ауты: на чтение и на каждого клиента отдельно
+	step("автоблокировка", 0, func(ctx context.Context) error { return c.autoBlock(ctx, now) })
 	return errors.Join(errs...)
 }
 
@@ -154,10 +164,7 @@ func (c *Collector) collectTraffic(ctx context.Context, now time.Time, sessions 
 		cur[key] = cnt
 		var d sessionCounters
 		if old, ok := prev[key]; ok {
-			d = sessionCounters{cnt.rx - old.rx, cnt.tx - old.tx}
-			if cnt.rx < old.rx || cnt.tx < old.tx { // сброс счётчика
-				d = cnt
-			}
+			d = sessionCounters{delta(cnt.rx, old.rx), delta(cnt.tx, old.tx)}
 		} else if !first && s.Kind != nodeapi.KindWireGuard && s.Since != nil && s.Since.After(c.lastTick) {
 			d = cnt // сессия началась после прошлого прохода — счётчики целиком наши
 		}
@@ -178,6 +185,15 @@ func (c *Collector) collectTraffic(ctx context.Context, now time.Time, sessions 
 	}
 	c.prev, c.lastTick = cur, now
 	return nil
+}
+
+// delta — приращение счётчика; значение меньше прежнего — сброс, и берётся
+// оно целиком. Направления считаются порознь: сбой одного не удваивает другое.
+func delta(cur, old int64) int64 {
+	if cur < old {
+		return cur
+	}
+	return cur - old
 }
 
 func (c *Collector) collectResources(ctx context.Context, now time.Time) error {
@@ -260,7 +276,11 @@ func (c *Collector) rollup(ctx context.Context, now time.Time) error {
 	if hour == c.lastHour {
 		return nil
 	}
-	if err := c.Store.Rollup(ctx, now.Unix(), c.HistoryDays); err != nil {
+	days := c.HistoryDays
+	if days <= 0 {
+		days = defaultHistory
+	}
+	if err := c.Store.Rollup(ctx, now.Unix(), days); err != nil {
 		return err
 	}
 	c.lastHour = hour
@@ -282,11 +302,17 @@ func periodStart(period string, now time.Time) time.Time {
 }
 
 func (c *Collector) autoBlock(ctx context.Context, now time.Time) error {
-	clients, err := c.Node.Clients(ctx)
+	// чтения ограничены общим тайм-аутом, а изменения — своим на каждого клиента
+	read := func() (context.Context, context.CancelFunc) { return context.WithTimeout(ctx, stepTimeout) }
+	rctx, cancel := read()
+	clients, err := c.Node.Clients(rctx)
+	cancel()
 	if err != nil {
 		return err
 	}
-	cards, err := c.Store.Cards(ctx, c.NodeID)
+	rctx, cancel = read()
+	cards, err := c.Store.Cards(rctx, c.NodeID)
+	cancel()
 	if err != nil {
 		return err
 	}
@@ -295,7 +321,9 @@ func (c *Collector) autoBlock(ctx context.Context, now time.Time) error {
 		if t, ok := totals[period]; ok {
 			return t, nil
 		}
-		t, err := c.Store.TrafficTotals(ctx, c.NodeID, periodStart(period, now).Unix(), now.Unix()+1)
+		rctx, cancel := read()
+		defer cancel()
+		t, err := c.Store.TrafficTotals(rctx, c.NodeID, periodStart(period, now).Unix(), now.Unix()+1)
 		if err != nil {
 			return nil, err
 		}
@@ -304,32 +332,60 @@ func (c *Collector) autoBlock(ctx context.Context, now time.Time) error {
 	}
 	var errs []error
 	for _, cl := range clients {
+		if ctx.Err() != nil { // служба останавливается
+			errs = append(errs, ctx.Err())
+			break
+		}
 		card, ok := cards[cl.Name]
 		if !ok {
 			continue
 		}
+		// Две причины независимы: снятая вручную блокировка по сроку (отпечаток
+		// совпал) не отключает проверку лимита трафика.
 		reason := ""
-		if card.AccessUntil != nil && *card.AccessUntil <= now.Unix() {
+		if card.AccessUntil != nil && *card.AccessUntil <= now.Unix() &&
+			card.AutoSkip != blockFingerprint(store.AutoBlockExpired, card, now) {
 			reason = store.AutoBlockExpired
-		} else if card.TrafficLimit > 0 {
+		}
+		if reason == "" && card.TrafficLimit > 0 {
 			t, err := totalsFor(card.TrafficPeriod)
 			if err != nil {
 				errs = append(errs, err)
 				continue
 			}
-			if b := t[cl.Name]; b.Rx+b.Tx >= card.TrafficLimit {
+			if b := t[cl.Name]; b.Rx+b.Tx >= card.TrafficLimit &&
+				card.AutoSkip != blockFingerprint(store.AutoBlockTraffic, card, now) {
 				reason = store.AutoBlockTraffic
 			}
 		}
-		if reason != "" && card.AutoSkip == blockFingerprint(reason, card, now) {
-			reason = "" // админ уже снял блокировку по этой самой причине
+		if reason != "" && card.AutoBlock == "" && !cl.Blocked && !cl.OpenVPN {
+			// блокировка действует только на OpenVPN (этап 7 добавит WireGuard):
+			// не ставим флаг, который ничего не закрывает
+			c.noteWGSkip(ctx, now, cl.Name, reason)
+			continue
 		}
-		if err := c.applyAutoBlock(ctx, now, cl, card, reason); err != nil {
+		cctx, cancel := context.WithTimeout(ctx, clientTimeout)
+		err := c.applyAutoBlock(cctx, now, cl, card, reason)
+		cancel()
+		if err != nil {
 			c.log().Warn("сборщик: автоблокировка клиента не удалась", "client", cl.Name, "err", err)
 			errs = append(errs, fmt.Errorf("%s: %w", cl.Name, err))
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// noteWGSkip пишет в журнал, что WG-клиент пропущен, не чаще раза в сутки.
+func (c *Collector) noteWGSkip(ctx context.Context, now time.Time, name, reason string) {
+	if last, ok := c.wgNoted[name]; ok && now.Sub(last) < wgSkipEvery {
+		return
+	}
+	if c.wgNoted == nil {
+		c.wgNoted = map[string]time.Time{}
+	}
+	c.wgNoted[name] = now
+	c.audit(ctx, now, "автоблокировка", name, "не заблокирован",
+		"пропущен: блокировка WireGuard появится позже ("+reasonText(reason)+")")
 }
 
 // blockFingerprint — отпечаток причины блокировки: меняется вместе со сроком,
@@ -353,6 +409,14 @@ func reasonText(reason string) string {
 	return reasonTraffic
 }
 
+// setMark пишет пометку автоблокировки на контексте без отмены: после вызова
+// агента остановка службы или тайм-аут не должны оставить блок без пометки.
+func (c *Collector) setMark(ctx context.Context, name, autoBlock, autoSkip string) error {
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dbWriteTimeout)
+	defer cancel()
+	return c.Store.SetAutoBlock(wctx, c.NodeID, name, autoBlock, autoSkip)
+}
+
 // applyAutoBlock решает судьбу одного клиента. reason — текущая причина
 // блокировки или пусто.
 func (c *Collector) applyAutoBlock(ctx context.Context, now time.Time, cl nodeapi.Client, card store.Card, reason string) error {
@@ -360,12 +424,16 @@ func (c *Collector) applyAutoBlock(ctx context.Context, now time.Time, cl nodeap
 	switch {
 	case was != "" && !cl.Blocked:
 		// администратор снял блок вручную — панель только забывает о нём
-		return c.Store.SetAutoBlock(ctx, c.NodeID, cl.Name, "", card.AutoSkip)
+		return c.setMark(ctx, cl.Name, "", card.AutoSkip)
 	case was == "" && !cl.Blocked && reason != "":
-		if _, err := c.Node.SetBlocked(ctx, cl.Name, true); err != nil {
+		// Сначала пометка, потом действие: агент мог поставить блок и вернуть
+		// ошибку (тайм-аут на мьютексе client.sh), и блок без пометки стал бы
+		// «ручным» навсегда.
+		if err := c.setMark(ctx, cl.Name, reason, card.AutoSkip); err != nil {
 			return err
 		}
-		if err := c.Store.SetAutoBlock(ctx, c.NodeID, cl.Name, reason, card.AutoSkip); err != nil {
+		if _, err := c.Node.SetBlocked(ctx, cl.Name, true); err != nil {
+			c.rollbackMark(ctx, cl.Name, card.AutoSkip)
 			return err
 		}
 		c.audit(ctx, now, "автоблокировка", cl.Name, "не заблокирован", "заблокирован: "+reasonText(reason))
@@ -373,20 +441,43 @@ func (c *Collector) applyAutoBlock(ctx context.Context, now time.Time, cl nodeap
 		if _, err := c.Node.SetBlocked(ctx, cl.Name, false); err != nil {
 			return err
 		}
-		if err := c.Store.SetAutoBlock(ctx, c.NodeID, cl.Name, "", card.AutoSkip); err != nil {
+		if err := c.setMark(ctx, cl.Name, "", card.AutoSkip); err != nil {
 			return err
 		}
 		c.audit(ctx, now, "авторазблокировка", cl.Name, "заблокирован: "+reasonText(was), "не заблокирован: "+reasonGone)
 	case was != "" && cl.Blocked && reason != was:
 		// причина сменилась, блок остаётся
-		return c.Store.SetAutoBlock(ctx, c.NodeID, cl.Name, reason, card.AutoSkip)
+		return c.setMark(ctx, cl.Name, reason, card.AutoSkip)
 	}
 	return nil
 }
 
+// rollbackMark снимает пометку после неудачного блока, но только если блок
+// и правда не встал: проверяем по агенту. Не удалось проверить — пометку
+// оставляем: если блока нет, следующий проход её обнулит (was != "" и клиент
+// не заблокирован), а если есть, он останется автоматическим.
+func (c *Collector) rollbackMark(ctx context.Context, name, autoSkip string) {
+	vctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dbWriteTimeout)
+	defer cancel()
+	list, err := c.Node.Clients(vctx)
+	if err != nil {
+		return
+	}
+	for _, cl := range list {
+		if cl.Name == name && cl.Blocked {
+			return
+		}
+	}
+	if err := c.setMark(vctx, name, "", autoSkip); err != nil {
+		c.log().Warn("сборщик: пометка автоблокировки не откатана", "client", name, "err", err)
+	}
+}
+
 func (c *Collector) audit(ctx context.Context, now time.Time, action, target, before, after string) {
 	c.log().Info("сборщик: "+action, "client", target, "было", before, "стало", after)
-	err := c.Store.Audit(ctx, store.AuditEntry{TS: now.Unix(), User: collectorUser, Action: action,
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dbWriteTimeout)
+	defer cancel()
+	err := c.Store.Audit(wctx, store.AuditEntry{TS: now.Unix(), User: collectorUser, Action: action,
 		Target: target, Before: before, After: after})
 	if err != nil {
 		c.log().Warn("сборщик: запись в журнал не удалась", "err", err)

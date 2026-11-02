@@ -126,7 +126,7 @@ func TestCollectorExpiredBlocksOnce(t *testing.T) {
 	e := newCollEnv(t)
 	ctx := context.Background()
 	past := e.now.Add(-time.Hour).Unix()
-	e.clients = []nodeapi.Client{{Name: "a"}}
+	e.clients = []nodeapi.Client{{Name: "a", OpenVPN: true}}
 	e.st.SaveCard(ctx, store.Card{Node: store.LocalNode, Name: "a", AccessUntil: &past})
 	e.tick(t)
 	e.advance(time.Minute)
@@ -159,7 +159,7 @@ func TestCollectorExpiredBlocksOnce(t *testing.T) {
 func TestCollectorManualBlockKept(t *testing.T) {
 	e := newCollEnv(t)
 	ctx := context.Background()
-	e.clients = []nodeapi.Client{{Name: "m", Blocked: true}}
+	e.clients = []nodeapi.Client{{Name: "m", OpenVPN: true, Blocked: true}}
 	e.st.SaveCard(ctx, store.Card{Node: store.LocalNode, Name: "m", Note: "x"})
 	e.tick(t)
 	e.tick(t)
@@ -172,7 +172,7 @@ func TestCollectorAdminUnblockClearsMark(t *testing.T) {
 	e := newCollEnv(t)
 	ctx := context.Background()
 	future := e.now.Add(time.Hour).Unix()
-	e.clients = []nodeapi.Client{{Name: "a", Blocked: false}}
+	e.clients = []nodeapi.Client{{Name: "a", OpenVPN: true, Blocked: false}}
 	e.st.SaveCard(ctx, store.Card{Node: store.LocalNode, Name: "a", AccessUntil: &future, AutoBlock: store.AutoBlockExpired})
 	e.tick(t)
 	if len(e.blocks) != 0 {
@@ -186,7 +186,7 @@ func TestCollectorAdminUnblockClearsMark(t *testing.T) {
 func TestCollectorTrafficLimitAndNewPeriod(t *testing.T) {
 	e := newCollEnv(t)
 	ctx := context.Background()
-	e.clients = []nodeapi.Client{{Name: "a"}}
+	e.clients = []nodeapi.Client{{Name: "a", OpenVPN: true}}
 	e.st.SaveCard(ctx, store.Card{Node: store.LocalNode, Name: "a", TrafficLimit: 1000, TrafficPeriod: store.PeriodMonth})
 	e.st.AddTraffic(ctx, store.LocalNode, e.now.Add(-time.Hour).Unix(), map[string]store.Bytes{"a": {Rx: 600, Tx: 500}})
 	e.tick(t)
@@ -268,7 +268,7 @@ func TestCollectorStepErrorDoesNotStopOthers(t *testing.T) {
 	ctx := context.Background()
 	e.node.SessionsFn = func(context.Context) ([]nodeapi.Session, error) { return nil, errors.New("нет связи") }
 	past := e.now.Add(-time.Hour).Unix()
-	e.clients = []nodeapi.Client{{Name: "a"}}
+	e.clients = []nodeapi.Client{{Name: "a", OpenVPN: true}}
 	e.st.SaveCard(ctx, store.Card{Node: store.LocalNode, Name: "a", AccessUntil: &past})
 	if err := e.c.Tick(ctx); err == nil {
 		t.Fatal("ожидалась ошибка шага")
@@ -285,7 +285,7 @@ func TestCollectorManualUnblockSkipsSameReason(t *testing.T) {
 	e := newCollEnv(t)
 	ctx := context.Background()
 	until := e.now.Add(-time.Hour).Unix()
-	e.clients = []nodeapi.Client{{Name: "a"}}
+	e.clients = []nodeapi.Client{{Name: "a", OpenVPN: true}}
 	// админ снял автоблокировку истёкшего клиента: панель записала отпечаток
 	e.st.SaveCard(ctx, store.Card{Node: store.LocalNode, Name: "a", Note: "н", AccessUntil: &until,
 		AutoSkip: fmt.Sprintf("expired:%d", until)})
@@ -312,7 +312,7 @@ func TestCollectorManualUnblockSkipsSameReason(t *testing.T) {
 func TestCollectorManualUnblockSkipsTrafficUntilLimitChanges(t *testing.T) {
 	e := newCollEnv(t)
 	ctx := context.Background()
-	e.clients = []nodeapi.Client{{Name: "a"}}
+	e.clients = []nodeapi.Client{{Name: "a", OpenVPN: true}}
 	start := periodStart(store.PeriodMonth, e.now).Unix()
 	e.st.SaveCard(ctx, store.Card{Node: store.LocalNode, Name: "a", TrafficLimit: 1000, TrafficPeriod: store.PeriodMonth,
 		AutoSkip: fmt.Sprintf("traffic:%d:%d", start, 1000)})
