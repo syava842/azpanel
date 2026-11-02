@@ -41,9 +41,10 @@ type API struct {
 	AntiZapretDir string
 	SocketDir     string
 	Sampler       *sysinfo.Sampler
-	Denials       *Denials            // отказы хука; nil — журнал пуст
-	Tasks         *Tasks              // фоновые задачи AntiZapret
-	Routing       *antizapret.Routing // списки config/*.txt; nil — не настроены
+	Denials       *Denials              // отказы хука; nil — журнал пуст
+	Tasks         *Tasks                // фоновые задачи AntiZapret
+	Routing       *antizapret.Routing   // списки config/*.txt; nil — не настроены
+	Setup         *antizapret.SetupFile // ключи setup; nil — не настроены
 	Services      func(ctx context.Context) ([]sysinfo.Service, error)
 	WGShow        func(ctx context.Context, iface string) ([]antizapret.WGPeer, error)
 	Kill          func(sock, name string, timeout time.Duration) (int, error)
@@ -82,6 +83,8 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("PUT /v1/routing/files/{name}", a.routingPut)
 	mux.HandleFunc("GET /v1/routing/backups/{name}", a.routingBackups)
 	mux.HandleFunc("POST /v1/routing/backups/{name}/{stamp}/restore", a.routingRestore)
+	mux.HandleFunc("GET /v1/setup", a.getSetup)
+	mux.HandleFunc("PUT /v1/setup", a.putSetup)
 	return a.auth(mux)
 }
 

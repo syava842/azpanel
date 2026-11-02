@@ -144,7 +144,11 @@ func startAPI(ctx context.Context, cfg config.Config, version string, tr *Tracke
 	api := &API{
 		Tasks:   tasks,
 		Routing: routing,
-		Token:   token, Version: version, Tracker: tr, LimitsPath: paths.LimitsFile(),
+		Setup: &antizapret.SetupFile{
+			Path:    filepath.Join(n.AntiZapretDir, "setup"),
+			Backups: routing.Backups,
+		},
+		Token: token, Version: version, Tracker: tr, LimitsPath: paths.LimitsFile(),
 		Inventory:     antizapret.Inventory{PKI: n.EasyRSAPKI, WireGuardDir: n.WireGuardDir},
 		ClientSh:      &antizapret.ClientSh{Dir: n.AntiZapretDir, Timeout: time.Duration(n.ClientShTimeoutS) * time.Second},
 		AntiZapretDir: n.AntiZapretDir,

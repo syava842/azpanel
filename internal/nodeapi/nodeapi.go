@@ -400,3 +400,57 @@ func (c *HTTPClient) RestoreRouting(ctx context.Context, name, stamp string) (Ro
 	var v RoutingFile
 	return v, c.do(ctx, http.MethodPost, "/v1/routing/backups/"+url.PathEscape(name)+"/"+url.PathEscape(stamp)+"/restore", nil, &v)
 }
+
+// --- ключи setup AntiZapret ---
+
+// Способы применения изменённого ключа setup (SetupEntry.Apply, SetupResult.Apply):
+// doall — POST /v1/routing/apply; restart — POST /v1/antizapret/restart;
+// profiles — POST /v1/clients/profiles/rebuild; reinstall — только повторный
+// setup.sh (ключ редактировать нельзя).
+const (
+	ApplyDoall     = "doall"
+	ApplyRestart   = "restart"
+	ApplyProfiles  = "profiles"
+	ApplyReinstall = "reinstall"
+)
+
+// SetupEntry — один ключ файла setup. Kind: yn, enum, int, host; пусто —
+// ключ неизвестен агенту (только чтение). Options — для enum, Min/Max — для int.
+// Ключи *_PRIVATE_KEY в список не попадают.
+type SetupEntry struct {
+	Key      string   `json:"key"`
+	Value    string   `json:"value"`
+	Kind     string   `json:"kind"`
+	Apply    []string `json:"apply"`
+	Title    string   `json:"title"`
+	Editable bool     `json:"editable"`
+	Hint     string   `json:"hint,omitempty"`
+	Options  []string `json:"options,omitempty"`
+	Min      int      `json:"min,omitempty"`
+	Max      int      `json:"max,omitempty"`
+}
+
+// SetupPut — новые значения ключей.
+type SetupPut struct {
+	Values map[string]string `json:"values"`
+}
+
+// SetupResult — итог PUT /v1/setup: какие ключи изменились и какие способы
+// применения нужны (в порядке doall, restart, profiles). Сами задачи не запускаются.
+type SetupResult struct {
+	Changed []string `json:"changed"`
+	Apply   []string `json:"apply"`
+}
+
+// Setup — ключи файла setup в порядке файла, без секретов.
+func (c *HTTPClient) Setup(ctx context.Context) ([]SetupEntry, error) {
+	var v []SetupEntry
+	return v, c.do(ctx, http.MethodGet, "/v1/setup", nil, &v)
+}
+
+// SetSetup меняет ключи. Хоть одно значение не принято — 400 с причиной по
+// каждому ключу в сообщении, ничего не записано.
+func (c *HTTPClient) SetSetup(ctx context.Context, values map[string]string) (SetupResult, error) {
+	var v SetupResult
+	return v, c.do(ctx, http.MethodPut, "/v1/setup", SetupPut{Values: values}, &v)
+}
