@@ -19,6 +19,7 @@ import (
 	"github.com/syava842/azpanel/internal/secrets"
 	"github.com/syava842/azpanel/internal/sysinfo"
 	"github.com/syava842/azpanel/internal/telemt"
+	"github.com/syava842/azpanel/internal/warp"
 )
 
 // hookCheckEvery — как часто проверять, что хук на месте: повторный
@@ -176,10 +177,11 @@ func startAPI(ctx context.Context, cfg config.Config, version string, tr *Tracke
 		Log:           log,
 		Now:           time.Now,
 	}
-	// telemt: чтение — агентом, изменения — задачами `azpanel internal …`
-	// вне песочницы (пишут в /etc/telemt и /usr/local/bin).
+	// telemt и WARP: чтение — агентом, изменения — задачами `azpanel internal …`
+	// вне песочницы (пишут в /etc/telemt, /usr/local/bin, /root/warper).
 	paramsDir := filepath.Join(paths.Data(), "params")
 	api.Telemt = &TelemtService{Env: telemt.NewEnv(), Self: paths.Binary(), ParamsDir: paramsDir}
+	api.Warp = &WarpService{Warper: &warp.Warper{}, Self: paths.Binary(), ParamsDir: paramsDir}
 	api.Services = func(ctx context.Context) ([]sysinfo.Service, error) {
 		// systemctl может зависнуть (например, при перегруженном dbus).
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)

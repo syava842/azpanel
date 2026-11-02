@@ -1,0 +1,53 @@
+{
+  "version": "1.5.7",
+  "remote_version": "1.5.8",
+  "update_available": true,
+  "antizapret_warp": true,
+  "antizapret_warp_mode": "selective",
+  "vpn_warp": false,
+  "vpn_warp_mode": "off",
+  "warp_rules_active": false,
+  "outbound_mode": "warp",
+  "slave": {
+    "server": "203.0.113.7",
+    "port": "8444",
+    "password": "ПОДМЕНЁН=="
+  },
+  "wg": {
+    "endpoint_host": "",
+    "endpoint_port": "",
+    "address": "",
+    "conf_file": ""
+  },
+  "outbound_label": "WARP (локальный)",
+  "outbound": {},
+  "singbox": {
+    "running": false,
+    "enabled": false,
+    "log_level": "info",
+    "mtu": 1420
+  },
+  "kresd": {
+    "patched": false,
+    "fullvpn_patched": false
+  },
+  "fullvpn_warp_resolve": "n",
+  "domains": {
+    "synced": true
+  },
+  "subnet": {
+    "fake": "10.224.0.0/16",
+    "in_antizapret": true,
+    "conflict": false
+  },
+  "autopatch_enabled": false,
+  "warp_keys_source": "ПОДМЕНЁН",
+  "ip_ranges": {
+    "count": 0,
+    "routes_count": 0,
+    "synced": true,
+    "mode": "antizapret",
+    "export_to_antizapret": "y"
+  },
+  "traffic_today": "↑ 0 B ↓ 0 B"
+}

@@ -49,6 +49,7 @@ type API struct {
 	AZ            *AZUpdater                 // обновление AntiZapret; nil — не настроено
 	AZVersion     *antizapret.VersionService // версия AntiZapret по коммитам; nil — не настроена
 	Telemt        *TelemtService             // telemt; nil — не настроен
+	Warp          *WarpService               // WARP; nil — не настроен
 	Services      func(ctx context.Context) ([]sysinfo.Service, error)
 	WGShow        func(ctx context.Context, iface string) ([]antizapret.WGPeer, error)
 	Kill          func(sock, name string, timeout time.Duration) (int, error)
@@ -101,6 +102,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/antizapret/update", a.azUpdate)
 	mux.HandleFunc("POST /v1/antizapret/restore", a.azRestore)
 	a.registerTelemt(mux)
+	a.registerWarp(mux)
 	return a.auth(mux)
 }
 
