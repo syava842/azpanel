@@ -133,6 +133,9 @@ type Server struct {
 	// Telegram — настройки бота (backup_chats для страницы «Telegram-бот»);
 	// заполняется при запуске бота.
 	Telegram config.Telegram
+	// Svc — узел с методами сервисов (обновление AntiZapret, telemt, WARP,
+	// самообновление); nil — берётся из Node, если он их умеет.
+	Svc ServiceNode
 	// BotName — имя бота для ссылки привязки Telegram; nil или пустая
 	// строка — бот не запущен, привязка в панели скрыта.
 	BotName func() string
@@ -144,6 +147,7 @@ type Server struct {
 	access     accessState
 	settings   settingsState
 	once       onceStore // секреты «показать один раз»
+	az         azMemory  // что видели у обновления AntiZapret
 
 	loginSem      chan struct{} // ограничивает одновременные bcrypt
 	mfaMu         sync.Mutex    // сверка кода 2FA и запись принятого шага — одним куском
@@ -287,6 +291,12 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "GET /tasks", s.tasksPage)
 	s.route(mux, "GET /tasks/{id}", s.taskPage)
 	s.route(mux, "POST /tasks/start", s.taskStart)
+
+	// Обновление AntiZapret: только администратор.
+	s.route(mux, "GET /antizapret/update", s.azUpdatePage)
+	s.route(mux, "POST /antizapret/update", s.azStart)
+	s.route(mux, "POST /antizapret/update/restore", s.azRestore)
+
 	s.route(mux, "GET /{$}", s.clientsList)
 	s.route(mux, "/", func(w http.ResponseWriter, r *http.Request) {
 		s.errorPage(w, r, http.StatusNotFound, "страница не найдена")

@@ -1,0 +1,104 @@
+{{define "head"}}{{if .Running}}<meta http-equiv="refresh" content="10">{{end}}{{end}}
+{{define "content"}}
+<h1>Обновление AntiZapret</h1>
+
+{{if .Rebooting}}
+<div class="card">
+  <p><span class="warn">Сервер перезагружается.</span> Агент не отвечает, это ожидаемо: обновление шло, когда связь оборвалась. Страница обновится сама; итог появится, когда агент поднимется и проверит службы (до 10 минут).</p>
+</div>
+{{end}}
+{{if .StateErr}}<div class="error">{{.StateErr}}</div>{{end}}
+
+{{with .State}}
+<h2>{{.Title}}: {{if .Failed}}<span class="bad">{{.Status}}</span>{{else if .Running}}<span class="warn">{{.Status}}</span>{{else}}<span class="ok">{{.Status}}</span>{{end}}</h2>
+<div class="card">
+  <p>Начато: {{.Started}}{{if not .Running}} · окончено: {{.Finished}}{{end}}</p>
+  {{if .Commit}}<p>Коммит: <code>{{.Commit}}</code>{{if .From}} (был <code>{{.From}}</code>){{else}} (прежняя версия была неизвестна){{end}}</p>{{end}}
+  {{if .Phase}}<p><span class="warn">Этап: {{.Phase}}.</span></p>{{end}}
+  {{if .Backup}}<p>Бэкап перед обновлением: <code>{{.Backup}}</code></p>{{end}}
+  {{if .Reasons}}<p class="bad">Причины неудачи:</p><ul>{{range .Reasons}}<li>{{.}}</li>{{end}}</ul>{{end}}
+  {{if .Warnings}}<p class="warn">Замечания:</p><ul>{{range .Warnings}}<li>{{.}}</li>{{end}}</ul>{{end}}
+  {{if .Services}}<p class="muted">Службы после загрузки: {{range $i, $s := .Services}}{{if $i}}, {{end}}{{$s}}{{end}}</p>{{end}}
+  {{if .Extras}}<p class="muted">Сопутствующие службы: {{range $i, $s := .Extras}}{{if $i}}, {{end}}{{$s}}{{end}}</p>{{end}}
+  {{if .Notes}}<details><summary class="muted">Как собрано окружение setup.sh</summary><ul>{{range .Notes}}<li>{{.}}</li>{{end}}</ul></details>{{end}}
+  {{if .TaskHref}}<p><a href="{{url .TaskHref}}">Журнал задачи</a></p>{{end}}
+</div>
+{{end}}
+
+{{if .Backups}}
+<h2>Бэкапы на узле</h2>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Файл</th><th>Размер</th><th>Создан</th><th></th></tr></thead>
+  <tbody>
+  {{range .Backups}}
+  <tr><td><code>{{.Name}}</code></td><td>{{.Size}}</td><td>{{.Time}}</td><td>
+    <form method="post" action="{{url "/antizapret/update/restore"}}" class="inline">
+      <input type="hidden" name="csrf" value="{{$.CSRF}}">
+      <input type="hidden" name="backup" value="{{.Name}}">
+      <label class="inline"><input type="checkbox" name="confirm" value="1"> сервер перезагрузится, клиенты и настройки заменятся бэкапом</label>
+      <button type="submit">Восстановить из бэкапа</button>
+    </form>
+  </td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{end}}
+
+{{if not .Running}}
+{{if .VerErr}}<div class="error">{{.VerErr}}</div>{{end}}
+{{with .Ver}}
+<h2>Версия</h2>
+<div class="card">
+  {{if $.CurrentShort}}<p>Установлена: <code>{{$.CurrentShort}}</code> ({{if eq .CurrentSource "recorded"}}поставлена панелью{{else}}найдена по хешам скриптов{{end}})</p>
+  {{else}}<p class="warn">{{if .Message}}{{.Message}}{{else}}Версия неизвестна, отличается от актуальной.{{end}}</p>{{end}}
+  {{if .Latest}}<p>Последняя: <code>{{$.LatestShort}}</code> — {{.Latest.Message}}</p>{{end}}
+  {{if .Truncated}}<p class="warn">Установленная версия старше последних 200 коммитов.</p>{{end}}
+  {{if .Error}}<p class="warn">GitHub не ответил: {{.Error}}</p>{{end}}
+  {{if and .UpToDate $.CurrentShort}}<p class="ok">Обновлений нет.</p>{{end}}
+</div>
+{{if $.Behind}}
+<h2>{{if $.CurrentShort}}Новые коммиты{{else}}Последние коммиты{{end}}</h2>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Коммит</th><th>Описание</th><th>Дата</th></tr></thead>
+  <tbody>{{range $.Behind}}<tr><td><code>{{.Short}}</code></td><td>{{.Message}}</td><td>{{.Date}}</td></tr>{{end}}</tbody>
+</table>
+</div>
+{{end}}
+{{end}}
+
+<h2>Проверки перед запуском</h2>
+{{if .PreErr}}<div class="error">{{.PreErr}}</div>{{end}}
+{{with .Pre}}
+<div class="card">
+  {{if .OK}}<p class="ok">Все проверки пройдены.</p>{{else}}<p class="bad">Запуск сейчас будет отклонён:</p><ul>{{range .Reasons}}<li>{{.}}</li>{{end}}</ul>{{end}}
+  {{if .Notes}}<details><summary class="muted">Значения по умолчанию для setup.sh</summary><ul>{{range .Notes}}<li>{{.}}</li>{{end}}</ul></details>{{end}}
+</div>
+{{end}}
+
+<h2>Запуск</h2>
+<form method="post" action="{{url "/antizapret/update"}}" class="card">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  {{if .LatestSHA}}<input type="hidden" name="commit" value="{{.LatestSHA}}">{{end}}
+  <p class="warn">Перед установкой агент сделает бэкап клиентов и настроек, запустит setup.sh выбранной версии и <b>перезагрузит сервер</b>. VPN будет недоступен несколько минут. Не прошла проверка после перезагрузки — здесь появится кнопка «Восстановить из бэкапа».</p>
+  {{if .Reinstall}}
+  <h3>Изменить при установке</h3>
+  <p class="muted">Эти ключи setup меняются только переустановкой. Оставьте как есть, если менять не нужно.</p>
+  {{range .Reinstall}}
+  <label>{{.Title}} <small class="muted">{{.Key}}</small>
+    {{if .Options}}
+    <select name="v_{{.Key}}">{{range .Options}}<option value="{{.Value}}"{{if .Sel}} selected{{end}}>{{if .Label}}{{.Label}}{{else}}{{.Value}}{{end}}</option>{{end}}</select>
+    {{else}}
+    <input type="text" name="v_{{.Key}}" value="{{.Value}}" spellcheck="false">
+    {{end}}
+    {{if .Hint}}<small class="muted">{{.Hint}}</small>{{end}}
+  </label>
+  {{end}}
+  {{end}}
+  <label><input type="checkbox" name="confirm" value="1"> Я понимаю: сервер будет перезагружен</label>
+  <button type="submit">{{if .LatestSHA}}Обновить до {{.LatestShort}}{{else}}Обновить{{end}}</button>
+</form>
+{{end}}
+{{end}}

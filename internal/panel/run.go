@@ -81,6 +81,7 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	}
 	s := &Server{
 		Node:      node,
+		Svc:       node,
 		Store:     st,
 		NodeID:    store.LocalNode,
 		Collector: col,
@@ -128,6 +129,10 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	go func() { defer colDone.Done(); s.PendingLoop(cctx, pendingCheckEvery) }()
 	if botOn {
 		s.startBot(cctx, &colDone, cfg, tgToken, node, log)
+		// Уведомления об обновлениях: новые коммиты AntiZapret, итоги обновлений.
+		wt := &Watcher{Node: node, Store: st, Alerts: &cfg.Telegram, Log: log}
+		colDone.Add(1)
+		go func() { defer colDone.Done(); wt.Run(cctx) }()
 	}
 	defer func() { stopCollector(); colDone.Wait() }()
 	srv := &http.Server{

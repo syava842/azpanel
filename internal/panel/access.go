@@ -92,6 +92,10 @@ var routes = map[string]access{
 	"GET /tasks/{id}":                    accAdmin,
 	"POST /tasks/start":                  accAdmin,
 
+	"GET /antizapret/update":          accAdmin,
+	"POST /antizapret/update":         accAdmin,
+	"POST /antizapret/update/restore": accAdmin,
+
 	"GET /{$}": accAny,
 	"/":        accAny,
 

@@ -15,6 +15,17 @@ var taskKinds = map[string]string{
 	"doall":    "Применение списков (doall.sh)",
 	"restart":  "Перезапуск antizapret",
 	"profiles": "Пересоздание профилей клиентов",
+
+	"azupdate":       "Обновление AntiZapret",
+	"azrestore":      "Восстановление AntiZapret из бэкапа",
+	"warper-resync":  "AZ-WARP: resync после обновления",
+	"telemt-update":  "Обновление telemt",
+	"telemt-install": "Установка telemt",
+	"telemt-restart": "Правка telemt и перезапуск",
+	"warp-update":    "Обновление AZ-WARP",
+	"warp-install":   "Установка AZ-WARP",
+	"warp-sync":      "Правка списков AZ-WARP и синхронизация",
+	"selfupdate":     "Обновление azpanel",
 }
 
 func taskKindTitle(kind string) string {
