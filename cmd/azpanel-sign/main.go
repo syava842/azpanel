@@ -2,6 +2,8 @@
 //
 //	azpanel-sign keygen <файл-закрытого-ключа>   (открытый ключ - в stdout, hex)
 //	azpanel-sign sign <файл-закрытого-ключа> <файл>   (подпись - в <файл>.sig)
+//	azpanel-sign pub <файл-закрытого-ключа>      (открытый ключ - в stdout, hex)
+//	azpanel-sign embedded                        (ключ, вшитый в internal/update, hex; нет - ошибка)
 package main
 
 import (
@@ -13,6 +15,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/syava842/azpanel/internal/update"
 )
 
 func main() {
@@ -29,7 +33,13 @@ func run(args []string, out io.Writer) error {
 	if len(args) == 3 && args[0] == "sign" {
 		return sign(args[1], args[2])
 	}
-	return errors.New("использование: azpanel-sign keygen <ключ> | sign <ключ> <файл>")
+	if len(args) == 2 && args[0] == "pub" {
+		return pub(args[1], out)
+	}
+	if len(args) == 1 && args[0] == "embedded" {
+		return embedded(out)
+	}
+	return errors.New("использование: azpanel-sign keygen <ключ> | sign <ключ> <файл> | pub <ключ> | embedded")
 }
 
 func keygen(keyPath string, out io.Writer) error {
@@ -63,6 +73,26 @@ func loadKey(path string) (ed25519.PrivateKey, error) {
 		return nil, errors.New("файл закрытого ключа повреждён")
 	}
 	return ed25519.NewKeyFromSeed(seed), nil
+}
+
+// pub печатает открытый ключ, вычисленный из закрытого.
+func pub(keyPath string, out io.Writer) error {
+	priv, err := loadKey(keyPath)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(out, hex.EncodeToString(priv.Public().(ed25519.PublicKey)))
+	return nil
+}
+
+// embedded печатает ключ релизов, вшитый в бинарник azpanel. Пустая заглушка -
+// ошибка: релиз с ней не обновит ни один хост.
+func embedded(out io.Writer) error {
+	if len(update.ReleasePublicKey) != ed25519.PublicKeySize {
+		return errors.New("в internal/update/pubkey.go не задан открытый ключ релиза")
+	}
+	fmt.Fprintln(out, hex.EncodeToString(update.ReleasePublicKey))
+	return nil
 }
 
 func sign(keyPath, file string) error {

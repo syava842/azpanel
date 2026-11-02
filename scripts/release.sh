@@ -16,7 +16,9 @@ for a in "$@"; do
 	*) version=$a ;;
 	esac
 done
-[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]] || {
+# Только x.y.z: azpanel update принимает архивы строго этого вида (суффикс -rc1
+# собрался бы и опубликовался, но не установился).
+[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
 	echo "использование: release.sh <версия, напр. 1.2.3> [--publish] [--allow-dirty]" >&2; exit 2; }
 if [[ $dirty = 1 && $publish = 1 ]]; then
 	echo "release: --allow-dirty несовместим с --publish" >&2; exit 2
@@ -28,6 +30,26 @@ keyabs=$(cd "$(dirname "$key")" && pwd -P)/$(basename "$key")
 case "$keyabs" in
 "$root"/*) echo "release: закрытый ключ лежит внутри рабочего дерева ($keyabs) - уберите его" >&2; exit 1 ;;
 esac
+
+# Открытый ключ в бинарнике (internal/update/pubkey.go) обязан быть парой
+# закрытому: иначе все поставленные из релиза хосты отказывают в любом
+# обновлении, и чинится это только переустановкой.
+want=$(go run ./cmd/azpanel-sign pub "$key") || { echo "release: закрытый ключ $key не читается" >&2; exit 1; }
+keyproblem=""
+if ! have=$(go run ./cmd/azpanel-sign embedded 2>/dev/null); then
+	keyproblem="в internal/update/pubkey.go не задан открытый ключ релиза (заглушка)"
+elif [[ $have != "$want" ]]; then
+	keyproblem="открытый ключ в internal/update/pubkey.go ($have) не соответствует закрытому ключу ($want)"
+fi
+if [[ -n $keyproblem ]]; then
+	if [[ $publish = 1 ]]; then
+		echo "release: $keyproblem - публикация отменена" >&2; exit 1
+	fi
+	echo "release: ВНИМАНИЕ: $keyproblem; такой релиз не обновит ни один хост" >&2
+elif [[ $publish = 1 ]]; then
+	go test -tags release -run TestReleaseKeySet ./internal/update/ >/dev/null || {
+		echo "release: TestReleaseKeySet не прошёл - публикация отменена" >&2; exit 1; }
+fi
 
 if [[ $dirty = 0 ]]; then
 	[[ -z $(git status --porcelain) ]] || { echo "release: рабочее дерево не чистое" >&2; exit 1; }
