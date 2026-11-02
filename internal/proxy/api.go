@@ -131,7 +131,7 @@ func (a *API) setTarget(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, res)
 	case IsInput(err):
 		writeErr(w, http.StatusBadRequest, err.Error())
-	case errors.Is(err, ErrNoRules):
+	case errors.Is(err, ErrNoRules), errors.Is(err, ErrChanged):
 		writeErr(w, http.StatusConflict, err.Error())
 	default:
 		a.fail(w, "адрес назначения не изменён", err)

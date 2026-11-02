@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -139,5 +140,52 @@ func TestEmptyAllowListRejectsAll(t *testing.T) {
 	}
 	if rejected.Load() == 0 {
 		t.Fatal("отказ не учтён")
+	}
+}
+
+// M11: об отказах одному адресу сообщается не чаще раза в минуту.
+func TestRejectedLoggedOncePerMinutePerAddress(t *testing.T) {
+	base, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer base.Close()
+	var mu sync.Mutex
+	var reported []string
+	ln := NewAllowListener(base, nil, func(remote string) { mu.Lock(); reported = append(reported, remote); mu.Unlock() })
+	clock := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+	ln.(*allowListener).now = func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+	knock := func() {
+		c, err := net.Dial("tcp", base.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Закрытие со стороны агента видно как конец чтения.
+		c.SetReadDeadline(time.Now().Add(2 * time.Second))
+		io.ReadAll(c)
+		c.Close()
+	}
+	for i := 0; i < 5; i++ {
+		knock()
+	}
+	count := func() int { mu.Lock(); defer mu.Unlock(); return len(reported) }
+	if count() != 1 {
+		t.Fatalf("сообщений %d, ждали 1: %v", count(), reported)
+	}
+	mu.Lock()
+	clock = clock.Add(61 * time.Second)
+	mu.Unlock()
+	knock()
+	if count() != 2 {
+		t.Fatalf("после минуты сообщений %d, ждали 2", count())
 	}
 }

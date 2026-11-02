@@ -309,10 +309,11 @@ func (t *Table) fixSNAT(lines []string, newIP string, before, after map[string]b
 	extra := ""
 	if !covered {
 		if len(stale) > 0 {
-			lines[stale[0].line] = snatLine(newIP, stale[0].source)
+			lines[stale[0].line] = retargetSNAT(t.lines[stale[0].line], stale[0], newIP)
 			stale = stale[1:]
 		} else {
-			extra = snatLine(newIP, t.snats[len(t.snats)-1].source)
+			last := t.snats[len(t.snats)-1]
+			extra = retargetSNAT(t.lines[last.line], last, newIP)
 		}
 	}
 	for _, s := range stale {
@@ -329,6 +330,18 @@ func (t *Table) fixSNAT(lines []string, newIP string, before, after map[string]b
 		}
 	}
 	return out
+}
+
+// retargetSNAT переписывает SNAT-правило на другой адрес назначения, оставляя
+// остальные опции (например, -m comment) как были. Не нашёлся ровно один «-d»
+// с прежним адресом - правило строится заново.
+func retargetSNAT(line string, s snat, newDest string) string {
+	for _, old := range []string{"-d " + s.dest + "/32", "-d " + s.dest} {
+		if strings.Count(line, old+" ") == 1 || strings.HasSuffix(line, old) {
+			return strings.Replace(line, old, "-d "+newDest+"/32", 1)
+		}
+	}
+	return snatLine(newDest, s.source)
 }
 
 func snatLine(dest, source string) string {

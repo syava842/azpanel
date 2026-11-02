@@ -273,3 +273,22 @@ func stripComments(s string) string {
 	}
 	return strings.Join(out, "\n")
 }
+
+// M9: при переписывании SNAT остальные опции правила (например, комментарий) сохраняются.
+func TestSetTargetKeepsSNATOptions(t *testing.T) {
+	src := "*nat\n:PREROUTING ACCEPT [0:0]\n:POSTROUTING ACCEPT [0:0]\n" +
+		"-A PREROUTING -p tcp -m tcp --dport 80 -j DNAT --to-destination 198.51.100.20:50080\n" +
+		"-A PREROUTING -p udp -m udp --dport 540 -j DNAT --to-destination 198.51.100.20:51443\n" +
+		"-A POSTROUTING -d 198.51.100.20/32 -m comment --comment \"proxy.sh snat\" -j SNAT --to-source 203.0.113.10\nCOMMIT\n"
+	tb, err := ParseNAT(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := tb.SetTarget(proxyapi.GroupOpenVPN, "198.51.100.99")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `-A POSTROUTING -d 198.51.100.99/32 -m comment --comment "proxy.sh snat" -j SNAT --to-source 203.0.113.10`) {
+		t.Errorf("опции SNAT потеряны:\n%s", out)
+	}
+}

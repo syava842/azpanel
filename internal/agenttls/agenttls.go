@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/syava842/azpanel/internal/fsutil"
@@ -162,7 +163,22 @@ type allowListener struct {
 	net.Listener
 	allow    []netip.Prefix
 	rejected func(string)
+
+	// now — часы для ограничения частоты записей в журнал; nil — time.Now.
+	now func() time.Time
+	mu  sync.Mutex
+	// lastLog — когда в последний раз сообщали об отказе этому адресу.
+	lastLog map[string]time.Time
 }
+
+// rejectLogEvery — не чаще раза за это время сообщать об отказах одному
+// адресу: сканер, стучащийся в порт тысячу раз в минуту, иначе вытеснит из
+// журнала всё полезное.
+const rejectLogEvery = time.Minute
+
+// maxRejectTracked — сколько адресов помнить для ограничения; больше —
+// память забывается целиком (журнал после этого один раз повторится).
+const maxRejectTracked = 4096
 
 // NewAllowListener оборачивает ln: соединения с адресов вне списка закрываются
 // в Accept, не доходя до вызывающего. Пустой список — не пускается никто.
@@ -179,11 +195,34 @@ func (l *allowListener) Accept() (net.Conn, error) {
 		if l.allowed(c.RemoteAddr()) {
 			return c, nil
 		}
-		if l.rejected != nil {
+		if l.rejected != nil && l.shouldReport(c.RemoteAddr()) {
 			l.rejected(c.RemoteAddr().String())
 		}
 		c.Close()
 	}
+}
+
+// shouldReport — стоит ли сообщить об отказе этому адресу (раз в rejectLogEvery).
+func (l *allowListener) shouldReport(a net.Addr) bool {
+	key := a.String()
+	if tcp, ok := a.(*net.TCPAddr); ok {
+		key = tcp.IP.String() // порт у каждого соединения свой
+	}
+	now := time.Now
+	if l.now != nil {
+		now = l.now
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	t := now()
+	if last, ok := l.lastLog[key]; ok && t.Sub(last) < rejectLogEvery {
+		return false
+	}
+	if l.lastLog == nil || len(l.lastLog) >= maxRejectTracked {
+		l.lastLog = map[string]time.Time{}
+	}
+	l.lastLog[key] = t
+	return true
 }
 
 func (l *allowListener) allowed(a net.Addr) bool {

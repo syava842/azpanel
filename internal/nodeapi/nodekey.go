@@ -5,7 +5,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/netip"
+	"os"
+	"runtime"
 	"strings"
 )
 
@@ -51,6 +55,62 @@ func ParseNodeKey(s string) (NodeKey, error) {
 		return NodeKey{}, err
 	}
 	return k, nil
+}
+
+// NodeKeyFileEnv — переменная окружения с путём к файлу ключа узла.
+const NodeKeyFileEnv = "AZPANEL_NODE_KEY_FILE"
+
+// maxNodeKeyInput — ключ узла короче 200 байт; больше читать незачем.
+const maxNodeKeyInput = 4096
+
+// ReadNodeKey читает ключ узла так, чтобы токен не попал в argv (его видно в
+// ps и в истории shell). src — что передал оператор:
+//
+//	"-"          ключ со стандартного ввода (stdin);
+//	""           путь к файлу из переменной NodeKeyFileEnv (getenv);
+//	путь         файл с ключом, права не шире 0600 (кроме Windows);
+//	"azn1.…"     отказ: сам ключ в аргументе командной строки не принимается.
+func ReadNodeKey(src string, getenv func(string) string, stdin io.Reader) (NodeKey, error) {
+	switch {
+	case strings.HasPrefix(strings.TrimSpace(src), NodeKeyPrefix):
+		return NodeKey{}, errors.New("ключ узла нельзя передавать аргументом: он виден в ps и в истории shell; передайте «-» (stdin), путь к файлу или задайте " + NodeKeyFileEnv)
+	case src == "-":
+		if stdin == nil {
+			return NodeKey{}, errors.New("стандартный ввод недоступен")
+		}
+		return parseNodeKeyBytes(stdin, "стандартный ввод")
+	case src == "":
+		src = getenv(NodeKeyFileEnv)
+		if src == "" {
+			return NodeKey{}, errors.New("ключ узла не указан: передайте «-» (stdin), путь к файлу или задайте " + NodeKeyFileEnv)
+		}
+	}
+	f, err := os.Open(src)
+	if err != nil {
+		return NodeKey{}, fmt.Errorf("файл ключа узла: %w", err)
+	}
+	defer f.Close()
+	if runtime.GOOS != "windows" {
+		fi, err := f.Stat()
+		if err != nil {
+			return NodeKey{}, err
+		}
+		if fi.Mode().Perm()&0o077 != 0 {
+			return NodeKey{}, fmt.Errorf("файл ключа узла %s доступен другим пользователям (права %o): chmod 600", src, fi.Mode().Perm())
+		}
+	}
+	return parseNodeKeyBytes(f, src)
+}
+
+func parseNodeKeyBytes(r io.Reader, what string) (NodeKey, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxNodeKeyInput+1))
+	if err != nil {
+		return NodeKey{}, fmt.Errorf("%s: %w", what, err)
+	}
+	if len(data) > maxNodeKeyInput {
+		return NodeKey{}, fmt.Errorf("%s: слишком длинный ключ узла", what)
+	}
+	return ParseNodeKey(string(data))
 }
 
 func (k NodeKey) validate() error {

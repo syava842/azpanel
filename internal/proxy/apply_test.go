@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/syava842/azpanel/internal/nodeapi"
 	"github.com/syava842/azpanel/internal/proxyapi"
 )
 
@@ -155,5 +156,69 @@ func TestApplierInputErrors(t *testing.T) {
 	}
 	if len(k.restores) != 0 {
 		t.Fatal("с неверным запросом правила не трогаем")
+	}
+}
+
+// M9: правка чужого процесса между снимком и подстановкой не пропадает молча.
+func TestApplierRefusesWhenTableChangedMeanwhile(t *testing.T) {
+	k := newKernel(t)
+	a := k.applier()
+	baseSave := a.Save
+	saves := 0
+	a.Save = func(ctx context.Context) (string, error) {
+		saves++
+		if saves == 2 { // повторный снимок перед подстановкой: чужое правило уже добавлено
+			k.rules = strings.Replace(k.rules, "COMMIT", "-A POSTROUTING -o eth0 -j MASQUERADE\nCOMMIT", 1)
+		}
+		return baseSave(ctx)
+	}
+	_, err := a.SetTarget(context.Background(), proxyapi.GroupWireGuard, "198.51.100.99")
+	if !errors.Is(err, ErrChanged) {
+		t.Fatalf("ждали ErrChanged: %v", err)
+	}
+	if len(k.restores) != 0 || k.persists != 0 {
+		t.Fatalf("при расхождении таблица подставлена: restore %d, persist %d", len(k.restores), k.persists)
+	}
+	if !strings.Contains(k.rules, "MASQUERADE") {
+		t.Fatal("чужое правило потеряно")
+	}
+}
+
+// Счётчики пакетов и время в комментарии меняются сами и расхождением не считаются.
+func TestApplierIgnoresCountersAndTimestamps(t *testing.T) {
+	k := newKernel(t)
+	a := k.applier()
+	baseSave := a.Save
+	saves := 0
+	a.Save = func(ctx context.Context) (string, error) {
+		saves++
+		text, err := baseSave(ctx)
+		if saves == 2 {
+			text = strings.Replace(text, "[120:7200]", "[500:30000]", 1)
+			text = strings.Replace(text, "on Mon Nov  2 10:00:00 2026", "on Mon Nov  2 10:00:01 2026", 1)
+		}
+		return text, err
+	}
+	if _, err := a.SetTarget(context.Background(), proxyapi.GroupWireGuard, "198.51.100.99"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAPIChangedTableIs409(t *testing.T) {
+	e := newAPI(t)
+	saves := 0
+	base := e.api.Apply.Save
+	e.api.Apply.Save = func(ctx context.Context) (string, error) {
+		saves++
+		text, err := base(ctx)
+		if saves == 2 {
+			text = strings.Replace(text, "COMMIT", "-A POSTROUTING -j ACCEPT\nCOMMIT", 1)
+		}
+		return text, err
+	}
+	_, err := e.client.SetTarget(context.Background(), proxyapi.GroupWireGuard, "198.51.100.99")
+	var ae *nodeapi.Error
+	if !errors.As(err, &ae) || ae.Status != 409 {
+		t.Fatalf("ждали 409: %v", err)
 	}
 }
