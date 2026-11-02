@@ -152,6 +152,19 @@ func (a *API) createClient(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, "состав клиентов не прочитан", err)
 		return
 	}
+	// client.sh строит файлы профилей из имени без приставок antizapret-/vpn-:
+	// «x», «antizapret-x» и «vpn-x» писали бы одни и те же файлы.
+	list, err := a.Inventory.Clients()
+	if err != nil {
+		a.fail(w, "состав клиентов не прочитан", err)
+		return
+	}
+	for _, o := range list {
+		if o.Name != req.Name && antizapret.ProfileBase(o.Name) == antizapret.ProfileBase(req.Name) {
+			writeErr(w, http.StatusConflict, fmt.Sprintf("имя конфликтует с клиентом «%s»: у них общие файлы профилей", o.Name))
+			return
+		}
+	}
 	var out string
 	switch req.Kind {
 	case nodeapi.KindOpenVPN:

@@ -25,9 +25,9 @@ var profileDirs = []struct{ kind, variant string }{
 	{"amneziawg", "antizapret"}, {"amneziawg", "vpn"},
 }
 
-// profileBase — часть имени файла, которую client.sh берёт из имени
+// ProfileBase — часть имени файла, которую client.sh берёт из имени
 // клиента (setServerHost_FileName): без приставок antizapret- и vpn-.
-func profileBase(name string) string {
+func ProfileBase(name string) string {
 	return strings.TrimPrefix(strings.TrimPrefix(name, "antizapret-"), "vpn-")
 }
 
@@ -36,7 +36,7 @@ func profileBase(name string) string {
 // У клиентов «antizapret-x» и «x» база одна, и AntiZapret кладёт их файлы
 // под одним именем — различить их нельзя.
 func Profiles(antizapretDir, name string) ([]Profile, error) {
-	re := regexp.MustCompile(`^(antizapret|vpn)-` + regexp.QuoteMeta(profileBase(name)) +
+	re := regexp.MustCompile(`^(antizapret|vpn)-` + regexp.QuoteMeta(ProfileBase(name)) +
 		`-\([^()/]*\)(-udp|-tcp|-wg|-am)?\.(ovpn|conf)$`)
 	var out []Profile
 	for _, d := range profileDirs {

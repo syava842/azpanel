@@ -374,3 +374,21 @@ func TestAPIDeleteLogsFailedRecheck(t *testing.T) {
 		t.Fatalf("ошибка не записана в журнал:\n%s", out)
 	}
 }
+
+func TestAPICreateClientProfileBaseCollision(t *testing.T) {
+	e := newAPI(t)
+	ctx := context.Background()
+	// «alice» есть; «vpn-alice» и «antizapret-alice» пишут те же файлы профилей.
+	for _, name := range []string{"antizapret-alice", "vpn-alice"} {
+		_, err := e.client.CreateClient(ctx, nodeapi.CreateClient{Name: name, Kind: nodeapi.KindOpenVPN})
+		if status(err) != http.StatusConflict || !strings.Contains(err.Error(), "alice") {
+			t.Fatalf("%s: err = %v", name, err)
+		}
+	}
+	if _, err := e.client.CreateClient(ctx, nodeapi.CreateClient{Name: "antizapret-alice", Kind: nodeapi.KindWireGuard}); status(err) != http.StatusConflict {
+		t.Fatalf("wg: %v", err)
+	}
+	if len(*e.calls) != 0 {
+		t.Fatalf("client.sh не должен запускаться: %v", *e.calls)
+	}
+}

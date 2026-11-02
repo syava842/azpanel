@@ -56,3 +56,13 @@ func TestProfiles(t *testing.T) {
 		}
 	}
 }
+
+func TestProfileBase(t *testing.T) {
+	for in, want := range map[string]string{
+		"x": "x", "antizapret-x": "x", "vpn-x": "x", "vpn-antizapret-x": "antizapret-x", "antizapret-vpn-x": "x", "": "",
+	} {
+		if got := ProfileBase(in); got != want {
+			t.Errorf("ProfileBase(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
