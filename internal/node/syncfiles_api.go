@@ -215,18 +215,22 @@ func (a *API) syncApply(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, "архив не открыт", err)
 		return
 	}
-	entries, verr := ValidateArchive(a.Sync.Set, f)
+	arch, verr := ParseArchive(a.Sync.Set, f)
 	f.Close()
-	if verr == nil && len(entries) == 0 {
-		verr = errors.New("архив пуст")
+	force := r.URL.Query().Get("force") == "1"
+	if verr == nil {
+		verr = CheckRemoval(a.Sync.Set, arch, force)
 	}
 	if verr != nil {
 		os.RemoveAll(stage)
-		writeErr(w, http.StatusBadRequest, verr.Error())
+		status := http.StatusBadRequest
+		if errors.Is(verr, ErrRemovalRefused) {
+			status = http.StatusUnprocessableEntity
+		}
+		writeErr(w, status, verr.Error())
 		return
 	}
-	prune := r.URL.Query().Get("prune") == "1"
-	params, err := writeParamsFile(a.Sync.ParamsDir, SyncApplyParams{Set: a.Sync.Set, Archive: archive, Stage: stage, Prune: prune})
+	params, err := writeParamsFile(a.Sync.ParamsDir, SyncApplyParams{Set: a.Sync.Set, Archive: archive, Stage: stage, Force: force})
 	if err != nil {
 		os.RemoveAll(stage)
 		a.fail(w, "параметры задачи не записаны", err)
@@ -237,7 +241,7 @@ func (a *API) syncApply(w http.ResponseWriter, r *http.Request) {
 		os.RemoveAll(stage)
 		return
 	}
-	a.Log.Info("синхронизация принята", "files", len(entries), "prune", prune, "task", t.ID)
+	a.Log.Info("синхронизация принята", "files", len(arch.Entries), "remove", len(arch.Remove), "force", force, "task", t.ID)
 	writeJSON(w, http.StatusAccepted, t)
 }
 

@@ -224,7 +224,7 @@ func TestSyncDoesNotFollowSymlinks(t *testing.T) {
 	}
 	// В архиве запись «через симлинк» отклоняется до записи.
 	l.roles.Set(nodeapi.SyncRole{Role: nodeapi.RoleReplica})
-	_, err = l.client.SyncApply(context.Background(), buildTar(t, map[string]string{filepath.Join(clientDir, "evil", "x"): "X"}), false)
+	_, err = l.client.SyncApply(context.Background(), buildTar(t, map[string]string{filepath.Join(clientDir, "evil", "x"): "X"}), nodeapi.SyncApplyOpts{})
 	if status(err) != 400 {
 		t.Fatalf("запись через симлинк: %v", err)
 	}
@@ -235,7 +235,7 @@ func TestSyncDoesNotFollowSymlinks(t *testing.T) {
 
 func TestSyncApplyRefusedOnPrimary(t *testing.T) {
 	l := newSyncLayout(t)
-	_, err := l.client.SyncApply(context.Background(), buildTar(t, map[string]string{filepath.Join(l.set.AntiZapretDir, "config", "include-hosts.txt"): "x\n"}), false)
+	_, err := l.client.SyncApply(context.Background(), buildTar(t, map[string]string{filepath.Join(l.set.AntiZapretDir, "config", "include-hosts.txt"): "x\n"}), nodeapi.SyncApplyOpts{})
 	if status(err) != 409 || !strings.Contains(err.Error(), "основной") {
 		t.Fatalf("err = %v", err)
 	}
@@ -254,7 +254,7 @@ func TestSyncApplyRejectsPathOutsideSet(t *testing.T) {
 		"не custom*.lua":     {filepath.Join(l.set.KnotDir, "kresd.conf"): "evil"},
 		"не *.txt в config":  {filepath.Join(l.set.AntiZapretDir, "config", "x.sh"): "evil"},
 	} {
-		_, err := l.client.SyncApply(context.Background(), buildTar(t, files), false)
+		_, err := l.client.SyncApply(context.Background(), buildTar(t, files), nodeapi.SyncApplyOpts{})
 		if status(err) != 400 {
 			t.Errorf("%s: %v, ждали 400", name, err)
 		}
@@ -274,7 +274,7 @@ func TestSyncApplyAcceptedStartsTask(t *testing.T) {
 	l := newSyncLayout(t)
 	l.roles.Set(nodeapi.SyncRole{Role: nodeapi.RoleReplica, Group: "g"})
 	inSet := filepath.Join(l.set.AntiZapretDir, "config", "include-hosts.txt")
-	task, err := l.client.SyncApply(context.Background(), buildTar(t, map[string]string{inSet: "b.example\n"}), true)
+	task, err := l.client.SyncApply(context.Background(), buildTar(t, map[string]string{inSet: "b.example\n"}), nodeapi.SyncApplyOpts{})
 	if err != nil || task.Kind != TaskSyncApply || len(task.ID) != 12 {
 		t.Fatalf("%+v %v", task, err)
 	}
@@ -294,7 +294,7 @@ func TestSyncApplyAcceptedStartsTask(t *testing.T) {
 	data, _ := os.ReadFile(filepath.Join(l.api.Sync.ParamsDir, ents[0].Name()))
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&p); err != nil || !p.Prune || p.Set != l.set {
+	if err := dec.Decode(&p); err != nil || p.Force || p.Set != l.set {
 		t.Fatalf("%+v %v", p, err)
 	}
 	if _, err := os.Stat(p.Archive); err != nil {
@@ -313,16 +313,44 @@ func (r *recorder) run(_ context.Context, name string, args ...string) ([]byte, 
 	return nil, nil
 }
 
-func applyTar(t *testing.T, set SyncSet, files map[string]string, prune bool) (*recorder, error) {
+func applyTar(t *testing.T, set SyncSet, files map[string]string, remove ...string) (*recorder, error) {
+	t.Helper()
+	return applyTarForce(t, set, files, false, remove...)
+}
+
+// buildTarRemove — архив с файлами и служебной записью со списком удаления.
+func buildTarRemove(t *testing.T, files map[string]string, remove []string) *bytes.Buffer {
+	t.Helper()
+	buf := buildTar(t, files)
+	// buildTar закрыл архив; собираем заново вместе со списком.
+	var out bytes.Buffer
+	tw := tar.NewWriter(&out)
+	tr := tar.NewReader(buf)
+	for {
+		h, err := tr.Next()
+		if err != nil {
+			break
+		}
+		tw.WriteHeader(h)
+		io.Copy(tw, tr)
+	}
+	if err := nodeapi.WriteSyncRemove(tw, remove); err != nil {
+		t.Fatal(err)
+	}
+	tw.Close()
+	return &out
+}
+
+func applyTarForce(t *testing.T, set SyncSet, files map[string]string, force bool, remove ...string) (*recorder, error) {
 	t.Helper()
 	stage := t.TempDir()
 	arch := filepath.Join(stage, "archive.tar")
-	if err := os.WriteFile(arch, buildTar(t, files).Bytes(), 0o600); err != nil {
+	if err := os.WriteFile(arch, buildTarRemove(t, files, remove).Bytes(), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	rec := &recorder{}
 	var log bytes.Buffer
-	err := RunSyncApply(context.Background(), SyncApplyParams{Set: set, Archive: arch, Stage: stage, Prune: prune}, &SyncEnv{Run: rec.run, Out: &log})
+	err := RunSyncApply(context.Background(), SyncApplyParams{Set: set, Archive: arch, Stage: stage, Force: force}, &SyncEnv{Run: rec.run, Out: &log})
 	if _, serr := os.Stat(stage); serr == nil {
 		t.Error("каталог приёма не удалён")
 	}
@@ -332,7 +360,7 @@ func applyTar(t *testing.T, set SyncSet, files map[string]string, prune bool) (*
 func TestRunSyncApplyKeepsReplicaWarpKeys(t *testing.T) {
 	l := newSyncLayout(t)
 	setup := filepath.Join(l.set.AntiZapretDir, "setup")
-	rec, err := applyTar(t, l.set, map[string]string{setup: primarySetup}, false)
+	rec, err := applyTar(t, l.set, map[string]string{setup: primarySetup})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +381,7 @@ func TestRunSyncApplyKeepsReplicaWarpKeys(t *testing.T) {
 	}
 	// Повторная синхронизация тем же содержимым ничего не меняет.
 	l2 := string(b)
-	if _, err := applyTar(t, l.set, map[string]string{setup: primarySetup}, false); err != nil {
+	if _, err := applyTar(t, l.set, map[string]string{setup: primarySetup}); err != nil {
 		t.Fatal(err)
 	}
 	if b2, _ := os.ReadFile(setup); string(b2) != l2 {
@@ -366,7 +394,7 @@ func TestRunSyncApplyWritesFilesAndRestartsOnlyAffected(t *testing.T) {
 	crl := filepath.Join(l.set.EasyRSADir, "pki", "crl.pem")
 	newIssued := filepath.Join(l.set.EasyRSADir, "pki", "issued", "bob.crt")
 	az := filepath.Join(l.set.WireGuardDir, "antizapret.conf")
-	rec, err := applyTar(t, l.set, map[string]string{crl: "CRL2", newIssued: "BOB", az: "AZCONF2"}, false)
+	rec, err := applyTar(t, l.set, map[string]string{crl: "CRL2", newIssued: "BOB", az: "AZCONF2"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,7 +420,7 @@ func TestRunSyncApplyRestartsOpenVPNOnCAChangeAndKresdOnLua(t *testing.T) {
 	rec, err := applyTar(t, l.set, map[string]string{
 		filepath.Join(l.set.EasyRSADir, "pki", "ca.crt"): "CA2",
 		filepath.Join(l.set.KnotDir, "custom-a.lua"):     "LUA2",
-	}, false)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,36 +435,11 @@ func TestRunSyncApplyRestartsOpenVPNOnCAChangeAndKresdOnLua(t *testing.T) {
 	}
 }
 
-func TestRunSyncApplyPrune(t *testing.T) {
-	l := newSyncLayout(t)
-	keep := filepath.Join(l.set.AntiZapretDir, "config", "include-hosts.txt")
-	gone := filepath.Join(l.set.AntiZapretDir, "client", "openvpn", "antizapret", "antizapret-alice-(1.2.3.4).ovpn")
-	warp := filepath.Join(l.set.WireGuardDir, "warp-vpn.conf")
-	if _, err := applyTar(t, l.set, map[string]string{keep: "новое\n"}, true); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(gone); err == nil {
-		t.Error("лишний профиль не удалён")
-	}
-	if _, err := os.Stat(warp); err != nil {
-		t.Error("файл вне набора удалён")
-	}
-	if _, err := os.Stat(filepath.Join(l.set.AntiZapretDir, "setup")); err != nil {
-		t.Error("setup удалён")
-	}
-	if _, err := os.Stat(filepath.Join(l.set.AntiZapretDir, "doall.sh")); err != nil {
-		t.Error("файл AntiZapret вне набора удалён")
-	}
-	if _, err := applyTar(t, l.set, map[string]string{}, true); err == nil {
-		t.Error("пустой архив с удалением принят")
-	}
-}
-
 func TestRunSyncApplyRevalidatesArchive(t *testing.T) {
 	l := newSyncLayout(t)
 	// Подмена параметров или архива не должна выводить запись за пределы набора.
 	doall := filepath.Join(l.set.AntiZapretDir, "doall.sh")
-	if _, err := applyTar(t, l.set, map[string]string{doall: "evil"}, false); err == nil {
+	if _, err := applyTar(t, l.set, map[string]string{doall: "evil"}); err == nil {
 		t.Fatal("запись вне набора принята задачей")
 	}
 	if b, _ := os.ReadFile(doall); string(b) != "#!/bin/sh" {

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -73,13 +74,27 @@ func (c *HTTPClient) SyncFile(ctx context.Context, path string) (io.ReadCloser, 
 	return resp.Body, nil
 }
 
-// SyncApply отправляет tar-архив с файлами набора (см. WriteSyncEntry). Агент
-// проверяет пути и запускает задачу записи; prune удаляет файлы набора,
-// которых в архиве нет. Принимает только реплика.
-func (c *HTTPClient) SyncApply(ctx context.Context, archive io.Reader, prune bool) (Task, error) {
+// SyncRemoveEntry — служебная запись tar: JSON-массив абсолютных путей,
+// которые реплика должна удалить (WriteSyncRemove). Список строит панель по
+// разнице манифестов основного и реплики; «всё, чего нет в архиве» агент
+// не удаляет никогда.
+const SyncRemoveEntry = ".azpanel-remove"
+
+// SyncApplyOpts — параметры SyncApply.
+type SyncApplyOpts struct {
+	// Force разрешает удалять ключевые файлы (CA, index.txt, ключи WireGuard)
+	// и больше половины набора за раз. Без него агент такой запрос отклоняет
+	// кодом 422: за ним обычно стоит неполный манифест основного.
+	Force bool
+}
+
+// SyncApply отправляет tar-архив с файлами набора (см. WriteSyncEntry) и,
+// если нужно, список удаления (WriteSyncRemove). Агент проверяет пути и
+// запускает задачу записи. Принимает только реплика.
+func (c *HTTPClient) SyncApply(ctx context.Context, archive io.Reader, opts SyncApplyOpts) (Task, error) {
 	path := "/v1/sync/apply"
-	if prune {
-		path += "?prune=1"
+	if opts.Force {
+		path += "?force=1"
 	}
 	body, err := c.rawBody(ctx, http.MethodPost, path, "application/x-tar", archive)
 	if err != nil {
@@ -87,6 +102,44 @@ func (c *HTTPClient) SyncApply(ctx context.Context, archive io.Reader, prune boo
 	}
 	var t Task
 	return t, json.Unmarshal(body, &t)
+}
+
+// WriteSyncRemove добавляет в tar список удаления; пустой список не пишется.
+func WriteSyncRemove(tw *tar.Writer, paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	norm := make([]string, len(paths))
+	for i, p := range paths {
+		norm[i] = strings.ReplaceAll(p, "\\", "/")
+	}
+	data, err := json.Marshal(norm)
+	if err != nil {
+		return err
+	}
+	if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: SyncRemoveEntry, Mode: 0o600, Size: int64(len(data))}); err != nil {
+		return err
+	}
+	_, err = tw.Write(data)
+	return err
+}
+
+// SyncRemovals — файлы, которые есть на реплике, но которых нет на основном:
+// по разнице двух манифестов. Путь setup агент не удаляет и такой список
+// отклонит, поэтому вызывающий исключает его сам.
+func SyncRemovals(primary, replica SyncManifest) []string {
+	have := make(map[string]bool, len(primary.Files))
+	for _, e := range primary.Files {
+		have[e.Path] = true
+	}
+	var out []string
+	for _, e := range replica.Files {
+		if !have[e.Path] {
+			out = append(out, e.Path)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // SyncRole — роль узла.

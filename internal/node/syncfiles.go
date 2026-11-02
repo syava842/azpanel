@@ -123,6 +123,11 @@ func noSymlinks(root, p string) error {
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return errors.New("путь вне корня набора")
 	}
+	// Сам корень набора тоже не должен быть ссылкой: запись ушла бы туда,
+	// куда она указывает.
+	if fi, err := os.Lstat(root); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s — символическая ссылка, корень набора синхронизации ею быть не может", root)
+	}
 	cur := root
 	for _, part := range strings.Split(rel, string(filepath.Separator)) {
 		if part == "." || part == "" {

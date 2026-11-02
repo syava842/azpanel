@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/syava842/azpanel/internal/nodeapi"
 	"github.com/syava842/azpanel/internal/sysinfo"
 )
 
@@ -25,7 +27,7 @@ type SyncApplyParams struct {
 	Set     SyncSet `json:"set"`
 	Archive string  `json:"archive"` // tar, уже проверенный агентом
 	Stage   string  `json:"stage"`   // каталог архива: удаляется по окончании
-	Prune   bool    `json:"prune"`   // удалить файлы набора, которых нет в архиве
+	Force   bool    `json:"force"`   // разрешить удаление ключевых файлов и больше половины набора
 }
 
 // SyncEnv — внешний мир задачи; в тестах подменяется.
@@ -55,42 +57,168 @@ type archiveEntry struct {
 	size int64
 }
 
-// ValidateArchive читает tar от начала до конца и проверяет каждую запись:
-// обычный файл, путь чистый, абсолютный и входит в набор, без повторов, без
-// симлинков по пути. Ничего не пишет на диск. Ошибка — ErrNotInSet или текст о
-// том, какая запись не подошла; вызывающий отвечает 400.
+// SyncArchive — разобранный и проверенный архив: файлы для записи и пути к
+// удалению (служебная запись nodeapi.SyncRemoveEntry).
+type SyncArchive struct {
+	Entries []archiveEntry
+	Remove  []string
+}
+
+// maxRemoveList — предел служебной записи со списком удаления.
+const maxRemoveList = 8 << 20
+
+// ValidateArchive читает tar и возвращает файлы для записи; список удаления
+// проверяется, но не возвращается (см. ParseArchive).
 func ValidateArchive(set SyncSet, r io.Reader) ([]archiveEntry, error) {
+	a, err := ParseArchive(set, r)
+	return a.Entries, err
+}
+
+// ParseArchive читает tar от начала до конца и проверяет каждую запись:
+// обычный файл, путь чистый, абсолютный и входит в набор, без повторов, без
+// симлинков по пути. Служебная запись nodeapi.SyncRemoveEntry — список путей
+// к удалению; к нему те же требования, setup удалять нельзя. Ничего не пишет
+// на диск. Ошибка — ErrNotInSet или текст о том, какая запись не подошла;
+// вызывающий отвечает 400.
+func ParseArchive(set SyncSet, r io.Reader) (SyncArchive, error) {
 	tr := tar.NewReader(r)
-	var out []archiveEntry
+	var out SyncArchive
 	seen := map[string]bool{}
+	haveRemove := false
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
-			return out, nil
+			break
 		}
 		if err != nil {
-			return nil, fmt.Errorf("архив не разобран: %w", err)
+			return SyncArchive{}, fmt.Errorf("архив не разобран: %w", err)
 		}
 		if h.Typeflag != tar.TypeReg {
-			return nil, fmt.Errorf("%s: в архиве допустимы только обычные файлы", h.Name)
+			return SyncArchive{}, fmt.Errorf("%s: в архиве допустимы только обычные файлы", h.Name)
+		}
+		if h.Name == nodeapi.SyncRemoveEntry {
+			if haveRemove {
+				return SyncArchive{}, errors.New("список удаления повторён в архиве")
+			}
+			haveRemove = true
+			if out.Remove, err = readRemoveList(set, tr); err != nil {
+				return SyncArchive{}, err
+			}
+			continue
 		}
 		p := filepath.FromSlash(h.Name)
 		kind, root, ok := set.classify(p)
 		if !ok {
-			return nil, fmt.Errorf("%w: %s", ErrNotInSet, h.Name)
+			return SyncArchive{}, fmt.Errorf("%w: %s", ErrNotInSet, h.Name)
 		}
 		if seen[p] {
-			return nil, fmt.Errorf("%s: файл повторён в архиве", h.Name)
+			return SyncArchive{}, fmt.Errorf("%s: файл повторён в архиве", h.Name)
 		}
 		seen[p] = true
 		if err := noSymlinks(root, p); err != nil {
-			return nil, fmt.Errorf("%s: %w", h.Name, err)
+			return SyncArchive{}, fmt.Errorf("%s: %w", h.Name, err)
 		}
 		if kind == kindSetup && h.Size > maxSetupSize {
-			return nil, errors.New("setup больше 1 МБ")
+			return SyncArchive{}, errors.New("setup больше 1 МБ")
 		}
-		out = append(out, archiveEntry{path: p, mode: os.FileMode(h.Mode).Perm(), size: h.Size})
+		out.Entries = append(out.Entries, archiveEntry{path: p, mode: os.FileMode(h.Mode).Perm(), size: h.Size})
 	}
+	for _, p := range out.Remove {
+		if seen[p] {
+			return SyncArchive{}, fmt.Errorf("%s: файл и в архиве, и в списке удаления", p)
+		}
+	}
+	return out, nil
+}
+
+func readRemoveList(set SyncSet, r io.Reader) ([]string, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxRemoveList+1))
+	if err != nil {
+		return nil, fmt.Errorf("список удаления не прочитан: %w", err)
+	}
+	if len(data) > maxRemoveList {
+		return nil, errors.New("список удаления больше 8 МБ")
+	}
+	var raw []string
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, errors.New("список удаления: нужен JSON-массив путей")
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(raw))
+	for _, n := range raw {
+		p := filepath.FromSlash(n)
+		kind, root, ok := set.classify(p)
+		if !ok {
+			return nil, fmt.Errorf("удаление: %w: %s", ErrNotInSet, n)
+		}
+		if kind == kindSetup {
+			return nil, fmt.Errorf("удаление: %s — setup не удаляется", n)
+		}
+		if seen[p] {
+			return nil, fmt.Errorf("удаление: %s повторён", n)
+		}
+		seen[p] = true
+		if err := noSymlinks(root, p); err != nil {
+			return nil, fmt.Errorf("удаление: %s: %w", n, err)
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// ErrRemovalRefused — удаление отклонено защитой (нужен force).
+var ErrRemovalRefused = errors.New("удаление отклонено")
+
+// CheckRemoval решает, можно ли выполнять список удаления. Без force
+// отклоняются: удаление ключевых файлов (CA, index.txt, ключи сервера,
+// ключи и конфиги WireGuard) и удаление более половины набора (от десяти
+// файлов) — признаки неполного манифеста основного, а не воли оператора.
+// Пустой архив без списка удаления — тоже отказ.
+func CheckRemoval(set SyncSet, a SyncArchive, force bool) error {
+	if len(a.Entries) == 0 && len(a.Remove) == 0 {
+		return errors.New("архив пуст")
+	}
+	if len(a.Remove) == 0 || force {
+		return nil
+	}
+	var crit []string
+	for _, p := range a.Remove {
+		if criticalSyncFile(set, p) {
+			crit = append(crit, p)
+		}
+	}
+	if len(crit) > 0 {
+		return fmt.Errorf("%w: в списке ключевые файлы (%s) — без force не удаляются", ErrRemovalRefused, strings.Join(crit, ", "))
+	}
+	cur, err := set.Manifest()
+	if err != nil {
+		return err
+	}
+	if n := len(a.Remove); n >= 10 && n*2 > len(cur) {
+		return fmt.Errorf("%w: удаляется %d файлов из %d — без force так много не удаляют (манифест основного неполон?)", ErrRemovalRefused, n, len(cur))
+	}
+	return nil
+}
+
+// criticalSyncFile — файлы, потеря которых ломает PKI или туннели реплики.
+func criticalSyncFile(set SyncSet, p string) bool {
+	kind, _, ok := set.classify(p)
+	if !ok {
+		return false
+	}
+	switch kind {
+	case kindWireGuard, kindAmnezia:
+		return true
+	case kindEasyRSA:
+		rel, _ := filepath.Rel(set.EasyRSADir, p)
+		rel = filepath.ToSlash(rel)
+		switch rel {
+		case "pki/ca.crt", "pki/private/ca.key", "pki/index.txt", "pki/serial", "pki/dh.pem", "pki/crl.pem":
+			return true
+		}
+		return (strings.HasPrefix(rel, "pki/issued/") || strings.HasPrefix(rel, "pki/private/")) && strings.Contains(filepath.Base(rel), "server")
+	}
+	return false
 }
 
 // RunSyncApply — тело задачи sync-apply: повторная проверка архива, запись
@@ -106,17 +234,17 @@ func RunSyncApply(ctx context.Context, p SyncApplyParams, env *SyncEnv) error {
 		return err
 	}
 	defer f.Close()
-	entries, err := ValidateArchive(p.Set, f)
+	arch, err := ParseArchive(p.Set, f)
 	if err != nil {
+		return err
+	}
+	if err := CheckRemoval(p.Set, arch, p.Force); err != nil {
 		return err
 	}
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
-	if p.Prune && len(entries) == 0 {
-		return errors.New("пустой архив с удалением лишнего: набор был бы стёрт")
-	}
-	env.logf("в архиве файлов: %d", len(entries))
+	env.logf("в архиве файлов: %d, к удалению: %d", len(arch.Entries), len(arch.Remove))
 
 	var changed []string
 	var failed []string
@@ -129,6 +257,9 @@ func RunSyncApply(ctx context.Context, p SyncApplyParams, env *SyncEnv) error {
 		if err != nil {
 			return err
 		}
+		if h.Name == nodeapi.SyncRemoveEntry {
+			continue
+		}
 		path := filepath.FromSlash(h.Name)
 		did, werr := writeSyncFile(p.Set, path, os.FileMode(h.Mode).Perm(), tr)
 		switch {
@@ -140,14 +271,17 @@ func RunSyncApply(ctx context.Context, p SyncApplyParams, env *SyncEnv) error {
 			env.logf("записан %s", path)
 		}
 	}
-	if p.Prune {
-		removed, perr := pruneSyncFiles(p.Set, entries, env)
+	if len(arch.Remove) > 0 {
+		removed, rerr := removeSyncFiles(p.Set, arch.Remove, env)
 		changed = append(changed, removed...)
-		if perr != nil {
-			failed = append(failed, perr.Error())
+		if rerr != nil {
+			failed = append(failed, rerr.Error())
 		}
 	}
 	env.logf("изменено файлов: %d", len(changed))
+	for _, n := range p.Set.needsApply(changed) {
+		env.logf("НУЖНО ПРИМЕНИТЬ: %s", n)
+	}
 	units := append(p.Set.unitsToRestart(changed), env.kresdIf(ctx, p.Set, changed)...)
 	for _, u := range units {
 		out, err := env.run(ctx, "systemctl", "try-restart", u)
@@ -238,6 +372,12 @@ func writeSyncFile(set SyncSet, path string, mode os.FileMode, r io.Reader) (boo
 	if err := os.MkdirAll(dir, dirModeFor(set, path)); err != nil {
 		return false, err
 	}
+	var local os.FileMode
+	hasLocal := false
+	if fi, err := os.Stat(path); err == nil {
+		local, hasLocal = fi.Mode().Perm(), true
+	}
+	mode = safeMode(kind, path, mode, local, hasLocal)
 	if kind == kindSetup {
 		return writeSetup(path, mode, r)
 	}
@@ -260,8 +400,10 @@ func writeSyncFile(set SyncSet, path string, mode os.FileMode, r io.Reader) (boo
 		return false, err
 	}
 	if cur, ok := fileSum(path); ok && cur == hex.EncodeToString(h.Sum(nil)) {
+		// Содержимое то же: права, если разошлись, поправляются, но это не
+		// изменение — перезапускать службы из-за них нельзя.
 		if fi, err := os.Stat(path); err == nil && fi.Mode().Perm() != mode {
-			return true, os.Chmod(path, mode)
+			return false, os.Chmod(path, mode)
 		}
 		return false, nil
 	}
@@ -330,6 +472,35 @@ func fileSum(path string) (string, bool) {
 	return hex.EncodeToString(h.Sum(nil)), true
 }
 
+// safeMode ограничивает права файла из архива: панель основного не должна
+// решать, что файл на реплике доступен на запись всем или исполняется.
+// Группа и остальные не пишут; секреты (ключи PKI, ключи и конфиги
+// WireGuard, setup с ключами WARP) — не шире 0640; прочее — не шире 0644.
+// Исполняемость сохраняется только у *.sh и у файла, который уже исполняем
+// на реплике (например, easyrsa), и только если она есть в архиве.
+func safeMode(kind syncKind, path string, mode, local os.FileMode, hasLocal bool) os.FileMode {
+	m := mode.Perm() &^ 0o022
+	exec := m&0o111 != 0 && (matches("*.sh", filepath.Base(path)) || (hasLocal && local&0o111 != 0))
+	if !exec {
+		m &^= 0o111
+	}
+	if syncSecret(kind, path) {
+		m &= 0o640
+	}
+	return m
+}
+
+// syncSecret — файл с секретом: читать его группе можно, остальным нельзя.
+func syncSecret(kind syncKind, path string) bool {
+	switch kind {
+	case kindWireGuard, kindAmnezia, kindSetup:
+		return true
+	case kindEasyRSA:
+		return strings.Contains(filepath.ToSlash(path), "/private/") || strings.HasSuffix(path, ".key")
+	}
+	return false
+}
+
 // dirModeFor — права каталога, который приходится создать: закрытые ключи
 // EasyRSA — 0700, остальное — 0755.
 func dirModeFor(set SyncSet, path string) os.FileMode {
@@ -339,24 +510,30 @@ func dirModeFor(set SyncSet, path string) os.FileMode {
 	return 0o755
 }
 
-// pruneSyncFiles удаляет файлы набора, которых нет в архиве. setup не удаляется
-// никогда. Возвращает удалённые пути.
-func pruneSyncFiles(set SyncSet, keep []archiveEntry, env *SyncEnv) ([]string, error) {
-	have := map[string]bool{}
-	for _, e := range keep {
-		have[e.path] = true
-	}
-	cur, err := set.Manifest()
-	if err != nil {
-		return nil, err
-	}
+// removeSyncFiles удаляет файлы из списка удаления, и только их. Каждый путь
+// проверяется заново: он по-прежнему входит в набор, не симлинк и обычный
+// файл. Нет файла — не ошибка (реплика уже расходится с основным). Возвращает
+// удалённые пути.
+func removeSyncFiles(set SyncSet, remove []string, env *SyncEnv) ([]string, error) {
 	var removed, failed []string
-	for _, e := range cur {
-		p := filepath.FromSlash(e.Path)
-		if have[p] {
+	for _, p := range remove {
+		_, root, ok := set.classify(p)
+		if !ok {
+			failed = append(failed, p)
 			continue
 		}
-		if k, _, _ := set.classify(p); k == kindSetup {
+		if err := noSymlinks(root, p); err != nil {
+			env.logf("ОШИБКА удаления %s: %v", p, err)
+			failed = append(failed, p)
+			continue
+		}
+		fi, err := os.Lstat(p)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil || !fi.Mode().IsRegular() {
+			env.logf("ОШИБКА удаления %s: не обычный файл", p)
+			failed = append(failed, p)
 			continue
 		}
 		if err := os.Remove(p); err != nil {
@@ -371,4 +548,28 @@ func pruneSyncFiles(set SyncSet, keep []archiveEntry, env *SyncEnv) ([]string, e
 		return removed, fmt.Errorf("не удалены: %s", strings.Join(failed, ", "))
 	}
 	return removed, nil
+}
+
+// needsApply — что изменилось такого, что одной записью файлов не
+// вступает в силу: списки маршрутизации и setup начинают действовать после
+// doall и перезапуска AntiZapret, которые запускает панель (маршрут
+// routing/apply), а не эта задача.
+func (s SyncSet) needsApply(changed []string) []string {
+	var out []string
+	routing, setup := false, false
+	for _, p := range changed {
+		switch k, _, _ := s.classify(p); k {
+		case kindRouting:
+			routing = true
+		case kindSetup:
+			setup = true
+		}
+	}
+	if routing {
+		out = append(out, "списки config/*.txt изменены — выполните «Применить маршрутизацию» (doall)")
+	}
+	if setup {
+		out = append(out, "setup изменён — выполните «Применить маршрутизацию» и перезапуск AntiZapret")
+	}
+	return out
 }
