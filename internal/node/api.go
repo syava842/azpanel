@@ -107,6 +107,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/antizapret/update", a.azState)
 	mux.HandleFunc("GET /v1/antizapret/update/preflight", a.azPreflight)
 	mux.HandleFunc("POST /v1/antizapret/update", a.azUpdate)
+	mux.HandleFunc("POST /v1/antizapret/update/retry", a.azRetry)
 	mux.HandleFunc("POST /v1/antizapret/restore", a.azRestore)
 	a.registerTelemt(mux)
 	a.registerWarp(mux)

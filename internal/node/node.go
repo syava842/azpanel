@@ -207,6 +207,12 @@ func startAPI(ctx context.Context, exit func(), cfg config.Config, version strin
 		return sysinfo.Services(ctx, sysinfo.ServiceUnits(kresd, api.WireGuardEnabled()))
 	}
 	az.Services = api.Services
+	az.Gate = func() (func(), bool) {
+		if !api.ops.TryLock() {
+			return nil, false
+		}
+		return api.ops.Unlock, true
+	}
 	// Обновление, начатое до перезагрузки, получает итог здесь.
 	if err := az.Load(); err != nil {
 		log.Error("azupdate.json не прочитан", "err", err)

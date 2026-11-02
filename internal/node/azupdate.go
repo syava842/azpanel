@@ -34,7 +34,11 @@ const (
 	azStateName    = "azupdate.json"
 
 	// Строки, по которым в журнале задачи видно, что скрипт дошёл до конца.
-	azUpdateDoneMarker  = "installed successfully"
+	azUpdateDoneMarker = "installed successfully"
+	// azSetupStartMarker — setup.sh печатает её перед тем, как остановить службы
+	// и стереть /etc/openvpn/server: отказ после этой строки оставляет узел без
+	// рабочего VPN, отказ до неё (коды 2-10: проверки) ничего не трогает.
+	azSetupStartMarker  = "Installation, please wait..."
 	azRestoreDoneMarker = "restored from backup"
 )
 
@@ -43,11 +47,49 @@ var (
 	azBackupNameRe = regexp.MustCompile(`^backup-azpanel-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{6}\.tar\.gz$`)
 )
 
+// azRunSetup — общая часть задач установки: setup.sh читает ответы из канала,
+// который держится открытым после последней строки ответов. Так лишний вопрос
+// (скрипт upstream спросил больше, чем мы знаем) не превращается в холостой
+// цикл `until … read` на конце файла, а становится читающим процессом, которого
+// видно: если основной bash setup.sh больше N проверок подряд стоит в read(0) —
+// ввода не будет никогда, задача прерывается. Положение читателя берётся из
+// /proc/<pid>/syscall (номер вызова read: 0 на x86_64, 63 на aarch64); на
+// другой архитектуре или без /proc сторож молчит, остаётся сверка вопросов при
+// скачивании. $4 setup.sh, $5 файл ответов, $6 пауза проверки (с), $7 число проверок.
+const azRunSetup = `answers=$5; every=$6; ticks=$7
+echo "== setup.sh =="
+fifo="$answers.fifo"
+rm -f "$fifo" "$answers.done"
+mkfifo "$fifo"
+( cat "$answers"; : > "$answers.done"; exec sleep 1000000 ) > "$fifo" &
+feeder=$!
+/bin/bash "$setup" < "$fifo" &
+pid=$!
+case $(uname -m) in x86_64) rd=0 ;; aarch64) rd=63 ;; *) rd= ;; esac
+stuck=0
+while kill -0 "$pid" 2>/dev/null; do
+	sleep "$every"
+	if [ -n "$rd" ] && [ -e "$answers.done" ]; then
+		set -- $(cat "/proc/$pid/syscall" 2>/dev/null || true)
+		if [ "$1" = "$rd" ] && [ "$2" = "0x0" ]; then stuck=$((stuck + 1)); else stuck=0; fi
+		if [ "$stuck" -ge "$ticks" ]; then
+			echo "== setup.sh ждёт ответа на вопрос, которого нет во вводе — задача прервана =="
+			kill "$pid" "$feeder" 2>/dev/null || true
+			exit 12
+		fi
+	fi
+done
+rc=0
+wait "$pid" || rc=$?
+kill "$feeder" 2>/dev/null || true
+exit "$rc"`
+
 // azUpdateScript — задача обновления. Идёт вне песочницы агента (запись в /root
 // агенту недоступна). Всё передаётся позиционно:
 // $1 каталог AntiZapret, $2 копия в /root, $3 копия в /opt/azpanel/backup,
-// $4 setup.sh из архива коммита. Стандартный ввод юнита — файл с ответами
-// setup.sh (MTU, адреса серверов), окружение — остальные ответы.
+// $4 setup.sh из архива коммита, $5 файл ответов setup.sh (MTU, адреса
+// серверов), $6 и $7 — сторож ввода (azRunSetup). Окружение юнита — остальные
+// ответы.
 //
 // Свои старые /root/backup-azpanel-*.tar.gz (от неудавшегося обновления)
 // убираются: их копии лежат в /opt/azpanel/backup, а setup.sh распаковывает
@@ -55,7 +97,7 @@ var (
 const azUpdateScript = `set -e
 dir=$1; rootcopy=$2; keepcopy=$3; setup=$4
 echo "== бэкап: client.sh 8 =="
-"$dir/client.sh" 8
+"$dir/client.sh" 8 </dev/null
 src=$(ls -t "$dir"/backup-*.tar.gz | head -n 1)
 [ -s "$src" ]
 tar -tzf "$src" >/dev/null
@@ -65,8 +107,21 @@ chmod 600 "$keepcopy"
 rm -f "$(dirname "$rootcopy")"/backup-azpanel-*.tar.gz
 cp -f "$src" "$rootcopy"
 chmod 600 "$rootcopy"
-echo "== setup.sh =="
-exec /bin/bash "$setup"`
+` + azRunSetup
+
+// azRetryScript — повтор прерванной установки: бэкап уже есть в
+// /opt/azpanel/backup ($3), новый client.sh 8 делать нельзя — он снял бы копию
+// с полуразрушенного состояния. Бэкап снова кладётся в /root (setup.sh
+// подхватывает его сам), дальше тот же ход, что у обновления.
+const azRetryScript = `set -e
+dir=$1; rootcopy=$2; keepcopy=$3; setup=$4
+echo "== повтор установки: бэкап из $keepcopy =="
+[ -s "$keepcopy" ]
+tar -tzf "$keepcopy" >/dev/null
+rm -f "$(dirname "$rootcopy")"/backup-azpanel-*.tar.gz
+cp -f "$keepcopy" "$rootcopy"
+chmod 600 "$rootcopy"
+` + azRunSetup
 
 // azRestoreScript: $1 бэкап в /opt/azpanel/backup, $2 каталог /root, $3 каталог
 // AntiZapret. client.sh 9 сам распаковывает /root/backup*.tar.gz, удаляет его
@@ -83,6 +138,8 @@ exec "$dir/client.sh" 9`
 type PreflightError struct {
 	Reasons []string
 	Busy    bool // обновление уже идёт — это 409, а не отказ проверок
+	// BadRequest — запрос неверен сам по себе (например, коммит не из main): 400.
+	BadRequest bool
 }
 
 func (e *PreflightError) Error() string {
@@ -96,6 +153,14 @@ type azFile struct {
 	// SetupExpected — значения ключей setup, которые должны быть после установки
 	// (без секретов): расхождение — setup.sh сбросил ключ.
 	SetupExpected map[string]string `json:"setup_expected,omitempty"`
+	// Restorable — установка дошла до конца (или идёт восстановление), а проверка
+	// не прошла: «восстановить из бэкапа» имеет смысл. Ранний отказ setup.sh
+	// (проверки, коды 2-10) ничего не трогает — восстанавливать нечего.
+	Restorable bool `json:"restorable,omitempty"`
+	// RetryEnv и RetryStdin — окружение и ответы setup.sh этой установки (без
+	// секретов): по ним повторяется прерванная установка.
+	RetryEnv   []string `json:"retry_env,omitempty"`
+	RetryStdin string   `json:"retry_stdin,omitempty"`
 }
 
 // AZUpdater обновляет AntiZapret: проверки, бэкап, setup.sh задачей, проверка
@@ -137,6 +202,15 @@ type AZUpdater struct {
 	WarperBin     string // пусто — warper
 	TelemtBin     string // пусто — /usr/local/bin/telemt
 	TelemtConfig  string // пусто — /etc/telemt/config.toml
+
+	// Gate берёт замок операций над клиентами (api.ops) только на время записи
+	// состояния и запуска задачи; сеть и скачивание идут без него. nil — без замка.
+	Gate func() (release func(), ok bool)
+
+	// Сторож ввода setup.sh (azRunSetup): пауза проверки и число проверок подряд;
+	// 0 — 5 секунд и 6 проверок.
+	GuardEvery time.Duration
+	GuardTicks int
 
 	// Сроки: 0 — умолчания (пять минут на остановку, десять на подъём служб).
 	RebootGrace time.Duration
@@ -233,9 +307,12 @@ func (u *AZUpdater) Active() bool {
 func (u *AZUpdater) State() nodeapi.AZUpdateState {
 	u.mu.Lock()
 	st := u.state.AZUpdateState
+	restorable, retryStdin := u.state.Restorable, u.state.RetryStdin
 	u.mu.Unlock()
 	st.Backups = u.ListBackups()
-	st.CanRestore = st.Status == nodeapi.AZStatusFailed && st.Backup != "" && u.backupExists(st.Backup)
+	has := st.Backup != "" && u.backupExists(st.Backup)
+	st.CanRestore = has && (st.Status == nodeapi.AZStatusFailedLate || (st.Status == nodeapi.AZStatusFailed && restorable))
+	st.CanRetry = has && st.Status == nodeapi.AZStatusFailedLate && st.Action == nodeapi.AZActionUpdate && retryStdin != ""
 	return st
 }
 
@@ -407,6 +484,8 @@ func (u *AZUpdater) Preflight() nodeapi.AZPreflight {
 
 // Start запускает обновление. Ошибки: *BusyError (идёт задача),
 // *PreflightError (проверки не пройдены), прочие — внутренние.
+// Сеть (GitHub, архив коммита) идёт до замка операций над клиентами: Gate
+// берётся только на запись состояния и запуск задачи.
 func (u *AZUpdater) Start(ctx context.Context, req nodeapi.AZUpdateRequest) (nodeapi.AZUpdateState, error) {
 	u.startMu.Lock()
 	defer u.startMu.Unlock()
@@ -416,6 +495,29 @@ func (u *AZUpdater) Start(ctx context.Context, req nodeapi.AZUpdateRequest) (nod
 	if t, ok := u.Tasks.Running(); ok {
 		return nodeapi.AZUpdateState{}, &BusyError{Task: t}
 	}
+	if reason := u.lateBlock(); reason != "" {
+		return nodeapi.AZUpdateState{}, &PreflightError{Reasons: []string{reason}}
+	}
+
+	// Коммит из запроса: форма и принадлежность main. Архив по sha отдаёт и
+	// объекты форков — чужой setup.sh запускался бы от root.
+	sha := req.Commit
+	if sha != "" {
+		if !azSHARe.MatchString(sha) {
+			return nodeapi.AZUpdateState{}, &PreflightError{BadRequest: true, Reasons: []string{"коммит — 40 шестнадцатеричных знаков"}}
+		}
+		if u.GitHub == nil {
+			return nodeapi.AZUpdateState{}, &PreflightError{Reasons: []string{"GitHub не настроен — принадлежность коммита main не проверить"}}
+		}
+		ok, err := u.GitHub.InMain(ctx, sha)
+		if err != nil {
+			return nodeapi.AZUpdateState{}, &PreflightError{Reasons: []string{"принадлежность коммита ветке main не проверена: " + err.Error()}}
+		}
+		if !ok {
+			return nodeapi.AZUpdateState{}, &PreflightError{BadRequest: true, Reasons: []string{"коммит " + sha + " не входит в историю ветки main AntiZapret-VPN"}}
+		}
+	}
+
 	reasons := u.preflight(true)
 	setup, err := u.readSetup()
 	if err != nil {
@@ -424,7 +526,6 @@ func (u *AZUpdater) Start(ctx context.Context, req nodeapi.AZUpdateRequest) (nod
 	plan := antizapret.PlanSetupSh(setup, req.Values)
 	reasons = append(reasons, plan.Problems...)
 
-	sha := req.Commit
 	if sha == "" {
 		commits, err := u.GitHub.Commits(ctx)
 		if err != nil || len(commits) == 0 {
@@ -435,8 +536,6 @@ func (u *AZUpdater) Start(ctx context.Context, req nodeapi.AZUpdateRequest) (nod
 		} else {
 			sha = commits[0].SHA
 		}
-	} else if !azSHARe.MatchString(sha) {
-		reasons = append(reasons, "коммит — 40 шестнадцатеричных знаков")
 	}
 	if len(reasons) > 0 {
 		return nodeapi.AZUpdateState{}, &PreflightError{Reasons: reasons}
@@ -450,15 +549,11 @@ func (u *AZUpdater) Start(ctx context.Context, req nodeapi.AZUpdateRequest) (nod
 		return nodeapi.AZUpdateState{}, err
 	}
 	setupSh := filepath.Join(work, "setup.sh")
-	download := u.Download
-	if download == nil {
-		download = u.downloadSetupSh
+	if err := u.fetchSetupSh(ctx, sha, setupSh); err != nil {
+		return nodeapi.AZUpdateState{}, err
 	}
-	if err := download(ctx, sha, setupSh); err != nil {
-		return nodeapi.AZUpdateState{}, &PreflightError{Reasons: []string{"setup.sh коммита не получен: " + err.Error()}}
-	}
-	stdin := filepath.Join(work, "stdin")
-	if err := os.WriteFile(stdin, []byte(plan.Stdin), 0o600); err != nil {
+	answers := filepath.Join(work, "stdin")
+	if err := os.WriteFile(answers, []byte(plan.Stdin), 0o600); err != nil {
 		return nodeapi.AZUpdateState{}, err
 	}
 
@@ -478,11 +573,130 @@ func (u *AZUpdater) Start(ctx context.Context, req nodeapi.AZUpdateRequest) (nod
 			Commit: sha, From: from, Started: started, Backup: name, Clients: clients, Notes: plan.Notes,
 		},
 		SetupExpected: expectedSetup(setup, plan),
+		RetryEnv:      plan.Env, RetryStdin: plan.Stdin,
 	}
-	argv := []string{"/bin/sh", "-c", azUpdateScript, "azupdate", u.Dir, rootCopy, keepCopy, setupSh}
-	out, err := u.begin(st, TaskAZUpdate, argv, StartOpts{Env: append([]string{"HOME=/root"}, plan.Env...), StdinFile: stdin})
+	release, ok := u.gate()
+	if !ok {
+		return nodeapi.AZUpdateState{}, &PreflightError{Busy: true, Reasons: []string{"идёт операция над клиентом — повторите, когда она закончится"}}
+	}
+	defer release()
+	argv := u.setupArgv(azUpdateScript, "azupdate", rootCopy, keepCopy, setupSh, answers)
+	out, err := u.begin(st, TaskAZUpdate, argv, StartOpts{Env: append([]string{"HOME=/root"}, plan.Env...)})
 	if err == nil {
 		u.logger().Info("обновление AntiZapret запущено", "commit", sha, "from", from, "task", out.TaskID, "backup", name)
+	}
+	return out, err
+}
+
+// gate берёт замок операций над клиентами; без Gate замка нет.
+func (u *AZUpdater) gate() (func(), bool) {
+	if u.Gate == nil {
+		return func() {}, true
+	}
+	return u.Gate()
+}
+
+// setupArgv — команда задачи установки (обновление или повтор).
+func (u *AZUpdater) setupArgv(script, name, rootCopy, keepCopy, setupSh, answers string) []string {
+	every := int(u.dur(u.GuardEvery, 5*time.Second) / time.Second)
+	if every < 1 {
+		every = 1
+	}
+	ticks := u.GuardTicks
+	if ticks < 1 {
+		ticks = 6
+	}
+	return []string{"/bin/sh", "-c", script, name, u.Dir, rootCopy, keepCopy, setupSh, answers, strconv.Itoa(every), strconv.Itoa(ticks)}
+}
+
+// fetchSetupSh скачивает setup.sh коммита и сверяет его вопросы с таблицей
+// агента: изменённый upstream-скрипт не запускается (его вопрос остался бы без
+// ответа при остановленных службах).
+func (u *AZUpdater) fetchSetupSh(ctx context.Context, sha, dest string) error {
+	download := u.Download
+	if download == nil {
+		download = u.downloadSetupSh
+	}
+	if err := download(ctx, sha, dest); err != nil {
+		return &PreflightError{Reasons: []string{"setup.sh коммита не получен: " + err.Error()}}
+	}
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		return err
+	}
+	if problems := antizapret.CheckSetupShQuestions(string(data)); len(problems) > 0 {
+		if len(problems) > 3 {
+			problems = append(problems[:3], fmt.Sprintf("… и ещё %d", len(problems)-3))
+		}
+		return &PreflightError{Reasons: []string{"setup.sh изменился, обновите azpanel: вопросы скрипта коммита " + sha[:7] + " не совпадают с таблицей агента (" + strings.Join(problems, "; ") + ")"}}
+	}
+	return nil
+}
+
+// lateBlock — причина, по которой новое обновление не начать: прошлая установка
+// прервалась посередине, и client.sh 8 снял бы бэкап с полуразрушенного узла.
+func (u *AZUpdater) lateBlock() string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.state.Status != nodeapi.AZStatusFailedLate {
+		return ""
+	}
+	return "прошлая установка AntiZapret прервалась посередине (failed_late): повторите её с сохранённым бэкапом или восстановите бэкап — новое обновление снимало бы бэкап с неработающего узла"
+}
+
+// Retry повторяет прерванную установку (итог failed_late): тот же setup.sh и
+// ответы, бэкап снова копируется в /root, client.sh 8 не вызывается.
+func (u *AZUpdater) Retry(ctx context.Context) (nodeapi.AZUpdateState, error) {
+	u.startMu.Lock()
+	defer u.startMu.Unlock()
+	if u.Active() {
+		return nodeapi.AZUpdateState{}, &PreflightError{Busy: true, Reasons: []string{"обновление или восстановление уже идёт"}}
+	}
+	if t, ok := u.Tasks.Running(); ok {
+		return nodeapi.AZUpdateState{}, &BusyError{Task: t}
+	}
+	u.mu.Lock()
+	prev := u.state
+	u.mu.Unlock()
+	switch {
+	case prev.Status != nodeapi.AZStatusFailedLate || prev.Action != nodeapi.AZActionUpdate:
+		return nodeapi.AZUpdateState{}, &PreflightError{Reasons: []string{"повторять нечего: прошлая установка не прерывалась посередине"}}
+	case !u.backupExists(prev.Backup):
+		return nodeapi.AZUpdateState{}, &PreflightError{Reasons: []string{"бэкап " + prev.Backup + " не найден в " + u.BackupDir}}
+	case prev.RetryStdin == "" || len(prev.RetryEnv) == 0:
+		return nodeapi.AZUpdateState{}, &PreflightError{Reasons: []string{"ответы установки не сохранены — используйте восстановление из бэкапа"}}
+	case !azSHARe.MatchString(prev.Commit):
+		return nodeapi.AZUpdateState{}, &PreflightError{Reasons: []string{"коммит прошлой установки неизвестен — используйте восстановление из бэкапа"}}
+	}
+	if reasons := u.preflight(true); len(reasons) > 0 {
+		return nodeapi.AZUpdateState{}, &PreflightError{Reasons: reasons}
+	}
+	work := u.workDir()
+	if err := os.MkdirAll(work, 0o750); err != nil {
+		return nodeapi.AZUpdateState{}, err
+	}
+	setupSh := filepath.Join(work, "setup.sh")
+	if err := u.fetchSetupSh(ctx, prev.Commit, setupSh); err != nil {
+		return nodeapi.AZUpdateState{}, err
+	}
+	answers := filepath.Join(work, "stdin")
+	if err := os.WriteFile(answers, []byte(prev.RetryStdin), 0o600); err != nil {
+		return nodeapi.AZUpdateState{}, err
+	}
+	rootCopy := filepath.Join(u.RootDir, prev.Backup)
+	keepCopy := filepath.Join(u.BackupDir, prev.Backup)
+
+	st := prev
+	st.Status, st.Phase = nodeapi.AZStatusRunning, nodeapi.AZPhasePrepare
+	st.Started, st.Finished, st.TaskID = u.now(), nil, ""
+	st.Reasons, st.Warnings, st.Services, st.Extras = nil, nil, nil, nil
+	st.Restorable = false
+	st.Retries = prev.Retries + 1
+	st.Notes = append(append([]string(nil), prev.Notes...), fmt.Sprintf("повтор установки №%d с бэкапом %s", st.Retries, prev.Backup))
+	argv := u.setupArgv(azRetryScript, "azretry", rootCopy, keepCopy, setupSh, answers)
+	out, err := u.begin(st, TaskAZUpdate, argv, StartOpts{Env: append([]string{"HOME=/root"}, prev.RetryEnv...)})
+	if err == nil {
+		u.logger().Info("повтор установки AntiZapret запущен", "commit", prev.Commit, "task", out.TaskID, "retry", st.Retries)
 	}
 	return out, err
 }
@@ -714,7 +928,61 @@ func (u *AZUpdater) afterTask(t Task) {
 	if tail, err := u.Tasks.Tail(t); err == nil {
 		reasons = append(reasons, lastLines(tail, 3)...)
 	}
-	u.finish(nodeapi.AZStatusFailed, reasons, nil)
+	status, mutate := u.failureOf(t)
+	if status == nodeapi.AZStatusFailedLate {
+		reasons = append(reasons, "setup.sh успел остановить службы и стереть конфигурацию OpenVPN: VPN на узле не работает — повторите установку с бэкапом или восстановите его")
+	}
+	u.finish(status, reasons, mutate)
+}
+
+// failureOf — итог неудавшейся задачи. Установка (setup.sh) отказала до строки
+// azSetupStartMarker — ничего не тронуто, только failed. После неё узел без
+// рабочего VPN — failed_late (повтор установки или восстановление). Повтор,
+// отказавший рано, остаётся failed_late: узел по-прежнему сломан прошлым
+// заходом. Восстановление, не дошедшее до конца, можно запустить снова.
+func (u *AZUpdater) failureOf(t Task) (string, func(*azFile)) {
+	u.mu.Lock()
+	st := u.state
+	u.mu.Unlock()
+	if st.Action == nodeapi.AZActionRestore {
+		return nodeapi.AZStatusFailed, func(f *azFile) { f.Restorable = true }
+	}
+	if st.Retries > 0 || (u.logHas(t, azSetupStartMarker) && !u.logHas(t, azUpdateDoneMarker)) {
+		return nodeapi.AZStatusFailedLate, nil
+	}
+	return nodeapi.AZStatusFailed, nil
+}
+
+// logHas — есть ли строка в журнале задачи целиком (хвоста мало: вывод apt
+// вытесняет начало). Журнала нет — нет и строки.
+func (u *AZUpdater) logHas(t Task, marker string) bool {
+	f, err := os.Open(filepath.Join(u.Tasks.LogDir, filepath.Base(t.Log)))
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	const chunk = 1 << 20
+	buf := make([]byte, chunk)
+	var carry []byte
+	for read := 0; read < 256<<20; {
+		n, err := f.Read(buf)
+		if n > 0 {
+			read += n
+			data := append(carry, buf[:n]...)
+			if strings.Contains(string(data), marker) {
+				return true
+			}
+			keep := len(marker) - 1
+			if len(data) < keep {
+				keep = len(data)
+			}
+			carry = append([]byte(nil), data[len(data)-keep:]...)
+		}
+		if err != nil {
+			break
+		}
+	}
+	return false
 }
 
 var ansiEsc = regexp.MustCompile(`\x1b\[[0-9;]*m`)
@@ -747,14 +1015,17 @@ func (u *AZUpdater) waitReboot() {
 		reboot = systemctlReboot
 	}
 	if err := reboot(u.ctx()); err != nil {
-		u.finish(nodeapi.AZStatusFailed, []string{"установка завершена, но перезагрузить сервер не удалось: " + err.Error()}, nil)
+		u.finish(nodeapi.AZStatusFailed, []string{"установка завершена, но перезагрузить сервер не удалось: " + err.Error()}, markRestorable)
 		return
 	}
 	if !u.sleep(grace) {
 		return
 	}
-	u.finish(nodeapi.AZStatusFailed, []string{"установка завершена, но сервер не перезагрузился"}, nil)
+	u.finish(nodeapi.AZStatusFailed, []string{"установка завершена, но сервер не перезагрузился"}, markRestorable)
 }
+
+// markRestorable: установка дошла до конца, а итог плохой — есть смысл в «восстановить».
+func markRestorable(f *azFile) { f.Restorable = true }
 
 func systemctlReboot(ctx context.Context) error {
 	out, err := exec.CommandContext(ctx, "systemctl", "reboot").CombinedOutput()
@@ -854,10 +1125,16 @@ func (u *AZUpdater) verifyLoop() {
 	u.mu.Unlock()
 
 	// Дошёл ли скрипт до конца: иначе сервер перезагрузился по другой причине.
-	if reason := u.unfinishedReason(st); reason != "" {
+	if reason, t := u.unfinishedReason(st); reason != "" {
 		u.ensureHook()
 		svcs, _ := u.Services(u.ctx())
-		u.finish(nodeapi.AZStatusFailed, []string{reason}, func(f *azFile) { f.Services = svcs })
+		status, mutate := u.failureOf(t)
+		u.finish(status, []string{reason}, func(f *azFile) {
+			f.Services = svcs
+			if mutate != nil {
+				mutate(f)
+			}
+		})
 		return
 	}
 
@@ -872,7 +1149,7 @@ func (u *AZUpdater) verifyLoop() {
 			return
 		}
 		if time.Now().After(deadline) {
-			u.finish(nodeapi.AZStatusFailed, reasons, func(f *azFile) { f.Services = svcs })
+			u.finish(nodeapi.AZStatusFailed, reasons, func(f *azFile) { f.Services = svcs; f.Restorable = true })
 			return
 		}
 		if !u.sleep(every) {
@@ -894,27 +1171,24 @@ func (u *AZUpdater) ensureHook() {
 
 // unfinishedReason — причина, если журнал задачи есть, а завершающей строки в
 // нём нет. Журнала нет (удалён ротацией) — не причина.
-func (u *AZUpdater) unfinishedReason(st azFile) string {
+func (u *AZUpdater) unfinishedReason(st azFile) (string, Task) {
 	t, ok := u.Tasks.Get(st.TaskID)
 	if !ok {
-		return ""
+		return "", Task{}
 	}
 	if _, err := os.Stat(filepath.Join(u.Tasks.LogDir, filepath.Base(t.Log))); err != nil {
-		return ""
-	}
-	tail, err := u.Tasks.Tail(t)
-	if err != nil {
-		return ""
+		return "", t
 	}
 	marker := azUpdateDoneMarker
 	script := "setup.sh"
 	if st.Action == nodeapi.AZActionRestore {
 		marker, script = azRestoreDoneMarker, "client.sh 9"
 	}
-	if strings.Contains(tail, marker) {
-		return ""
+	// Завершающая строка стоит в конце журнала, хвоста хватает.
+	if tail, err := u.Tasks.Tail(t); err != nil || strings.Contains(tail, marker) || u.logHas(t, marker) {
+		return "", t
 	}
-	return fmt.Sprintf("сервер перезагрузился, а %s не дошёл до конца (в журнале задачи %s нет сообщения «%s»)", script, t.ID, marker)
+	return fmt.Sprintf("сервер перезагрузился, а %s не дошёл до конца (в журнале задачи %s нет сообщения «%s»)", script, t.ID, marker), t
 }
 
 // check сверяет состояние с ожидаемым: службы и клиенты.

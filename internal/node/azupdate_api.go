@@ -71,14 +71,24 @@ func (a *API) azUpdate(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	// Как у пересоздания профилей: стартует, только когда нет операции client.sh.
+	// Замок операций над клиентами берёт сам Start (AZ.Gate) на запись состояния
+	// и запуск задачи: сеть и скачивание идут без него.
+	st, err := a.AZ.Start(r.Context(), req)
+	a.azReply(w, "обновление не запущено", err, st)
+}
+
+// azRetry повторяет прерванную установку (состояние failed_late).
+func (a *API) azRetry(w http.ResponseWriter, r *http.Request) {
+	if !a.azReady(w) {
+		return
+	}
 	if !a.ops.TryLock() {
 		writeErr(w, http.StatusConflict, "идёт операция над клиентом — повторите, когда она закончится")
 		return
 	}
 	defer a.ops.Unlock()
-	st, err := a.AZ.Start(r.Context(), req)
-	a.azReply(w, "обновление не запущено", err, st)
+	st, err := a.AZ.Retry(r.Context())
+	a.azReply(w, "повтор установки не запущен", err, st)
 }
 
 func (a *API) azRestore(w http.ResponseWriter, r *http.Request) {
@@ -106,6 +116,8 @@ func (a *API) azReply(w http.ResponseWriter, what string, err error, st nodeapi.
 		writeErr(w, http.StatusConflict, busy.Error())
 	case errors.As(err, &pre) && pre.Busy:
 		writeErr(w, http.StatusConflict, pre.Error())
+	case errors.As(err, &pre) && pre.BadRequest:
+		writeErr(w, http.StatusBadRequest, pre.Error())
 	case errors.As(err, &pre):
 		writeErr(w, http.StatusUnprocessableEntity, pre.Error())
 	case err != nil:

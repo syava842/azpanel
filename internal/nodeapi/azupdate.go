@@ -13,6 +13,12 @@ const (
 	AZStatusRunning = "running"
 	AZStatusOK      = "ok"
 	AZStatusFailed  = "failed"
+	// AZStatusFailedLate — setup.sh начал установку (остановил службы, стёр
+	// /etc/openvpn/server) и не дошёл до конца: узел без рабочего VPN. Нужны
+	// действия: «повторить установку с сохранённым бэкапом» (CanRetry) или, как
+	// запасной путь, «восстановить из бэкапа» (CanRestore). Правки клиентов,
+	// списков и setup в этом состоянии не блокируются, новое обновление — да.
+	AZStatusFailedLate = "failed_late"
 )
 
 // Этапы идущего обновления (AZUpdateState.Phase).
@@ -33,7 +39,7 @@ const (
 // списков и setup на узле отклоняются.
 type AZUpdateState struct {
 	Action   string     `json:"action,omitempty"` // update | restore
-	Status   string     `json:"status,omitempty"` // running | ok | failed
+	Status   string     `json:"status,omitempty"` // running | ok | failed | failed_late
 	Phase    string     `json:"phase,omitempty"`  // для running: prepare | reboot | verify
 	Commit   string     `json:"commit,omitempty"` // на какой коммит обновляем
 	From     string     `json:"from,omitempty"`   // с какого (пусто — был неизвестен)
@@ -54,8 +60,15 @@ type AZUpdateState struct {
 	Services []sysinfo.Service `json:"services,omitempty"`
 	// Extras — состояние сопутствующих служб после обновления: warper, telemt.
 	Extras map[string]string `json:"extras,omitempty"`
-	// CanRestore — есть бэкап и итог failed: панель показывает «Восстановить из бэкапа».
+	// CanRestore — есть бэкап и установка что-то тронула (failed_late, либо
+	// установка прошла, а проверка нет): панель показывает «Восстановить из
+	// бэкапа». Ранний отказ setup.sh (ничего не тронуто) её не включает.
 	CanRestore bool `json:"can_restore,omitempty"`
+	// CanRetry — итог failed_late и бэкап на месте: панель показывает «Повторить
+	// установку» (POST /v1/antizapret/update/retry).
+	CanRetry bool `json:"can_retry,omitempty"`
+	// Retries — сколько раз установку повторяли после failed_late.
+	Retries int `json:"retries,omitempty"`
 	// Backups — бэкапы на узле, новые сверху (только в ответе GET).
 	Backups []AZBackup `json:"backups,omitempty"`
 }
@@ -107,6 +120,14 @@ func (c *HTTPClient) AZPreflight(ctx context.Context) (AZPreflight, error) {
 func (c *HTTPClient) AZUpdate(ctx context.Context, req AZUpdateRequest) (AZUpdateState, error) {
 	var v AZUpdateState
 	return v, c.do(ctx, http.MethodPost, "/v1/antizapret/update", req, &v)
+}
+
+// AZRetry повторяет прерванную установку (итог failed_late) с сохранённым
+// бэкапом: тот же setup.sh и ответы, бэкап копируется в /root снова. 202 и
+// состояние; 409 — идёт другая задача; 422 — повторять нечего или проверки не пройдены.
+func (c *HTTPClient) AZRetry(ctx context.Context) (AZUpdateState, error) {
+	var v AZUpdateState
+	return v, c.do(ctx, http.MethodPost, "/v1/antizapret/update/retry", struct{}{}, &v)
 }
 
 // AZRestore восстанавливает конфигурацию и клиентов из бэкапа (client.sh 9);

@@ -24,7 +24,11 @@ import (
 	"github.com/syava842/azpanel/internal/sysinfo"
 )
 
-const azHead = "2d2d298057ced91fa4b8cc587288b1527703c451"
+const (
+	azHead    = "2d2d298057ced91fa4b8cc587288b1527703c451"
+	azOldMain = "1111111111111111111111111111111111111111" // старый коммит main (compare: behind)
+	azForkSHA = "2222222222222222222222222222222222222222" // коммит из форка (compare: diverged)
+)
 
 // azSetupMap — setup сервера со всеми ключами, которые спрашивает setup.sh.
 func azSetupMap() map[string]string {
@@ -78,13 +82,13 @@ func (x *azExec) exec(_ context.Context, name string, args ...string) (int, []by
 	kind := ""
 	for _, a := range args {
 		switch a {
-		case "azupdate", "azrestore":
+		case "azupdate", "azrestore", "azretry":
 			kind = a
 		case "resync":
 			kind = "resync"
 		}
 	}
-	if kind == "azupdate" && hold != nil {
+	if (kind == "azupdate" || kind == "azretry") && hold != nil {
 		<-hold
 	}
 	for _, a := range args {
@@ -178,6 +182,7 @@ func newAZ(t *testing.T) *azEnv {
 
 	e.ex = &azExec{codes: map[string]int{}, output: map[string]string{
 		"azupdate":  "== setup.sh ==\nAntiZapret VPN + full VPN installed successfully!\n",
+		"azretry":   "== setup.sh ==\nInstallation, please wait...\nAntiZapret VPN + full VPN installed successfully!\n",
 		"azrestore": "Configuration and clients restored from backup\n",
 	}}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -196,6 +201,10 @@ func newAZ(t *testing.T) *azEnv {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/commits"):
 			json.NewEncoder(w).Encode([]map[string]any{{"sha": azHead, "commit": map[string]any{"message": "Update parse.sh", "committer": map[string]any{"date": "2026-11-02T07:30:30Z"}}}})
+		case strings.Contains(r.URL.Path, "/compare/"+azOldMain+"..."):
+			json.NewEncoder(w).Encode(map[string]string{"status": "behind"})
+		case strings.Contains(r.URL.Path, "/compare/"+azForkSHA+"..."):
+			json.NewEncoder(w).Encode(map[string]string{"status": "diverged"})
 		case strings.Contains(r.URL.Path, "/contents/"):
 			var out []map[string]any
 			for n, h := range hashes {
@@ -224,7 +233,12 @@ func newAZ(t *testing.T) *azEnv {
 		Procs:  func() ([]string, error) { return []string{"bash", "azpanel"}, nil },
 		Exists: func(p string) bool { return e.exists[p] },
 		Download: func(_ context.Context, sha, dest string) error {
-			return os.WriteFile(dest, []byte("#!/bin/bash\n# setup "+sha+"\n"), 0o700)
+			// Настоящий setup.sh из testdata: после скачивания агент сверяет его вопросы с таблицей.
+			data, err := os.ReadFile(filepath.Join("..", "antizapret", "testdata", "setup.sh"))
+			if err != nil {
+				return err
+			}
+			return os.WriteFile(dest, append(data, []byte("\n# commit "+sha+"\n")...), 0o700)
 		},
 		BootTime:    func() (time.Time, error) { return e.boot, nil },
 		Reboot:      func(context.Context) error { e.reboots.Add(1); return nil },
@@ -395,7 +409,7 @@ func TestAZStartBuildsTaskWithEnvAndStdin(t *testing.T) {
 	joined := strings.Join(call, "\n")
 	for _, want := range []string{
 		"RuntimeMaxSec=7200",
-		"--property=StandardInput=file:" + filepath.Join(e.data, "azupdate", "stdin"),
+		filepath.Join(e.data, "azupdate", "stdin"), // файл ответов — позиционный аргумент, не StandardInput
 		"--setenv=OPENVPN_PATCH=3", "--setenv=WARP_MTU=1300", "--setenv=OPENVPN_UDP_ENABLE=y", "--setenv=HOME=/root",
 		filepath.Join(e.data, "azupdate", "setup.sh"),
 		filepath.Join(e.rootDir, st.Backup), filepath.Join(e.backup, st.Backup),
@@ -428,7 +442,7 @@ func TestAZStartBuildsTaskWithEnvAndStdin(t *testing.T) {
 		t.Fatalf("azupdate.json: %s", raw)
 	}
 	// Скрипт задачи: сначала client.sh 8, затем setup.sh; положение копий.
-	if !strings.Contains(azUpdateScript, `"$dir/client.sh" 8`) || !strings.Contains(azUpdateScript, `exec /bin/bash "$setup"`) {
+	if !strings.Contains(azUpdateScript, `"$dir/client.sh" 8 </dev/null`) || !strings.Contains(azUpdateScript, `/bin/bash "$setup" < "$fifo"`) {
 		t.Fatal("скрипт обновления не делает client.sh 8 и setup.sh")
 	}
 	// Пока идёт, вторую задачу и второе обновление не принимает.
@@ -456,8 +470,9 @@ func TestAZStartRefusals(t *testing.T) {
 	close(e.ex.hold)
 
 	e = newAZ(t)
-	if _, err := e.u.Start(context.Background(), nodeapi.AZUpdateRequest{Commit: "не sha"}); err == nil {
-		t.Fatal("кривой коммит принят")
+	var pre *PreflightError
+	if _, err := e.u.Start(context.Background(), nodeapi.AZUpdateRequest{Commit: "не sha"}); !errors.As(err, &pre) || !pre.BadRequest {
+		t.Fatalf("кривой коммит: %v", err)
 	}
 	if _, err := e.u.Start(context.Background(), nodeapi.AZUpdateRequest{Values: map[string]string{"TXQUEUELEN": "1"}}); err == nil {
 		t.Fatal("ключ, которого setup.sh не спрашивает, принят")
@@ -589,9 +604,23 @@ func TestAZSetupShNotFinishedIsFailure(t *testing.T) {
 	e := newAZ(t)
 	e.ex.output["azupdate"] = "== setup.sh ==\nInstallation, please wait...\n"
 	e.startAndReboot()
-	got := e.waitStatus(nodeapi.AZStatusFailed)
+	// Строка «Installation, please wait...» есть, «installed successfully» нет:
+	// службы остановлены, конфигурация стёрта — это failed_late.
+	got := e.waitStatus(nodeapi.AZStatusFailedLate)
 	if !strings.Contains(strings.Join(got.Reasons, "|"), "не дошёл до конца") {
 		t.Fatalf("%v", got.Reasons)
+	}
+}
+
+// Сервер перезагрузился, а в журнале нет даже начала установки: ничего не тронуто.
+func TestAZSetupShRebootBeforeInstallIsPlainFailure(t *testing.T) {
+	e := newAZ(t)
+	e.ex.output["azupdate"] = "== setup.sh ==\n"
+	e.startAndReboot()
+	got := e.waitStatus(nodeapi.AZStatusFailed)
+	os.WriteFile(filepath.Join(e.backup, got.Backup), []byte("tgz"), 0o600)
+	if st := e.u.State(); st.CanRestore || st.CanRetry {
+		t.Fatalf("установка не начиналась — действий быть не должно: %+v", st)
 	}
 }
 
@@ -607,12 +636,11 @@ func TestAZTaskFailureWithoutReboot(t *testing.T) {
 	if !strings.Contains(strings.Join(st.Reasons, "|"), "завершилась с кодом 8") || !strings.Contains(strings.Join(st.Reasons, "|"), "Low disk space") {
 		t.Fatalf("%v", st.Reasons)
 	}
-	if st.CanRestore {
-		t.Fatal("бэкапа в каталоге нет — восстанавливать нечего")
-	}
 	os.WriteFile(filepath.Join(e.backup, st.Backup), []byte("tgz"), 0o600)
-	if !e.u.State().CanRestore {
-		t.Fatal("бэкап появился, а кнопки нет")
+	// Отказ проверок setup.sh (код 8) до остановки служб: ничего не тронуто,
+	// «восстановить» перезагрузило бы рабочий сервер без нужды.
+	if s := e.u.State(); s.CanRestore || s.CanRetry {
+		t.Fatalf("ранний отказ не должен предлагать восстановление и повтор: %+v", s)
 	}
 	if e.u.Active() {
 		t.Fatal("после провала состояние «идёт»")
@@ -889,6 +917,7 @@ func (u *AZUpdater) cloneConfig() *AZUpdater {
 		DataDir: u.DataDir, BackupDir: u.BackupDir, Inventory: u.Inventory, EnsureHook: u.EnsureHook,
 		Services: u.Services, Log: u.Log, Now: u.Now, Free: u.Free, Procs: u.Procs, Exists: u.Exists,
 		Download: u.Download, BootTime: u.BootTime, Reboot: u.Reboot, Exec: u.Exec,
+		Gate: u.Gate, GuardEvery: u.GuardEvery, GuardTicks: u.GuardTicks,
 		ArchiveBase: u.ArchiveBase, HTTP: u.HTTP, WarperVersion: u.WarperVersion, WarperBin: u.WarperBin,
 		TelemtBin: u.TelemtBin, TelemtConfig: u.TelemtConfig,
 		RebootGrace: u.RebootGrace, VerifyWait: u.VerifyWait, VerifyEvery: u.VerifyEvery, PollEvery: u.PollEvery,
