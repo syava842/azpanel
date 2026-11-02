@@ -86,7 +86,9 @@ WantedBy=multi-user.target
 }
 
 // PanelUnit — юнит веб-панели. Панель пишет только в /opt/azpanel (журнал),
-// с агентом говорит по HTTP, поэтому остальные пути ей закрыты.
+// с агентом говорит по HTTP, поэтому остальные пути ей закрыты. Права сужены:
+// secrets.env принадлежит root (600), читается и без CAP_DAC_OVERRIDE; порт
+// выше 1024.
 func PanelUnit(bin string) string {
 	return `[Unit]
 Description=azpanel: веб-панель
@@ -102,6 +104,17 @@ ProtectHome=true
 ReadWritePaths=/opt/azpanel
 PrivateTmp=true
 NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictSUIDSGID=true
+PrivateDevices=true
+SystemCallArchitectures=native
 
 [Install]
 WantedBy=multi-user.target

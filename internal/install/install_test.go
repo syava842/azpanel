@@ -176,7 +176,10 @@ func TestUninstall(t *testing.T) {
 
 func TestPanelUnit(t *testing.T) {
 	u := PanelUnit("/x")
-	for _, s := range []string{"ExecStart=/x panel", "ProtectSystem=strict", "ProtectHome=true", "ReadWritePaths=/opt/azpanel", "After=network-online.target azpanel-node.service", "Description=azpanel: веб-панель", "PrivateTmp=true", "NoNewPrivileges=true"} {
+	for _, s := range []string{"ExecStart=/x panel", "ProtectSystem=strict", "ProtectHome=true", "ReadWritePaths=/opt/azpanel", "After=network-online.target azpanel-node.service", "Description=azpanel: веб-панель", "PrivateTmp=true", "NoNewPrivileges=true",
+		"\nCapabilityBoundingSet=\n", "\nAmbientCapabilities=\n", "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX",
+		"ProtectKernelTunables=true", "ProtectKernelModules=true", "ProtectControlGroups=true", "RestrictNamespaces=true",
+		"LockPersonality=true", "RestrictSUIDSGID=true", "PrivateDevices=true", "SystemCallArchitectures=native"} {
 		if !strings.Contains(u, s) {
 			t.Errorf("в юните панели нет %q:\n%s", s, u)
 		}
