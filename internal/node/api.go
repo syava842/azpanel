@@ -51,6 +51,7 @@ type API struct {
 	Telemt        *TelemtService             // telemt; nil — не настроен
 	Warp          *WarpService               // WARP; nil — не настроен
 	Update        *UpdateService             // самообновление azpanel; nil — не настроено
+	Sync          *SyncService               // набор синхронизации и роль узла; nil — не настроены
 	Services      func(ctx context.Context) ([]sysinfo.Service, error)
 	WGShow        func(ctx context.Context, iface string) ([]antizapret.WGPeer, error)
 	Kill          func(sock, name string, timeout time.Duration) (int, error)
@@ -110,7 +111,8 @@ func (a *API) Handler() http.Handler {
 	a.registerTelemt(mux)
 	a.registerWarp(mux)
 	a.registerUpdate(mux)
-	return a.auth(mux)
+	a.registerSync(mux)
+	return a.auth(a.roleGate(mux))
 }
 
 func (a *API) auth(next http.Handler) http.Handler {
@@ -129,6 +131,9 @@ func (a *API) auth(next http.Handler) http.Handler {
 		if r.URL.Path == "/v1/update" && r.Method == http.MethodPost {
 			limit = maxUpdateBody
 		}
+		if r.URL.Path == "/v1/sync/apply" && r.Method == http.MethodPost {
+			limit = nodeapi.MaxSyncArchive
+		}
 		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		next.ServeHTTP(w, r)
 	})
@@ -142,7 +147,13 @@ func (a *API) WireGuardEnabled() bool {
 
 func (a *API) info(w http.ResponseWriter, r *http.Request) {
 	host, _ := os.Hostname()
-	writeJSON(w, http.StatusOK, nodeapi.Info{Proto: nodeapi.Proto, Version: a.Version, Hostname: host, WireGuard: a.WireGuardEnabled()})
+	info := nodeapi.Info{Proto: nodeapi.Proto, Version: a.Version, Hostname: host, WireGuard: a.WireGuardEnabled()}
+	if a.Sync != nil {
+		if role, err := a.Sync.Role.Get(); err == nil {
+			info.Role, info.Group = role.Role, role.Group
+		}
+	}
+	writeJSON(w, http.StatusOK, info)
 }
 
 func (a *API) clients(w http.ResponseWriter, r *http.Request) {
