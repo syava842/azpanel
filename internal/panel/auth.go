@@ -21,8 +21,12 @@ const (
 	SecretAdminUser = "PANEL_ADMIN_USER"
 	SecretAdminHash = "PANEL_ADMIN_HASH"
 	SecretDataKey   = "PANEL_DATA_KEY"
-	cookieName      = "azpanel_session"
-	bcryptCost      = 12
+	// SecretDataKeyPrev — прежний ключ данных на время смены ключа: пока секреты
+	// 2FA не перешифрованы и изменение не зафиксировано в базе, он нужен, чтобы
+	// старт панели после сбоя довёл перешифровку до конца.
+	SecretDataKeyPrev = "PANEL_DATA_KEY_PREV"
+	cookieName        = "azpanel_session"
+	bcryptCost        = 12
 
 	minPasswordLen = 10
 	maxPasswordLen = 72 // предел bcrypt, байт

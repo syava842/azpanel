@@ -54,6 +54,9 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	if err != nil {
 		return err
 	}
+	if err := recoverDataKey(ctx, st, paths.SecretsFile(), sec, dataKey, log); err != nil {
+		return err
+	}
 	if err := migrateAdmin(ctx, st, sec, time.Now(), log); err != nil {
 		return err
 	}

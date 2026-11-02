@@ -56,13 +56,17 @@ func (s *Server) rotateDataKey(ctx context.Context, cur, kv map[string]string) e
 	}
 	newKey, _ := hex.DecodeString(kv[SecretDataKey])
 	oldKey := s.DataKey
-	next := make(map[string]string, len(cur)+len(kv))
+	next := make(map[string]string, len(cur)+len(kv)+1)
 	for k, v := range cur {
 		next[k] = v
 	}
 	for k, v := range kv {
 		next[k] = v
 	}
+	// Замена secrets.env и COMMIT базы — два действия, между ними процесс может
+	// умереть. Прежний ключ едет в новом файле как PREV: старт панели по нему
+	// дошифрует то, что не успело перейти.
+	next[SecretDataKeyPrev] = hex.EncodeToString(oldKey)
 	file := s.secretsPath()
 	tmp := file + ".new"
 	if err := fsutil.WriteFileAtomic(tmp, secrets.Marshal(next), 0o600); err != nil {
@@ -104,6 +108,11 @@ func (s *Server) rotateDataKey(ctx context.Context, cur, kv map[string]string) e
 		return err
 	}
 	s.DataKey = newKey
+	// Всё перешифровано и зафиксировано: PREV больше не нужен. Не убрался —
+	// старт панели уберёт его сам (секреты уже читаются текущим ключом).
+	if err := secrets.Delete(file, SecretDataKeyPrev); err != nil {
+		s.Log.Warn("прежний ключ данных не убран из secrets.env", "ключ", SecretDataKeyPrev, "err", err)
+	}
 	return nil
 }
 
