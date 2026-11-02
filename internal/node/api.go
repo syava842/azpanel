@@ -47,7 +47,11 @@ type API struct {
 	Log           *slog.Logger
 	Now           func() time.Time
 
-	mu sync.Mutex // чтение-изменение-запись limits.json
+	// ops сериализует операции над клиентами: поиск + client.sh + уборка
+	// лимитов, а также правки лимита и блокировки. Порядок захвата всегда
+	// ops → mu; ops при удерживаемом mu не берётся.
+	ops sync.Mutex
+	mu  sync.Mutex // чтение-изменение-запись limits.json
 }
 
 func (a *API) Handler() http.Handler {
@@ -141,6 +145,8 @@ func (a *API) createClient(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "недопустимое имя клиента: 1–32 символа a-z, A-Z, 0-9, _ и -")
 		return
 	}
+	a.ops.Lock()
+	defer a.ops.Unlock()
 	c, _, err := a.find(req.Name)
 	if err != nil {
 		a.fail(w, "состав клиентов не прочитан", err)
@@ -187,6 +193,8 @@ func (a *API) renew(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
+	a.ops.Lock()
+	defer a.ops.Unlock()
 	c, found, err := a.find(name)
 	if err != nil {
 		a.fail(w, "состав клиентов не прочитан", err)
@@ -211,6 +219,8 @@ func (a *API) renew(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) deleteClient(w http.ResponseWriter, r *http.Request) {
 	kind, name := r.PathValue("kind"), r.PathValue("name")
+	a.ops.Lock()
+	defer a.ops.Unlock()
 	c, _, err := a.find(name)
 	if err != nil {
 		a.fail(w, "состав клиентов не прочитан", err)
@@ -241,7 +251,11 @@ func (a *API) deleteClient(w http.ResponseWriter, r *http.Request) {
 	a.Log.Info("клиент удалён", "name", name, "kind", kind)
 	// Клиента не осталось ни в одном виде — его лимит и блокировка больше
 	// ничего не значат, а с тем же именем может появиться новый клиент.
-	if _, still, err := a.find(name); err == nil && !still {
+	_, still, err := a.find(name)
+	switch {
+	case err != nil:
+		a.Log.Error("лимит удалённого клиента не снят: состав клиентов не прочитан", "name", name, "err", err)
+	case !still:
 		if err := a.updateLimits(func(d *limits.Data) { delete(d.Limits, name); delete(d.Blocked, name) }); err != nil {
 			a.Log.Error("лимит удалённого клиента не снят", "name", name, "err", err)
 		}
@@ -303,6 +317,8 @@ func (a *API) setLimit(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
+	a.ops.Lock()
+	defer a.ops.Unlock()
 	if req.Limit < 0 || req.Limit > maxLimit {
 		writeErr(w, http.StatusBadRequest, fmt.Sprintf("лимит — 0 (без ограничения) или 1..%d", maxLimit))
 		return
@@ -332,6 +348,8 @@ func (a *API) setBlocked(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
+	a.ops.Lock()
+	defer a.ops.Unlock()
 	err := a.updateLimits(func(d *limits.Data) {
 		if req.Blocked {
 			d.Blocked[name] = true

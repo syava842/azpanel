@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -315,5 +316,61 @@ func TestAPISystem(t *testing.T) {
 	}
 	if s.Resources.Memory.TotalBytes != 1000*1024 || len(s.Services) != 1 || s.Services[0].State != "active" {
 		t.Fatalf("%+v", s)
+	}
+}
+
+func TestAPIConcurrentCreateRunsOnce(t *testing.T) {
+	e := newAPI(t)
+	issued := filepath.Join(e.api.Inventory.PKI, "issued")
+	release := make(chan struct{})
+	var runs atomic.Int32
+	e.api.ClientSh.Run = func(ctx context.Context, dir string, args ...string) ([]byte, error) {
+		runs.Add(1)
+		<-release // держим первый вызов, пока второй запрос не дойдёт до сервера
+		os.WriteFile(filepath.Join(issued, args[1]+".crt"), []byte("не PEM"), 0o644)
+		return []byte("готово\n"), nil
+	}
+	codes := make(chan int, 2)
+	for range 2 {
+		go func() {
+			_, err := e.client.CreateClient(context.Background(), nodeapi.CreateClient{Name: "newbie", Kind: nodeapi.KindOpenVPN})
+			if err == nil {
+				codes <- http.StatusCreated
+				return
+			}
+			codes <- status(err)
+		}()
+	}
+	time.Sleep(200 * time.Millisecond)
+	close(release)
+	a, b := <-codes, <-codes
+	if !(a == http.StatusCreated && b == http.StatusConflict) && !(a == http.StatusConflict && b == http.StatusCreated) {
+		t.Fatalf("коды %d и %d, ждали 201 и 409", a, b)
+	}
+	if n := runs.Load(); n != 1 {
+		t.Fatalf("client.sh запущен %d раз, ждали 1", n)
+	}
+}
+
+func TestAPIDeleteLogsFailedRecheck(t *testing.T) {
+	e := newAPI(t)
+	var logs bytes.Buffer
+	e.api.Log = slog.New(slog.NewTextHandler(&logs, nil))
+	limits.Save(e.api.LimitsPath, limits.Data{Limits: map[string]int{"alice": 2}, Blocked: map[string]bool{"alice": true}})
+	e.api.ClientSh.Run = func(ctx context.Context, dir string, args ...string) ([]byte, error) {
+		// После client.sh состав клиентов перестаёт читаться: путь с NUL
+		// даёт ошибку, отличную от «нет файла», на любой ОС.
+		e.api.Inventory.PKI = "pki\x00сломан"
+		return []byte("готово\n"), nil
+	}
+	if _, err := e.client.DeleteClient(context.Background(), nodeapi.KindOpenVPN, "alice"); err != nil {
+		t.Fatalf("клиент удалён, ответ должен быть 200: %v", err)
+	}
+	d, _ := limits.Load(e.api.LimitsPath)
+	if d.Limits["alice"] != 2 || !d.Blocked["alice"] {
+		t.Fatalf("запись снята при неудачной перепроверке: %+v", d)
+	}
+	if out := logs.String(); !strings.Contains(out, "level=ERROR") || !strings.Contains(out, "name=alice") {
+		t.Fatalf("ошибка не записана в журнал:\n%s", out)
 	}
 }
