@@ -43,6 +43,8 @@ func run(args []string) int {
 		return report(cmdPanel(args[1:]))
 	case "hook":
 		return runHook(args[1:])
+	case "user":
+		return report(cmdUser(args[1:], os.Stdout))
 	case "limit":
 		return report(cmdLimit(args[1:], os.Stdout))
 	case "sessions":
@@ -151,6 +153,8 @@ func usage() {
   azpanel node                         агент узла (запускает systemd)
   azpanel panel                        веб-панель (запускает systemd)
   azpanel panel passwd [--user ИМЯ]    задать пароль администратора панели
+  azpanel user list                    пользователи панели
+  azpanel user reset <логин>           новый пароль, 2FA выключить, сессии завершить
   azpanel limit set <клиент> <число>   лимит одновременных подключений OpenVPN
   azpanel limit unset <клиент>         снять лимит
   azpanel limit get <клиент>

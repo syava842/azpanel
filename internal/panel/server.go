@@ -80,8 +80,18 @@ type Server struct {
 	Collector *Collector
 	// Geo — город и провайдер по адресу; nil — без этих столбцов.
 	Geo *Geo
+	// Allow — белый список адресов (пустой пускает всех); nil заводится при
+	// сборке маршрутов.
+	Allow *AllowList
+	// Pending — опасные настройки с таймером возврата; по умолчанию на Store.
+	Pending *PendingStore
+	// ConfigFile — config.toml, куда пишется белый список; пусто — по умолчанию
+	// из paths. NoConfigFile — не писать файл (тесты без файла).
+	ConfigFile   string
+	NoConfigFile bool
 
-	pages map[string]*template.Template
+	pages  map[string]*template.Template
+	access accessState
 
 	loginSem      chan struct{} // ограничивает одновременные bcrypt
 	mfaMu         sync.Mutex    // сверка кода 2FA и запись принятого шага — одним куском
@@ -110,6 +120,7 @@ func (s *Server) Handler() http.Handler {
 	s.loginSem = make(chan struct{}, maxParallelBcrypt)
 	s.blockedLogged = map[string]time.Time{}
 	s.pages = parsePages()
+	s.initAccess()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -126,6 +137,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /login/2fa", s.guard(s.mfaForm, guardMFA))
 	mux.Handle("POST /login/2fa", s.guard(s.mfaSubmit, guardMFA))
 	mux.HandleFunc("POST /logout", s.logoutRoute)
+
+	// Настройки: только администратор. Задача 4 внесёт эти маршруты в таблицу прав.
+	mux.Handle("GET /settings/access", s.adminOnly(s.accessPage))
+	mux.Handle("POST /settings/access", s.adminOnly(s.accessSave))
+	mux.Handle("POST /settings/access/confirm", s.adminOnly(s.accessConfirm))
 
 	// Всё остальное — за входом; новые страницы добавляются выше
 	// этих двух строк.
@@ -145,7 +161,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/", s.protect(func(w http.ResponseWriter, r *http.Request) {
 		s.errorPage(w, r, http.StatusNotFound, "страница не найдена")
 	}))
-	return s.headers(mux)
+	return s.headers(s.allowGate(mux))
 }
 
 // parsePages: каждая страница — свой набор layout.html + страница.

@@ -81,7 +81,14 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		SessionTTL:      time.Duration(cfg.Panel.SessionHours) * time.Hour,
 		DataKey:         dataKey,
 		RequireAdmin2FA: cfg.Panel.RequireAdmin2FA,
+		ConfigFile:      paths.ConfigFile(),
 	}
+	if err := s.SeedAllow(cfg.Panel.AllowIPs); err != nil {
+		return fmt.Errorf("panel.allow_ips: %w", err)
+	}
+	// Перезапуск в середине таймера возврата не отменяет его: просроченное
+	// изменение откатывается до того, как панель начнёт принимать запросы.
+	s.CheckPending(ctx)
 	ln, err := listen("tcp", cfg.Panel.Listen)
 	if err != nil {
 		return err
@@ -96,6 +103,8 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	go func() { defer colDone.Done(); col.Run(cctx) }()
 	colDone.Add(1)
 	go func() { defer colDone.Done(); purgeSessionsLoop(cctx, st, purgeEvery, log) }()
+	colDone.Add(1)
+	go func() { defer colDone.Done(); s.PendingLoop(cctx, pendingCheckEvery) }()
 	defer func() { stopCollector(); colDone.Wait() }()
 	srv := &http.Server{
 		Handler:           s.Handler(),

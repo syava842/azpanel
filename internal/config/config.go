@@ -47,6 +47,9 @@ type Panel struct {
 	// RequireAdmin2FA — администратор без двухфакторной проверки после
 	// входа обязан её включить, пока не включит, дальше не пускают.
 	RequireAdmin2FA bool `toml:"require_admin_2fa"`
+	// AllowIPs — белый список адресов панели: IP или CIDR; пусто — без
+	// ограничения.
+	AllowIPs []string `toml:"allow_ips"`
 }
 
 type Log struct {
@@ -135,6 +138,8 @@ func (c Config) Validate() error {
 		return fmt.Errorf("panel.history_days = %d, нужно 1..365", p.HistoryDays)
 	case p.SessionHours < 1 || p.SessionHours > 720:
 		return fmt.Errorf("panel.session_hours = %d, нужно 1..720", p.SessionHours)
+	case allowErr(p.AllowIPs) != nil:
+		return fmt.Errorf("panel.allow_ips: %w", allowErr(p.AllowIPs))
 	case c.Log.MaxSizeMB < 1 || c.Log.MaxSizeMB > 1000:
 		return fmt.Errorf("log.max_size_mb = %d, нужно 1..1000", c.Log.MaxSizeMB)
 	case c.Log.Keep < 1 || c.Log.Keep > 100:
@@ -159,4 +164,44 @@ func Save(path string, c Config) error {
 		return err
 	}
 	return fsutil.WriteFileAtomic(path, buf.Bytes(), 0o600)
+}
+
+func allowErr(list []string) error {
+	_, err := ParseAllowIPs(list)
+	return err
+}
+
+// ParseAllowIPs разбирает белый список: каждая запись — IP или CIDR.
+// Одиночный адрес становится префиксом /32 (/128). Пусто — без ограничения.
+func ParseAllowIPs(list []string) ([]netip.Prefix, error) {
+	out := make([]netip.Prefix, 0, len(list))
+	for _, raw := range list {
+		v := strings.TrimSpace(raw)
+		if v == "" {
+			return nil, errors.New("пустая запись")
+		}
+		if strings.Contains(v, "/") {
+			p, err := netip.ParsePrefix(v)
+			if err != nil {
+				return nil, fmt.Errorf("%q: неверная сеть", v)
+			}
+			out = append(out, netip.PrefixFrom(p.Addr().Unmap(), unmapBits(p)).Masked())
+			continue
+		}
+		a, err := netip.ParseAddr(v)
+		if err != nil {
+			return nil, fmt.Errorf("%q: неверный адрес", v)
+		}
+		a = a.Unmap()
+		out = append(out, netip.PrefixFrom(a, a.BitLen()))
+	}
+	return out, nil
+}
+
+// unmapBits: длина префикса IPv4-в-IPv6 (::ffff:a.b.c.d/N) пересчитывается в IPv4.
+func unmapBits(p netip.Prefix) int {
+	if p.Addr().Is4In6() && p.Bits() >= 96 {
+		return p.Bits() - 96
+	}
+	return p.Bits()
 }

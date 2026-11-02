@@ -1,0 +1,20 @@
+{{define "content"}}
+<h1>Доступ</h1>
+{{if .Notice}}<div class="flash">{{.Notice}}</div>{{end}}
+{{if .Pending}}
+<form method="post" action="/settings/access/confirm" class="card">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <p>Новый список ({{.Pending.New}}) применён и вернётся к прежнему в {{.Pending.Deadline}} (осталось около {{.Pending.Left}} с), если его не подтвердить.</p>
+  <button type="submit">Подтвердить</button>
+</form>
+{{end}}
+<form method="post" action="/settings/access" class="card">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  {{if .Warn}}<input type="hidden" name="lockout" value="1">{{end}}
+  <label>Белый список адресов панели (IP или сеть CIDR, по одному в строке; пусто — без ограничения)
+    <textarea name="ips" rows="6" cols="40" spellcheck="false">{{.Ips}}</textarea>
+  </label>
+  <p class="muted">Ваш адрес: {{.Remote}}. Изменение действует сразу, но без подтверждения через 2 минуты прежний список вернётся.</p>
+  <button type="submit">{{if .Warn}}Всё равно применить{{else}}Применить{{end}}</button>
+</form>
+{{end}}

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -21,7 +22,7 @@ func TestLoadMissingGivesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c != Default() {
+	if !reflect.DeepEqual(c, Default()) {
 		t.Fatalf("получено %+v", c)
 	}
 }
@@ -64,7 +65,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != c {
+	if !reflect.DeepEqual(got, c) {
 		t.Fatalf("получено %+v, ждали %+v", got, c)
 	}
 }
@@ -125,5 +126,41 @@ func TestRequireAdmin2FA(t *testing.T) {
 	}
 	if _, err := Load(write(t, "config_version = 2\n[panel]\nrequire_admin_2fa = \"да\"\n")); err == nil {
 		t.Fatal("не-bool в require_admin_2fa должен отвергаться")
+	}
+}
+
+func TestParseAllowIPs(t *testing.T) {
+	got, err := ParseAllowIPs([]string{"10.0.0.0/8", "192.0.2.7", "2001:db8::/32", " ::1 "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"10.0.0.0/8", "192.0.2.7/32", "2001:db8::/32", "::1/128"}
+	if len(got) != len(want) {
+		t.Fatalf("получено %v", got)
+	}
+	for i := range want {
+		if got[i].String() != want[i] {
+			t.Errorf("[%d] = %s, ждали %s", i, got[i], want[i])
+		}
+	}
+	if got, err := ParseAllowIPs(nil); err != nil || len(got) != 0 {
+		t.Fatalf("пустой список: %v %v", got, err)
+	}
+	for _, bad := range []string{"", "10.0.0.0/33", "abc", "10.0.0.256", "1.2.3.4/x"} {
+		if _, err := ParseAllowIPs([]string{bad}); err == nil {
+			t.Errorf("%q: ждали ошибку", bad)
+		}
+	}
+}
+
+func TestValidateAllowIPs(t *testing.T) {
+	c := Default()
+	c.Panel.AllowIPs = []string{"10.0.0.0/8"}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	c.Panel.AllowIPs = []string{"nope"}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "panel.allow_ips") {
+		t.Fatalf("ошибка = %v", err)
 	}
 }

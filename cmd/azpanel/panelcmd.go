@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"golang.org/x/term"
 
@@ -99,6 +100,16 @@ func cmdPanelPasswd(args []string, in io.Reader, readTerm func() ([]byte, error)
 	}
 	if err := secrets.SetMany(paths.SecretsFile(), kv); err != nil {
 		return err
+	}
+	// Пользователи живут в базе: пароль применяется и там (обратная
+	// совместимость — это сброс первого администратора без смены пароля).
+	who, err := resetFirstAdmin(context.Background(), user, hash, time.Now())
+	if err != nil {
+		return fmt.Errorf("пароль записан в secrets.env, но в базе не обновлён: %w", err)
+	}
+	if who != "" {
+		fmt.Fprintf(out, "пароль пользователя %s задан, его сессии и 2FA сброшены\n", who)
+		return nil
 	}
 	fmt.Fprintln(out, "пароль задан; перезапустите панель: systemctl restart azpanel-panel")
 	return nil
