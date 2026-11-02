@@ -31,3 +31,22 @@ func (s *Store) ClearMeta(ctx context.Context, key string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM meta WHERE key = ?`, key)
 	return err
 }
+
+// MetaPrefix — все пары meta, ключ которых начинается с prefix (без учёта
+// подстановочных знаков LIKE в самом префиксе).
+func (s *Store) MetaPrefix(ctx context.Context, prefix string) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT key, value FROM meta WHERE substr(key, 1, ?) = ?`, len([]rune(prefix)), prefix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		out[k] = v
+	}
+	return out, rows.Err()
+}

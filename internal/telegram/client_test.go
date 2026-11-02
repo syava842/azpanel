@@ -210,3 +210,55 @@ func TestGetUpdatesStopsOnContext(t *testing.T) {
 		t.Fatalf("ожидалась отмена: %v", err)
 	}
 }
+
+func TestRetryAfterOverLimitFailsFast(t *testing.T) {
+	n := 0
+	c, sleeps := newTest(t, func(w http.ResponseWriter, r *http.Request) {
+		n++
+		w.WriteHeader(429)
+		io.WriteString(w, `{"ok":false,"error_code":429,"description":"Too Many Requests","parameters":{"retry_after":3600}}`)
+	})
+	_, err := c.GetUpdates(context.Background(), 0, 1)
+	var ae *APIError
+	if !errors.As(err, &ae) || ae.Code != 429 {
+		t.Fatalf("ожидалась ошибка 429, получено %v", err)
+	}
+	if n != 1 || len(*sleeps) != 0 {
+		t.Fatalf("при паузе дольше предела ждать нельзя: запросов %d, пауз %v", n, *sleeps)
+	}
+}
+
+func TestRetryAfterTotalWaitBounded(t *testing.T) {
+	n := 0
+	c, sleeps := newTest(t, func(w http.ResponseWriter, r *http.Request) {
+		n++
+		w.WriteHeader(429)
+		io.WriteString(w, `{"ok":false,"error_code":429,"description":"Too Many Requests","parameters":{"retry_after":200}}`)
+	})
+	c.sleep = func(ctx context.Context, d time.Duration) error { *sleeps = append(*sleeps, d); return nil }
+	if _, err := c.GetUpdates(context.Background(), 0, 1); err == nil {
+		t.Fatal("ожидалась ошибка 429")
+	}
+	var total time.Duration
+	for _, d := range *sleeps {
+		total += d
+	}
+	if total > max429Wait {
+		t.Fatalf("суммарное ожидание %v больше предела %v", total, max429Wait)
+	}
+}
+
+func TestSendDocumentUsesOwnTimeout(t *testing.T) {
+	c, _ := newTest(t, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"ok":true,"result":{"message_id":1,"chat":{"id":1,"type":"private"}}}`)
+	})
+	if c.fileHTTP == nil || c.fileHTTP.Timeout != 0 {
+		t.Fatal("для файлов нужен клиент без общего тайм-аута")
+	}
+	if fileTimeout < 10*time.Minute {
+		t.Fatalf("тайм-аут файла %v меньше 10 минут", fileTimeout)
+	}
+	if _, err := c.SendDocument(context.Background(), 1, "a.tar.gz", strings.NewReader("x"), ""); err != nil {
+		t.Fatal(err)
+	}
+}

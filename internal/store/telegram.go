@@ -29,6 +29,53 @@ func (s *Store) SetTelegramID(ctx context.Context, userID, tgID int64) error {
 	return err
 }
 
+// ErrBindRefused — пользователь не подходит для привязки из бота: администратор
+// или отключённая учётная запись.
+var ErrBindRefused = errors.New("к этому пользователю Telegram из бота привязать нельзя")
+
+// ErrTelegramBound — у пользователя уже есть привязка.
+var ErrTelegramBound = errors.New("у пользователя уже привязан другой Telegram")
+
+// BindTelegramID привязывает Telegram по заявке: одним UPDATE и только обычному
+// активному пользователю без привязки. Администратору привязка из бота по
+// заявке не выдаётся никогда (только через вход в веб), чужая привязка не
+// затирается.
+func (s *Store) BindTelegramID(ctx context.Context, userID, tgID int64) error {
+	return s.bindTelegram(ctx, userID, tgID, true)
+}
+
+// LinkTelegramID привязывает Telegram по одноразовому коду из веб-сессии
+// самого пользователя (с подтверждением паролем): подходит и администратору,
+// но тоже только активному и без прежней привязки.
+func (s *Store) LinkTelegramID(ctx context.Context, userID, tgID int64) error {
+	return s.bindTelegram(ctx, userID, tgID, false)
+}
+
+func (s *Store) bindTelegram(ctx context.Context, userID, tgID int64, userOnly bool) error {
+	q := `UPDATE users SET telegram_id = ? WHERE id = ? AND telegram_id IS NULL AND disabled = 0`
+	if userOnly {
+		q += ` AND role = 'user'`
+	}
+	res, err := s.db.ExecContext(ctx, q, tgID, userID)
+	if isUnique(err) {
+		return ErrTelegramTaken
+	}
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		return nil
+	}
+	u, err := s.UserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if u.TelegramID != nil {
+		return ErrTelegramBound
+	}
+	return ErrBindRefused
+}
+
 // ClearTelegramID снимает привязку.
 func (s *Store) ClearTelegramID(ctx context.Context, userID int64) error {
 	return s.setFields(ctx, `UPDATE users SET telegram_id = NULL WHERE id = ?`, userID)
@@ -204,4 +251,28 @@ func (s *Store) ClientKinds(ctx context.Context, node int64, name string) ([]str
 func (s *Store) DeleteClientKinds(ctx context.Context, node int64, name string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM client_kinds WHERE node_id = ? AND name = ?`, node, name)
 	return err
+}
+
+// TelegramBan — заблокированный Telegram ID.
+type TelegramBan struct {
+	ID      int64
+	Created int64
+}
+
+// TelegramBans — заблокированные ID, новые первыми.
+func (s *Store) TelegramBans(ctx context.Context) ([]TelegramBan, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT telegram_id, created FROM tg_banned ORDER BY created DESC, telegram_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []TelegramBan{}
+	for rows.Next() {
+		var b TelegramBan
+		if err := rows.Scan(&b.ID, &b.Created); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
 }

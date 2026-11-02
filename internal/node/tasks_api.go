@@ -22,9 +22,16 @@ func (a *API) profilesBusy(w http.ResponseWriter) bool {
 	if a.Tasks == nil {
 		return false
 	}
-	if t, ok := a.Tasks.Running(); ok && t.Kind == TaskProfiles {
-		writeErr(w, http.StatusConflict, "идёт задача пересоздания профилей — дождитесь её окончания")
-		return true
+	if t, ok := a.Tasks.Running(); ok {
+		switch t.Kind {
+		case TaskProfiles:
+			writeErr(w, http.StatusConflict, "идёт задача пересоздания профилей — дождитесь её окончания")
+			return true
+		case TaskBackup:
+			// client.sh 8 читает те же файлы клиентов: архив вышел бы несогласованным.
+			writeErr(w, http.StatusConflict, "идёт бэкап сервера — дождитесь его окончания")
+			return true
+		}
 	}
 	return false
 }

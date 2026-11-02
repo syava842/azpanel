@@ -24,6 +24,10 @@ const (
 	httpTimeout     = 60 * time.Second
 	maxBackoff      = 60 * time.Second
 	max429Retries   = 5
+	// max429Wait — сколько всего можно ждать после ответов 429; дольше — отказ сразу.
+	max429Wait = 5 * time.Minute
+	// fileTimeout — предел одной отправки файла (бэкап до 50 МБ по медленному каналу).
+	fileTimeout = 10 * time.Minute
 )
 
 // Client — клиент Bot API. Безопасен для параллельного использования.
@@ -31,7 +35,9 @@ type Client struct {
 	token   string
 	baseURL string
 	http    *http.Client
-	sleep   func(ctx context.Context, d time.Duration) error // подменяется в тестах
+	// fileHTTP — клиент для отправки файлов: без общего тайм-аута, предел задаёт контекст.
+	fileHTTP *http.Client
+	sleep    func(ctx context.Context, d time.Duration) error // подменяется в тестах
 }
 
 // New создаёт клиент; пустой baseURL означает https://api.telegram.org.
@@ -40,10 +46,11 @@ func New(token, baseURL string) *Client {
 		baseURL = DefaultBaseURL
 	}
 	return &Client{
-		token:   token,
-		baseURL: strings.TrimRight(baseURL, "/"),
-		http:    &http.Client{Timeout: httpTimeout},
-		sleep:   sleepCtx,
+		token:    token,
+		baseURL:  strings.TrimRight(baseURL, "/"),
+		http:     &http.Client{Timeout: httpTimeout},
+		fileHTTP: &http.Client{},
+		sleep:    sleepCtx,
 	}
 }
 
@@ -104,13 +111,18 @@ type apiResponse struct {
 
 // do выполняет запрос; при 429 ждёт retry_after и повторяет (до max429Retries раз).
 func (c *Client) do(ctx context.Context, method, contentType string, body []byte) (json.RawMessage, error) {
+	return c.doWith(ctx, c.http, method, contentType, body)
+}
+
+func (c *Client) doWith(ctx context.Context, hc *http.Client, method, contentType string, body []byte) (json.RawMessage, error) {
+	var waited time.Duration
 	for attempt := 0; ; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint(method), bytes.NewReader(body))
 		if err != nil {
 			return nil, c.redact(fmt.Errorf("запрос %s: %w", method, err))
 		}
 		req.Header.Set("Content-Type", contentType)
-		resp, err := c.http.Do(req)
+		resp, err := hc.Do(req)
 		if err != nil {
 			// *url.Error содержит URL с токеном — берём только вложенную причину.
 			var ue *url.Error
@@ -140,6 +152,10 @@ func (c *Client) do(ctx context.Context, method, contentType string, body []byte
 			if wait <= 0 {
 				wait = time.Second
 			}
+			if waited+wait > max429Wait {
+				return nil, ae // слишком долго: пусть решает вызывающий
+			}
+			waited += wait
 			if err := c.sleep(ctx, wait); err != nil {
 				return nil, c.redact(err)
 			}
@@ -273,7 +289,9 @@ func (c *Client) sendFile(ctx context.Context, method, field string, chatID int6
 	if err := mw.Close(); err != nil {
 		return nil, c.redact(fmt.Errorf("форма %s: %w", method, err))
 	}
-	res, err := c.do(ctx, method, mw.FormDataContentType(), buf.Bytes())
+	fctx, cancel := context.WithTimeout(ctx, fileTimeout)
+	defer cancel()
+	res, err := c.doWith(fctx, c.fileHTTP, method, mw.FormDataContentType(), buf.Bytes())
 	if err != nil {
 		return nil, err
 	}

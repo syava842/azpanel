@@ -35,3 +35,15 @@ func TestMeta(t *testing.T) {
 		t.Fatalf("повторное удаление: %v", err)
 	}
 }
+
+func TestMetaPrefixOnlyMatching(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	_ = s.SetMeta(ctx, "cert_warn:a", "1")
+	_ = s.SetMeta(ctx, "cert_warn:б", "2")
+	_ = s.SetMeta(ctx, "cert_other", "3")
+	got, err := s.MetaPrefix(ctx, "cert_warn:")
+	if err != nil || len(got) != 2 || got["cert_warn:a"] != "1" {
+		t.Fatalf("получено %v, %v", got, err)
+	}
+}

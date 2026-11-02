@@ -190,3 +190,90 @@ func TestClientKinds(t *testing.T) {
 		t.Fatal("DeleteClientKinds не удалил")
 	}
 }
+
+func TestBindTelegramIDOnlyFreeActiveUser(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	free := tgUser(t, s, "free")
+	adm, _ := s.CreateUser(ctx, User{Login: "adm", Hash: "x", Role: RoleAdmin, Created: 1})
+	off, _ := s.CreateUser(ctx, User{Login: "off", Hash: "x", Role: RoleUser, Disabled: true, Created: 1})
+	taken := tgUser(t, s, "taken")
+	if err := s.SetTelegramID(ctx, taken.ID, 50); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.BindTelegramID(ctx, adm.ID, 1); !errors.Is(err, ErrBindRefused) {
+		t.Fatalf("администратор: %v", err)
+	}
+	if err := s.BindTelegramID(ctx, off.ID, 1); !errors.Is(err, ErrBindRefused) {
+		t.Fatalf("отключённый: %v", err)
+	}
+	if err := s.BindTelegramID(ctx, taken.ID, 1); !errors.Is(err, ErrTelegramBound) {
+		t.Fatalf("уже привязанный: %v", err)
+	}
+	if u, _ := s.UserByID(ctx, taken.ID); u.TelegramID == nil || *u.TelegramID != 50 {
+		t.Fatal("чужая привязка затёрта")
+	}
+	if err := s.BindTelegramID(ctx, 9999, 1); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("нет пользователя: %v", err)
+	}
+	if err := s.BindTelegramID(ctx, free.ID, 50); !errors.Is(err, ErrTelegramTaken) {
+		t.Fatalf("занятый ID: %v", err)
+	}
+	if err := s.BindTelegramID(ctx, free.ID, 7); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTelegramBansList(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	_ = s.BanTelegram(ctx, 5, 100)
+	_ = s.BanTelegram(ctx, 6, 200)
+	got, err := s.TelegramBans(ctx)
+	if err != nil || len(got) != 2 || got[0].ID != 6 {
+		t.Fatalf("получено %+v, %v", got, err)
+	}
+}
+
+func TestOutboxFailCountAndStale(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	old, _ := s.Enqueue(ctx, "k", nil, "a", 100)
+	fresh, _ := s.Enqueue(ctx, "k", nil, "b", 1000)
+	if n, err := s.FailOutbox(ctx, fresh); err != nil || n != 1 {
+		t.Fatalf("первый сбой: %d, %v", n, err)
+	}
+	if n, _ := s.FailOutbox(ctx, fresh); n != 2 {
+		t.Fatalf("второй сбой: %d", n)
+	}
+	items, _ := s.Pending(ctx, 0)
+	if len(items) != 2 || items[1].Attempts != 2 {
+		t.Fatalf("счётчик не в очереди: %+v", items)
+	}
+	n, err := s.MarkSentBefore(ctx, 500, 2000)
+	if err != nil || n != 1 {
+		t.Fatalf("устаревших: %d, %v", n, err)
+	}
+	items, _ = s.Pending(ctx, 0)
+	if len(items) != 1 || items[0].ID != fresh {
+		t.Fatalf("осталось %+v (старая %d)", items, old)
+	}
+	if _, err := s.FailOutbox(ctx, old); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("отправленная запись: %v", err)
+	}
+}
+
+func TestLinkTelegramIDAllowsAdminButNotBound(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	adm, _ := s.CreateUser(ctx, User{Login: "adm", Hash: "x", Role: RoleAdmin, Created: 1})
+	if err := s.LinkTelegramID(ctx, adm.ID, 11); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.LinkTelegramID(ctx, adm.ID, 12); !errors.Is(err, ErrTelegramBound) {
+		t.Fatalf("повторная привязка: %v", err)
+	}
+	if u, _ := s.UserByID(ctx, adm.ID); *u.TelegramID != 11 {
+		t.Fatal("привязка затёрта")
+	}
+}

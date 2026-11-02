@@ -98,3 +98,74 @@ func TestAPIBackupsSymlinkIgnored(t *testing.T) {
 		t.Fatalf("симлинк выдан: %v", err)
 	}
 }
+
+func TestAPIBackupAndRebootWaitForClientOps(t *testing.T) {
+	for _, name := range []string{"backup", "reboot"} {
+		t.Run(name, func(t *testing.T) {
+			e, f, _ := tasksEnv(t)
+			e.api.ops.Lock() // идёт операция над клиентом
+			var err error
+			if name == "backup" {
+				_, err = e.client.CreateBackup(context.Background())
+			} else {
+				_, err = e.client.Reboot(context.Background())
+			}
+			e.api.ops.Unlock()
+			if status(err) != 409 {
+				t.Fatalf("при идущей операции над клиентом ожидался 409: %v", err)
+			}
+			if len(f.calls) != 0 {
+				t.Fatalf("команда запущена вопреки операции: %v", f.calls)
+			}
+		})
+	}
+}
+
+func TestAPIClientOpsWaitForRunningBackup(t *testing.T) {
+	e, f, tk := tasksEnv(t)
+	task, err := e.client.CreateBackup(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.client.RebuildProfiles(context.Background()); status(err) != 409 {
+		t.Fatalf("profiles при идущем бэкапе: %v", err)
+	}
+	if _, err := e.client.DeleteClient(context.Background(), "openvpn", "alice"); status(err) != 409 {
+		t.Fatalf("операция над клиентом при идущем бэкапе: %v", err)
+	}
+	f.done()
+	waitFinished(t, tk, task.ID)
+}
+
+func TestAPIBackupDirDefaultsToAntiZapretDir(t *testing.T) {
+	e := newAPI(t)
+	e.api.BackupDir = ""
+	e.api.AntiZapretDir = t.TempDir()
+	os.WriteFile(filepath.Join(e.api.AntiZapretDir, "backup-9.9.9.9.tar.gz"), []byte("X"), 0o600)
+	list, err := e.client.Backups(context.Background())
+	if err != nil || len(list) != 1 {
+		t.Fatalf("каталог AntiZapret не учтён: %+v, %v", list, err)
+	}
+}
+
+func TestAPIBackupSwapToSymlinkRefused(t *testing.T) {
+	e := newAPI(t)
+	dir := t.TempDir()
+	e.api.BackupDir = dir
+	outside := filepath.Join(t.TempDir(), "secret")
+	os.WriteFile(outside, []byte("чужое"), 0o600)
+	link := filepath.Join(dir, "backup-s.tar.gz")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skip("ссылки недоступны:", err)
+	}
+	if _, err := openRegular(link); err == nil {
+		t.Fatal("ссылка открыта как обычный файл")
+	}
+	plain := filepath.Join(dir, "backup-p.tar.gz")
+	os.WriteFile(plain, []byte("ok"), 0o600)
+	f, err := openRegular(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+}

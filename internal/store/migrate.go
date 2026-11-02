@@ -83,6 +83,8 @@ CREATE TABLE tg_requests (telegram_id INTEGER PRIMARY KEY, username TEXT, name T
 CREATE TABLE tg_banned (telegram_id INTEGER PRIMARY KEY, created INTEGER NOT NULL);
 CREATE TABLE client_kinds (node_id INTEGER NOT NULL, name TEXT NOT NULL, allowed TEXT NOT NULL,
   PRIMARY KEY (node_id, name));`,
+	// Очередь уведомлений: счётчик неудачных проходов доставки переживает перезапуск.
+	`ALTER TABLE outbox ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;`,
 }
 
 // SchemaVersion — версия схемы в базе; 0 у пустой.
