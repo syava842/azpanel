@@ -63,6 +63,10 @@ func newSyncFake(name string, log *[]string) *syncFake {
 		now, zero := time.Now(), 0
 		return nodeapi.TaskDetail{Task: nodeapi.Task{ID: id, Finished: &now, ExitCode: &zero}}, nil
 	}
+	f.RestartAntiZapretFn = func(context.Context) (nodeapi.Task, error) {
+		f.note("restart")
+		return nodeapi.Task{ID: "0123456789ab"}, nil
+	}
 	f.ApplyRoutingFn = func(context.Context) (nodeapi.Task, error) {
 		f.note("doall")
 		return nodeapi.Task{ID: "0123456789ab"}, nil
@@ -596,4 +600,14 @@ func (f *syncFake) noteLocked(s string) {
 	logMu.Lock()
 	defer logMu.Unlock()
 	*f.log = append(*f.log, f.name+":"+s)
+}
+
+func TestAlignRefusedRemovalAsksForForce(t *testing.T) {
+	g := groupEnv(t)
+	grp := g.makeGroup(t)
+	g.replica.applyErr = &nodeapi.Error{Status: 422, Message: "удаление pki/ca.crt"}
+	g.call(t, gpath(grp, "/align/"+strconv.FormatInt(g.repID, 10)), nil)
+	if body := get(g.testEnv, g.c, gpath(grp, "")).Body.String(); !strings.Contains(body, "разрешить удаление ключевых файлов») ") && !strings.Contains(body, "агент отказал в удалении файлов") {
+		t.Fatalf("нет подсказки про force: %s", body)
+	}
 }

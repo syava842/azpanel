@@ -39,6 +39,7 @@
       <form method="post" action="{{url $.Href "/align/" .ID}}" class="inline">
         <input type="hidden" name="csrf" value="{{$.CSRF}}">
         <label><input type="checkbox" name="confirm" value="1"> подтверждаю</label>
+        <label><input type="checkbox" name="force" value="1"> разрешить удаление ключевых файлов</label>
         <button type="submit" class="danger">Выровнять</button>
       </form>
       <form method="post" action="{{url $.Href "/promote/" .ID}}" class="inline">

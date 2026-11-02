@@ -346,7 +346,7 @@ type pushResult struct {
 // pushToReplica копирует расхождения с основного на реплику. full — заменить
 // набор целиком (с удалением лишнего); иначе только изменившиеся файлы, а
 // лишние на реплике (удалённые на основном клиенты) удаляются списком в архиве.
-func pushToReplica(ctx context.Context, primary, replica *conn, full bool) (pushResult, error) {
+func pushToReplica(ctx context.Context, primary, replica *conn, full, force bool) (pushResult, error) {
 	ps, ok := primary.syncer()
 	rs, ok2 := replica.syncer()
 	if !ok || !ok2 {
@@ -376,9 +376,13 @@ func pushToReplica(ctx context.Context, primary, replica *conn, full bool) (push
 	}
 	pr, pw := io.Pipe()
 	go func() { pw.CloseWithError(buildArchive(ctx, ps, entries, removals, pw)) }()
-	task, err := rs.SyncApply(ctx, pr, nodeapi.SyncApplyOpts{})
+	task, err := rs.SyncApply(ctx, pr, nodeapi.SyncApplyOpts{Force: force})
 	pr.CloseWithError(errors.New("приём завершён"))
 	if err != nil {
+		var ne *nodeapi.Error
+		if errors.As(err, &ne) && ne.Status == http.StatusUnprocessableEntity {
+			return pushResult{}, fmt.Errorf("агент отказал в удалении файлов (%s): проверьте основной; если удаление нужно, повторите «Выровнять» с отметкой «разрешить удаление ключевых файлов»", ne.Message)
+		}
 		return pushResult{}, fmt.Errorf("реплика не приняла набор: %w", err)
 	}
 	if err := waitTask(ctx, replica.node, task.ID); err != nil {
@@ -398,6 +402,19 @@ func pushToReplica(ctx context.Context, primary, replica *conn, full bool) (push
 		}
 		if err := waitTask(ctx, replica.node, t.ID); err != nil {
 			return pushResult{}, fmt.Errorf("применение списков на реплике: %w", err)
+		}
+	}
+	restart := full
+	for _, e := range push {
+		restart = restart || path.Base(e.Path) == "setup"
+	}
+	if restart {
+		t, err := replica.node.RestartAntiZapret(ctx)
+		if err != nil {
+			return pushResult{}, fmt.Errorf("перезапуск AntiZapret на реплике: %w", err)
+		}
+		if err := waitTask(ctx, replica.node, t.ID); err != nil {
+			return pushResult{}, fmt.Errorf("перезапуск AntiZapret на реплике: %w", err)
 		}
 	}
 	// Сверка после записи: набор обязан совпасть.

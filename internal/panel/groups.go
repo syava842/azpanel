@@ -133,7 +133,7 @@ func (s *Server) syncGroupLocked(ctx context.Context, g store.Group) error {
 			errs = append(errs, fmt.Errorf("«%s»: %w", m.name, m.err))
 			continue
 		}
-		if _, err := pushToReplica(ctx, primary.c, m.c, false); err != nil {
+		if _, err := pushToReplica(ctx, primary.c, m.c, false, false); err != nil {
 			errs = append(errs, fmt.Errorf("«%s»: %w", m.name, err))
 		}
 	}
@@ -468,7 +468,7 @@ func (s *Server) groupAlign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := s.startJob(g, "Выровнять «"+rec.Name+"»", func(ctx context.Context, j *groupJob) error {
-		return s.alignReplica(ctx, j, g, rec)
+		return s.alignReplica(ctx, j, g, rec, r.PostForm.Get("force") == "1")
 	})
 	if err != nil {
 		s.groupView(w, r, http.StatusConflict, g, err.Error())
@@ -478,7 +478,7 @@ func (s *Server) groupAlign(w http.ResponseWriter, r *http.Request) {
 	s.redirectMsg(w, r, "/groups/"+strconv.FormatInt(g.ID, 10), "job_started")
 }
 
-func (s *Server) alignReplica(ctx context.Context, j *groupJob, g store.Group, rec store.NodeRec) error {
+func (s *Server) alignReplica(ctx context.Context, j *groupJob, g store.Group, rec store.NodeRec, force bool) error {
 	primary, _, err := s.groupMembers(ctx, g.ID)
 	if err != nil {
 		return err
@@ -504,7 +504,7 @@ func (s *Server) alignReplica(ctx context.Context, j *groupJob, g store.Group, r
 		return err
 	}
 	if err := j.step("Замена набора файлов реплики набором основного", func() error {
-		_, err := pushToReplica(ctx, primary.c, rc, true)
+		_, err := pushToReplica(ctx, primary.c, rc, true, force)
 		return err
 	}); err != nil {
 		return err
