@@ -170,7 +170,7 @@ func (s *Server) createClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Log.Info("действие", "user", s.user(r), "op", "create", "client", name, "detail", kind)
-	redirectMsg(w, r, clientHref(name), "создан")
+	redirectMsg(w, r, clientHref(name), "created")
 }
 
 func (s *Server) user(r *http.Request) string {
@@ -178,8 +178,44 @@ func (s *Server) user(r *http.Request) string {
 	return sess.User
 }
 
-func redirectMsg(w http.ResponseWriter, r *http.Request, to, msg string) {
-	http.Redirect(w, r, to+"?msg="+url.QueryEscape(msg), http.StatusSeeOther)
+// msgTexts — тексты уведомлений по кодам из ?msg=. Текст берётся только
+// отсюда: произвольная строка из адреса на странице не показывается.
+// %d подставляется из числового параметра n.
+var msgTexts = map[string]string{
+	"created":   "создан",
+	"deleted":   "удалён",
+	"renewed":   "продлён на %d дн.",
+	"limit_set": "лимит: %d",
+	"limit_off": "лимит снят",
+	"blocked":   "заблокирован, разорвано сессий: %d",
+	"unblocked": "разблокирован",
+}
+
+// redirectMsg ведёт на страницу с уведомлением по коду; n — число для
+// кодов с %d.
+func redirectMsg(w http.ResponseWriter, r *http.Request, to, code string, n ...int) {
+	q := "?msg=" + url.QueryEscape(code)
+	if len(n) > 0 {
+		q += "&n=" + strconv.Itoa(n[0])
+	}
+	http.Redirect(w, r, to+q, http.StatusSeeOther)
+}
+
+// flashText: текст уведомления по ?msg= и ?n=; неизвестный код или
+// неразобранное число — пустая строка, ничего не показывается.
+func flashText(r *http.Request) string {
+	text, ok := msgTexts[r.URL.Query().Get("msg")]
+	if !ok {
+		return ""
+	}
+	if !strings.Contains(text, "%d") {
+		return text
+	}
+	n, err := strconv.Atoi(r.URL.Query().Get("n"))
+	if err != nil || n < 0 || n > 1_000_000 {
+		return ""
+	}
+	return fmt.Sprintf(text, n)
 }
 
 // card показывает карточку клиента; сбой сессий или профилей карточку не
@@ -281,9 +317,9 @@ func (s *Server) profileQR(w http.ResponseWriter, r *http.Request) {
 }
 
 // done пишет успешное действие в журнал и возвращает на карточку.
-func (s *Server) done(w http.ResponseWriter, r *http.Request, c nodeapi.Client, op, detail, msg string) {
+func (s *Server) done(w http.ResponseWriter, r *http.Request, c nodeapi.Client, op, detail, code string, n ...int) {
 	s.Log.Info("действие", "user", s.user(r), "op", op, "client", c.Name, "detail", detail)
-	redirectMsg(w, r, clientHref(c.Name), msg)
+	redirectMsg(w, r, clientHref(c.Name), code, n...)
 }
 
 // failed — ошибка агента: в журнал и на карточку с текстом агента.
@@ -307,7 +343,7 @@ func (s *Server) renew(w http.ResponseWriter, r *http.Request) {
 		s.failed(w, r, c, "renew", err)
 		return
 	}
-	s.done(w, r, c, "renew", fmt.Sprintf("%d дн.", days), fmt.Sprintf("продлён на %d дн.", days))
+	s.done(w, r, c, "renew", fmt.Sprintf("%d дн.", days), "renewed", days)
 }
 
 func (s *Server) setLimit(w http.ResponseWriter, r *http.Request) {
@@ -324,11 +360,11 @@ func (s *Server) setLimit(w http.ResponseWriter, r *http.Request) {
 		s.failed(w, r, c, "limit", err)
 		return
 	}
-	msg := fmt.Sprintf("лимит: %d", limit)
 	if limit == 0 {
-		msg = "лимит снят"
+		s.done(w, r, c, "limit", "0", "limit_off")
+		return
 	}
-	s.done(w, r, c, "limit", strconv.Itoa(limit), msg)
+	s.done(w, r, c, "limit", strconv.Itoa(limit), "limit_set", limit)
 }
 
 func (s *Server) block(w http.ResponseWriter, r *http.Request) {
@@ -351,10 +387,10 @@ func (s *Server) block(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if blocked {
-		s.done(w, r, c, "block", fmt.Sprintf("разорвано сессий: %d", res.Killed), fmt.Sprintf("заблокирован, разорвано сессий: %d", res.Killed))
+		s.done(w, r, c, "block", fmt.Sprintf("разорвано сессий: %d", res.Killed), "blocked", res.Killed)
 		return
 	}
-	s.done(w, r, c, "unblock", "", "разблокирован")
+	s.done(w, r, c, "unblock", "", "unblocked")
 }
 
 func (s *Server) deleteClient(w http.ResponseWriter, r *http.Request) {
@@ -376,5 +412,5 @@ func (s *Server) deleteClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Log.Info("действие", "user", s.user(r), "op", "delete", "client", c.Name, "detail", kind)
-	redirectMsg(w, r, "/", "удалён")
+	redirectMsg(w, r, "/", "deleted")
 }

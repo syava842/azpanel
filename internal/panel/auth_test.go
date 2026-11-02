@@ -2,6 +2,8 @@ package panel
 
 import (
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -64,29 +66,48 @@ func TestLimiter(t *testing.T) {
 	l := NewLimiter()
 	now := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
 	l.Now = func() time.Time { return now }
-	for i := 0; i < 4; i++ {
-		l.Fail("1.1.1.1")
+	for i := 0; i < 5; i++ {
+		if !l.Begin("1.1.1.1") {
+			t.Fatalf("попытка %d отклонена", i+1)
+		}
 	}
-	if l.Blocked("1.1.1.1") {
-		t.Fatal("заблокирован после 4 попыток")
+	if l.Begin("1.1.1.1") {
+		t.Fatal("шестая попытка прошла")
 	}
-	l.Fail("1.1.1.1")
-	if !l.Blocked("1.1.1.1") {
-		t.Fatal("не заблокирован после 5 попыток")
-	}
-	if l.Blocked("2.2.2.2") {
+	if !l.Begin("2.2.2.2") {
 		t.Fatal("чужой адрес задет")
 	}
 	now = now.Add(l.Window + time.Second)
-	if l.Blocked("1.1.1.1") {
+	if !l.Begin("1.1.1.1") {
 		t.Fatal("блокировка не снялась по окну")
 	}
-	for i := 0; i < 5; i++ {
-		l.Fail("3.3.3.3")
+	for i := 0; i < 4; i++ {
+		l.Begin("3.3.3.3")
 	}
 	l.Reset("3.3.3.3")
-	if l.Blocked("3.3.3.3") {
-		t.Fatal("Reset не снял блокировку")
+	for i := 0; i < 5; i++ {
+		if !l.Begin("3.3.3.3") {
+			t.Fatalf("после Reset попытка %d отклонена", i+1)
+		}
+	}
+}
+
+func TestLimiterConcurrent(t *testing.T) {
+	l := NewLimiter()
+	var wg sync.WaitGroup
+	var allowed atomic.Int32
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if l.Begin("1.1.1.1") {
+				allowed.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if allowed.Load() != 5 {
+		t.Fatalf("разрешено %d попыток, ждали 5", allowed.Load())
 	}
 }
 

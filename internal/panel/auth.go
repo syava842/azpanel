@@ -139,7 +139,7 @@ func (s *Sessions) Delete(id string) {
 	s.mu.Unlock()
 }
 
-// Limiter — неверные попытки входа по адресу.
+// Limiter — попытки входа по адресу.
 type Limiter struct {
 	Max    int           // 5
 	Window time.Duration // 15 мин
@@ -170,19 +170,20 @@ func (l *Limiter) prune(now time.Time) {
 	}
 }
 
-func (l *Limiter) Blocked(addr string) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.prune(l.Now())
-	return len(l.m[addr]) >= l.Max
-}
-
-func (l *Limiter) Fail(addr string) {
+// Begin засчитывает попытку входа ДО проверки пароля, в одной критической
+// секции с проверкой лимита: параллельные запросы не обходят ограничение.
+// false — лимит исчерпан, пароль проверять нельзя. Успешный вход снимает
+// счётчик через Reset; неудачный оставляет отметку как есть.
+func (l *Limiter) Begin(addr string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.Now()
 	l.prune(now)
+	if len(l.m[addr]) >= l.Max {
+		return false
+	}
 	l.m[addr] = append(l.m[addr], now)
+	return true
 }
 
 func (l *Limiter) Reset(addr string) {

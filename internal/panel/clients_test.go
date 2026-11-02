@@ -165,7 +165,7 @@ func TestClientCard(t *testing.T) {
 			{Kind: "wireguard", Variant: "vpn", File: "w b.conf"},
 		}, nil
 	}
-	rec := get(e, c, "/clients/azpanel-test-1?msg="+url.QueryEscape("создан"))
+	rec := get(e, c, "/clients/azpanel-test-1?msg=created")
 	body := rec.Body.String()
 	if rec.Code != 200 {
 		t.Fatalf("%d %s", rec.Code, body)
@@ -284,7 +284,7 @@ func TestBlock(t *testing.T) {
 	}
 	rec := post(e, c, "/clients/bob/block", url.Values{"csrf": {s.CSRF}, "blocked": {"1"}})
 	loc, _ := url.QueryUnescape(rec.Header().Get("Location"))
-	if rec.Code != 303 || !strings.Contains(loc, "заблокирован, разорвано сессий: 3") {
+	if rec.Code != 303 || !strings.HasSuffix(loc, "?msg=blocked&n=3") {
 		t.Fatalf("%d %q", rec.Code, loc)
 	}
 	rec = post(e, c, "/clients/bob/block", url.Values{"csrf": {s.CSRF}, "blocked": {"0"}})
@@ -316,7 +316,7 @@ func TestDelete(t *testing.T) {
 	}
 	rec := post(e, c, "/clients/bob/delete", url.Values{"csrf": {s.CSRF}, "kind": {"openvpn"}, "confirm": {"bob"}})
 	loc, _ := url.QueryUnescape(rec.Header().Get("Location"))
-	if rec.Code != 303 || loc != "/?msg=удалён" || gotKind != "openvpn" || gotName != "bob" {
+	if rec.Code != 303 || loc != "/?msg=deleted" || gotKind != "openvpn" || gotName != "bob" {
 		t.Fatalf("%d %q %s %s", rec.Code, loc, gotKind, gotName)
 	}
 }
@@ -368,5 +368,37 @@ func TestActionAgentError(t *testing.T) {
 	rec := post(e, c, "/clients/bob/limit", url.Values{"csrf": {s.CSRF}, "limit": {"5"}})
 	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "лимит не принят") || !strings.Contains(rec.Body.String(), "bob") {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestFlashMessagesFromServerTable(t *testing.T) {
+	e, c, _ := clientsEnv(t)
+	cases := []struct {
+		query, want string
+		shown       bool
+	}{
+		{"msg=created", "создан", true},
+		{"msg=renewed&n=30", "продлён на 30 дн.", true},
+		{"msg=blocked&n=3", "разорвано сессий: 3", true},
+		{"msg=limit_set&n=5", "лимит: 5", true},
+		{"msg=limit_off", "лимит снят", true},
+		{"msg=" + url.QueryEscape("Пароль сброшен, войдите с паролем admin12345"), "Пароль сброшен", false},
+		{"msg=renewed&n=abc", "продлён", false},
+		{"msg=blocked", "разорвано", false},
+		{"msg=renewed&n=-1", "продлён", false},
+	}
+	for _, tc := range cases {
+		body := get(e, c, "/clients/bob?"+tc.query).Body.String()
+		if got := strings.Contains(body, `class="flash"`); got != tc.shown {
+			t.Errorf("%s: плашка показана = %v", tc.query, got)
+		}
+		if got := strings.Contains(body, tc.want); got != tc.shown {
+			t.Errorf("%s: текст %q найден = %v", tc.query, tc.want, got)
+		}
+	}
+	// На странице входа произвольный msg тоже не выводится.
+	rec := e.do(httptest.NewRequest("GET", "/login?msg="+url.QueryEscape("войдите с паролем admin12345"), nil))
+	if strings.Contains(rec.Body.String(), "admin12345") || strings.Contains(rec.Body.String(), `class="flash"`) {
+		t.Fatalf("msg подставлен на странице входа: %s", rec.Body)
 	}
 }

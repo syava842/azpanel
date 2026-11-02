@@ -12,7 +12,9 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/syava842/azpanel/internal/nodeapi"
 )
@@ -26,6 +28,10 @@ var staticFS embed.FS
 const (
 	maxFormBody = 64 << 10
 	loginDelay  = time.Second
+
+	maxParallelBcrypt = 4           // одновременных проверок пароля
+	maxLoggedName     = 64          // рун имени в журнале
+	blockedLogEvery   = time.Minute // не чаще раза в минуту на адрес
 
 	contentSecurityPolicy = "default-src 'self'; img-src 'self' data:; frame-ancestors 'none'; form-action 'self'"
 )
@@ -56,8 +62,16 @@ type Server struct {
 	Limiter   *Limiter
 	Log       *slog.Logger
 	Sleep     func(time.Duration) // задержка неверного входа; в тестах — no-op
+	Now       func() time.Time    // по умолчанию time.Now
+	// CheckPassword — проверка входа; по умолчанию CheckPassword пакета,
+	// в тестах подменяется счётчиком.
+	CheckPassword func(wantUser, hash, user, pw string) bool
 
 	pages map[string]*template.Template
+
+	loginSem      chan struct{} // ограничивает одновременные bcrypt
+	blockedMu     sync.Mutex
+	blockedLogged map[string]time.Time // адрес -> когда последний раз писали 429
 }
 
 type ctxKey struct{}
@@ -71,6 +85,14 @@ func (s *Server) Handler() http.Handler {
 	if s.Sleep == nil {
 		s.Sleep = time.Sleep
 	}
+	if s.Now == nil {
+		s.Now = time.Now
+	}
+	if s.CheckPassword == nil {
+		s.CheckPassword = CheckPassword
+	}
+	s.loginSem = make(chan struct{}, maxParallelBcrypt)
+	s.blockedLogged = map[string]time.Time{}
 	s.pages = parsePages()
 
 	mux := http.NewServeMux()
@@ -85,7 +107,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(sub)))
 	mux.HandleFunc("GET /login", s.loginForm)
 	mux.HandleFunc("POST /login", s.loginSubmit)
-	mux.Handle("POST /logout", s.protect(s.logout))
+	mux.HandleFunc("POST /logout", s.logoutRoute)
 
 	// Всё остальное — за входом; новые страницы добавляются выше
 	// этих двух строк.
@@ -202,7 +224,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, page
 		d["CSRF"], d["User"] = sess.CSRF, sess.User
 	}
 	d["Version"] = s.Version
-	d["Msg"] = r.URL.Query().Get("msg")
+	d["Msg"] = flashText(r)
 	var buf bytes.Buffer
 	if err := t.ExecuteTemplate(&buf, "layout.html", d); err != nil {
 		s.Log.Error("шаблон не выполнен", "page", page, "err", err)
@@ -249,15 +271,20 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	host := remoteHost(r)
 	user, pw := r.PostForm.Get("user"), r.PostForm.Get("password")
-	if s.Limiter.Blocked(host) {
-		s.Log.Warn("вход заблокирован: слишком много попыток", "remote", host)
+	// Попытка засчитывается до bcrypt и атомарно с проверкой лимита.
+	if !s.Limiter.Begin(host) {
+		if s.shouldLogBlocked(host) {
+			s.Log.Warn("вход заблокирован: слишком много попыток", "remote", host)
+		}
 		s.renderLogin(w, r, http.StatusTooManyRequests, user, "слишком много попыток, подождите 15 минут")
 		return
 	}
-	if !CheckPassword(s.AdminUser, s.AdminHash, user, pw) {
+	s.loginSem <- struct{}{} // одновременно не больше maxParallelBcrypt проверок
+	ok := s.CheckPassword(s.AdminUser, s.AdminHash, user, pw)
+	<-s.loginSem
+	if !ok {
 		s.Sleep(loginDelay)
-		s.Limiter.Fail(host)
-		s.Log.Warn("неверный вход", "user", user, "remote", host)
+		s.Log.Warn("неверный вход", "user", truncateRunes(user, maxLoggedName), "remote", host)
 		s.renderLogin(w, r, http.StatusUnauthorized, user, "неверное имя или пароль")
 		return
 	}
@@ -267,22 +294,69 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 		s.errorPage(w, r, http.StatusInternalServerError, "внутренняя ошибка")
 		return
 	}
+	if c, err := r.Cookie(cookieName); err == nil {
+		s.Sessions.Delete(c.Value) // прежняя сессия этого браузера не должна жить дальше
+	}
 	s.Limiter.Reset(host)
 	http.SetCookie(w, &http.Cookie{
 		Name: cookieName, Value: sess.ID, Path: "/", Expires: sess.Expires,
 		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: isHTTPS(r),
 	})
-	s.Log.Info("вход", "user", user, "remote", host)
+	s.Log.Info("вход", "user", truncateRunes(user, maxLoggedName), "remote", host)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// shouldLogBlocked: 429 с одного адреса пишется в журнал не чаще раза в
+// минуту, иначе поток запросов вытеснит из ротации всё остальное.
+func (s *Server) shouldLogBlocked(host string) bool {
+	now := s.Now()
+	s.blockedMu.Lock()
+	defer s.blockedMu.Unlock()
+	for h, t := range s.blockedLogged {
+		if now.Sub(t) >= blockedLogEvery {
+			delete(s.blockedLogged, h)
+		}
+	}
+	if _, ok := s.blockedLogged[host]; ok {
+		return false
+	}
+	s.blockedLogged[host] = now
+	return true
+}
+
+// truncateRunes обрезает строку для журнала по рунам.
+func truncateRunes(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	return string([]rune(s)[:n]) + "…"
+}
+
+func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name: cookieName, Value: "", Path: "/", MaxAge: -1,
+		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: isHTTPS(r),
+	})
+}
+
+// logoutRoute: без живой сессии (истекла, вкладка осталась открытой) просто
+// стирает cookie и ведёт на вход — менять нечего, CSRF не нужен. С живой
+// сессией CSRF обязателен, как у остальных изменяющих маршрутов.
+func (s *Server) logoutRoute(w http.ResponseWriter, r *http.Request) {
+	if c, err := r.Cookie(cookieName); err == nil {
+		if _, ok := s.Sessions.Get(c.Value); ok {
+			s.protect(s.logout).ServeHTTP(w, r)
+			return
+		}
+	}
+	clearSessionCookie(w, r)
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	sess, _ := session(r)
 	s.Sessions.Delete(sess.ID)
-	http.SetCookie(w, &http.Cookie{
-		Name: cookieName, Value: "", Path: "/", MaxAge: -1,
-		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: isHTTPS(r),
-	})
-	s.Log.Info("выход", "user", sess.User, "remote", remoteHost(r))
+	clearSessionCookie(w, r)
+	s.Log.Info("выход", "user", truncateRunes(sess.User, maxLoggedName), "remote", remoteHost(r))
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }

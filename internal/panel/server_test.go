@@ -1,6 +1,7 @@
 package panel
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -338,5 +340,196 @@ func TestStaticAndNodeErr(t *testing.T) {
 		if st, tx := e.srv.nodeErr(c.err); st != c.status || tx != c.text {
 			t.Errorf("%v: %d %q", c.err, st, tx)
 		}
+	}
+}
+
+func TestLoginParallelDoesNotBypassLimit(t *testing.T) {
+	e := newEnv(t, adminHash(t))
+	e.srv.Sleep = func(time.Duration) {}
+	var checks atomic.Int32
+	e.srv.CheckPassword = func(_, _, _, _ string) bool {
+		checks.Add(1)
+		return false
+	}
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	codes := map[int]int{}
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r := postForm("/login", url.Values{"user": {"admin"}, "password": {"wrong-password"}})
+			r.RemoteAddr = "10.0.0.1:5555"
+			rec := e.do(r)
+			mu.Lock()
+			codes[rec.Code]++
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	if checks.Load() > 5 {
+		t.Fatalf("пароль проверен %d раз, предел 5", checks.Load())
+	}
+	if codes[401] != 5 || codes[429] != 15 {
+		t.Fatalf("коды: %v", codes)
+	}
+}
+
+func TestLoginLimitsParallelBcrypt(t *testing.T) {
+	e := newEnv(t, adminHash(t))
+	e.srv.Sleep = func(time.Duration) {}
+	e.srv.Limiter.Max = 100
+	var cur, peak atomic.Int32
+	e.srv.CheckPassword = func(_, _, _, _ string) bool {
+		n := cur.Add(1)
+		for {
+			p := peak.Load()
+			if n <= p || peak.CompareAndSwap(p, n) {
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+		cur.Add(-1)
+		return false
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 24; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r := postForm("/login", url.Values{"user": {"admin"}, "password": {"x"}})
+			r.RemoteAddr = "10.0.0.1:5555"
+			e.do(r)
+		}()
+	}
+	wg.Wait()
+	if peak.Load() > maxParallelBcrypt || peak.Load() < 1 {
+		t.Fatalf("одновременных проверок: %d, предел %d", peak.Load(), maxParallelBcrypt)
+	}
+}
+
+func logEnv(t *testing.T) (*testEnv, *bytes.Buffer) {
+	t.Helper()
+	e := newEnv(t, adminHash(t))
+	buf := &bytes.Buffer{}
+	e.srv.Log = slog.New(slog.NewTextHandler(buf, nil))
+	return e, buf
+}
+
+func TestLoginLogTruncatesNameAndThrottles429(t *testing.T) {
+	e, buf := logEnv(t)
+	now := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+	e.srv.Now = func() time.Time { return now }
+	long := strings.Repeat("я", 500)
+	r := postForm("/login", url.Values{"user": {long}, "password": {"wrong-password"}})
+	e.do(r)
+	if strings.Contains(buf.String(), strings.Repeat("я", 65)) || !strings.Contains(buf.String(), strings.Repeat("я", 64)) {
+		t.Fatalf("имя в журнале не обрезано до 64 рун: %s", buf)
+	}
+	for i := 0; i < 4; i++ {
+		login(e, "wrong-password")
+	}
+	for i := 0; i < 10; i++ {
+		if rec := login(e, "wrong-password"); rec.Code != 429 {
+			t.Fatalf("ждали 429, получили %d", rec.Code)
+		}
+	}
+	if n := strings.Count(buf.String(), "вход заблокирован"); n != 1 {
+		t.Fatalf("429 записан %d раз за минуту, ждали 1", n)
+	}
+	now = now.Add(61 * time.Second)
+	login(e, "wrong-password")
+	if n := strings.Count(buf.String(), "вход заблокирован"); n != 2 {
+		t.Fatalf("через минуту 429 записан %d раз всего, ждали 2", n)
+	}
+}
+
+func TestLogDoesNotLeakSecrets(t *testing.T) {
+	e, buf := logEnv(t)
+	login(e, "wrong-password-xyz")
+	rec := login(e, testPassword)
+	var cookie *http.Cookie
+	for _, x := range rec.Result().Cookies() {
+		if x.Name == cookieName {
+			cookie = x
+		}
+	}
+	if cookie == nil {
+		t.Fatal("нет cookie после входа")
+	}
+	sess, _ := e.srv.Sessions.Get(cookie.Value)
+	// Действие над клиентом и выход.
+	e.node.ClientsFn = func(context.Context) ([]nodeapi.Client, error) {
+		return []nodeapi.Client{{Name: "bob", OpenVPN: true}}, nil
+	}
+	e.node.RenewFn = func(context.Context, string, int) (nodeapi.Result, error) { return nodeapi.Result{}, nil }
+	req := postForm("/clients/bob/renew", url.Values{"csrf": {sess.CSRF}, "days": {"30"}})
+	req.AddCookie(cookie)
+	if rec := e.do(req); rec.Code != 303 {
+		t.Fatalf("действие: %d", rec.Code)
+	}
+	req = postForm("/logout", url.Values{"csrf": {sess.CSRF}})
+	req.AddCookie(cookie)
+	e.do(req)
+
+	out := buf.String()
+	if !strings.Contains(out, "действие") || !strings.Contains(out, "вход") {
+		t.Fatalf("журнал пуст: %s", out)
+	}
+	for name, secret := range map[string]string{
+		"пароль":       testPassword,
+		"неверный пар": "wrong-password-xyz",
+		"хеш":          adminHash(t),
+		"ID сессии":    sess.ID,
+		"CSRF":         sess.CSRF,
+	} {
+		if strings.Contains(out, secret) {
+			t.Errorf("в журнале %s", name)
+		}
+	}
+}
+
+func TestLogoutWithoutSession(t *testing.T) {
+	e := newEnv(t, adminHash(t))
+	check := func(name string, req *http.Request) {
+		rec := e.do(req)
+		if rec.Code != 303 || rec.Header().Get("Location") != "/login" {
+			t.Errorf("%s: %d %q", name, rec.Code, rec.Header().Get("Location"))
+		}
+		cleared := false
+		for _, x := range rec.Result().Cookies() {
+			if x.Name == cookieName && x.MaxAge < 0 {
+				cleared = true
+			}
+		}
+		if !cleared {
+			t.Errorf("%s: cookie не стёрта", name)
+		}
+	}
+	check("без cookie", postForm("/logout", url.Values{}))
+	req := postForm("/logout", url.Values{})
+	req.AddCookie(&http.Cookie{Name: cookieName, Value: "unknown-session"})
+	check("неизвестная сессия", req)
+
+	// Истёкшая по времени.
+	now := time.Now()
+	e.srv.Sessions.Now = func() time.Time { return now }
+	c, _ := e.sessionCookie(t)
+	now = now.Add(2 * time.Hour)
+	req = postForm("/logout", url.Values{})
+	req.AddCookie(c)
+	check("истёкшая сессия", req)
+}
+
+func TestLoginDropsPreviousSession(t *testing.T) {
+	e := newEnv(t, adminHash(t))
+	old, _ := e.sessionCookie(t)
+	req := postForm("/login", url.Values{"user": {"admin"}, "password": {testPassword}})
+	req.AddCookie(old)
+	if rec := e.do(req); rec.Code != 303 {
+		t.Fatalf("вход: %d", rec.Code)
+	}
+	if _, ok := e.srv.Sessions.Get(old.Value); ok {
+		t.Fatal("прежняя сессия осталась жива после повторного входа")
 	}
 }
