@@ -57,6 +57,24 @@ CREATE TABLE sessions (
 CREATE INDEX sessions_user ON sessions(user_id);
 CREATE INDEX backup_codes_user ON backup_codes(user_id);
 ALTER TABLE client_cards ADD COLUMN owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL;`,
+	// 4: портал клиента — срок пользователя, unlock-коды, ссылки портала,
+	// одноразовые ссылки, счётчик попыток и очередь уведомлений.
+	`ALTER TABLE users ADD COLUMN access_until INTEGER;
+CREATE TABLE unlock_codes (id INTEGER PRIMARY KEY, hash TEXT NOT NULL UNIQUE,
+  days INTEGER NOT NULL, valid_until INTEGER NOT NULL, user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  batch TEXT NOT NULL, created INTEGER NOT NULL, created_by TEXT NOT NULL,
+  used_at INTEGER, used_node INTEGER, used_client TEXT, revoked INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX unlock_codes_batch ON unlock_codes(batch);
+CREATE TABLE portal_links (hash TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('c','u')),
+  node_id INTEGER, client TEXT, user_id INTEGER REFERENCES users(id) ON DELETE CASCADE, created INTEGER NOT NULL);
+CREATE TABLE download_links (hash TEXT PRIMARY KEY, node_id INTEGER NOT NULL, client TEXT NOT NULL,
+  pkind TEXT NOT NULL, variant TEXT NOT NULL, file TEXT NOT NULL,
+  pin_hash TEXT, pin_fails INTEGER NOT NULL DEFAULT 0, expires INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0,
+  created INTEGER NOT NULL);
+CREATE TABLE attempts (key TEXT NOT NULL, ts INTEGER NOT NULL);
+CREATE INDEX attempts_key ON attempts(key, ts);
+CREATE TABLE outbox (id INTEGER PRIMARY KEY, kind TEXT NOT NULL, user_id INTEGER, payload TEXT NOT NULL,
+  created INTEGER NOT NULL, sent INTEGER);`,
 }
 
 // SchemaVersion — версия схемы в базе; 0 у пустой.

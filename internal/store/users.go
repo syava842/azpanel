@@ -38,6 +38,9 @@ type User struct {
 	TOTPSecret   []byte
 	TOTPLastStep int64
 	Created      int64
+	// AccessUntil — срок доступа пользователя (nil — без срока); пишется
+	// только SetUserAccessUntil.
+	AccessUntil *int64
 }
 
 // ClientRef — ссылка на клиента: узел и имя.
@@ -46,12 +49,17 @@ type ClientRef struct {
 	Name string
 }
 
-const userCols = `id, login, hash, role, disabled, must_change, totp_secret, totp_last_step, created`
+const userCols = `id, login, hash, role, disabled, must_change, totp_secret, totp_last_step, created, access_until`
 
 func scanUser(sc interface{ Scan(...any) error }) (User, error) {
 	var u User
-	if err := sc.Scan(&u.ID, &u.Login, &u.Hash, &u.Role, &u.Disabled, &u.MustChange, &u.TOTPSecret, &u.TOTPLastStep, &u.Created); err != nil {
+	var until sql.NullInt64
+	if err := sc.Scan(&u.ID, &u.Login, &u.Hash, &u.Role, &u.Disabled, &u.MustChange, &u.TOTPSecret, &u.TOTPLastStep, &u.Created, &until); err != nil {
 		return User{}, err
+	}
+	if until.Valid {
+		v := until.Int64
+		u.AccessUntil = &v
 	}
 	return u, nil
 }
@@ -155,6 +163,15 @@ func (s *Store) ChangePassword(ctx context.Context, id int64, oldHash, newHash s
 // SetRole меняет только роль.
 func (s *Store) SetRole(ctx context.Context, id int64, role string) error {
 	return s.setFields(ctx, `UPDATE users SET role = ? WHERE id = ?`, role, id)
+}
+
+// SetUserAccessUntil меняет только срок доступа пользователя (nil — снять срок).
+func (s *Store) SetUserAccessUntil(ctx context.Context, id int64, until *int64) error {
+	var v any
+	if until != nil {
+		v = *until
+	}
+	return s.setFields(ctx, `UPDATE users SET access_until = ? WHERE id = ?`, v, id)
 }
 
 // SetDisabled меняет только признак отключения.
