@@ -31,3 +31,19 @@ func TestProxyLoadFromFile(t *testing.T) {
 		t.Fatal("ждали ошибку проверки")
 	}
 }
+
+func TestProxyListenTLS(t *testing.T) {
+	c := Default()
+	c.Proxy.Listen, c.Proxy.ListenTLS = "", "0.0.0.0:9101"
+	if err := c.Validate(); err == nil {
+		t.Fatal("listen_tls без allow_ips принят")
+	}
+	c.Proxy.AllowIPs = []string{"203.0.113.5"}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	c.Proxy.AllowIPs = []string{"не адрес"}
+	if err := c.Validate(); err == nil {
+		t.Fatal("мусор в allow_ips принят")
+	}
+}

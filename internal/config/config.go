@@ -41,6 +41,15 @@ type Node struct {
 	EasyRSAPKI        string `toml:"easyrsa_pki"`
 	WireGuardDir      string `toml:"wireguard_dir"`
 	ClientShTimeoutS  int    `toml:"client_sh_timeout_seconds"`
+	// ListenTLS — внешний порт агента по TLS (адрес:порт); пусто — выключен.
+	// Сертификат — etc/tls/node.{crt,key}, создаётся при первом старте; пускает
+	// только адреса из AllowIPs, и список обязателен.
+	ListenTLS string   `toml:"listen_tls"`
+	AllowIPs  []string `toml:"allow_ips"`
+	// AmneziaWGDir и KnotResolverDir — каталоги набора синхронизации; пусто —
+	// у AmneziaWG нет каталога на узле, и он пропускается.
+	AmneziaWGDir    string `toml:"amneziawg_dir"`
+	KnotResolverDir string `toml:"knot_resolver_dir"`
 }
 
 type Panel struct {
@@ -111,6 +120,8 @@ func Default() Config {
 			EasyRSAPKI:        "/etc/openvpn/easyrsa3/pki",
 			WireGuardDir:      "/etc/wireguard",
 			ClientShTimeoutS:  120,
+			AmneziaWGDir:      "/etc/amnezia/amneziawg",
+			KnotResolverDir:   "/etc/knot-resolver",
 		},
 		Panel: Panel{
 			Listen:         "127.0.0.1:8080",
@@ -179,6 +190,14 @@ func (c Config) Validate() error {
 		return fmt.Errorf("node.query_timeout_ms = %d, нужно 100..5000", n.QueryTimeoutMs)
 	case n.APIListen != "" && !loopbackAddr(n.APIListen):
 		return fmt.Errorf("node.api_listen = %q: нужен 127.0.0.1:порт, [::1]:порт или пусто", n.APIListen)
+	case n.ListenTLS != "" && !tlsAddr(n.ListenTLS):
+		return fmt.Errorf("node.listen_tls = %q: нужен адрес:порт (например 0.0.0.0:9100)", n.ListenTLS)
+	case n.ListenTLS != "" && n.ListenTLS == n.APIListen:
+		return errors.New("node.listen_tls и node.api_listen не могут совпадать")
+	case n.ListenTLS != "" && len(n.AllowIPs) == 0:
+		return errors.New("node.allow_ips пуст: при node.listen_tls нужен белый список адресов панели")
+	case allowErr(n.AllowIPs) != nil:
+		return fmt.Errorf("node.allow_ips: %w", allowErr(n.AllowIPs))
 	case n.AntiZapretDir == "" || n.EasyRSAPKI == "" || n.WireGuardDir == "":
 		return errors.New("node.antizapret_dir, node.easyrsa_pki и node.wireguard_dir не могут быть пустыми")
 	case n.ClientShTimeoutS < 10 || n.ClientShTimeoutS > 600:
@@ -257,6 +276,12 @@ func validClock(s string) bool {
 func loopbackAddr(s string) bool {
 	ap, err := netip.ParseAddrPort(s)
 	return err == nil && ap.Addr().IsLoopback() && ap.Port() != 0
+}
+
+// tlsAddr — «IP:порт» для внешнего порта агента (не обязательно петлевой).
+func tlsAddr(s string) bool {
+	ap, err := netip.ParseAddrPort(s)
+	return err == nil && ap.Port() != 0
 }
 
 func Save(path string, c Config) error {

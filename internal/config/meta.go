@@ -82,6 +82,10 @@ var fields = []Field{
 	{Path: "node.poll_seconds", Section: "node", Title: "Опрос OpenVPN, секунд", Hint: "От 1 до 60.", Kind: KindInt, Apply: ApplyRestartNode},
 	{Path: "node.query_timeout_ms", Section: "node", Title: "Таймаут запроса к OpenVPN, мс", Hint: "От 100 до 5000.", Kind: KindInt, Apply: ApplyRestartNode},
 	{Path: "node.api_listen", Section: "node", Title: "Адрес API агента", Hint: "Только петлевой интерфейс: 127.0.0.1:порт или [::1]:порт; пусто — API выключен. Вместе с ним поменяйте адрес агента в настройках панели.", Kind: KindString, Apply: ApplyRestartNode},
+	{Path: "node.listen_tls", Section: "node", Title: "Внешний порт агента (TLS)", Hint: "адрес:порт, например 0.0.0.0:9100; пусто — выключен. Сертификат самоподписанный (etc/tls), панель закрепляет его отпечаток. Нужен белый список ниже.", Kind: KindString, Apply: ApplyRestartNode},
+	{Path: "node.allow_ips", Section: "node", Title: "Белый список панелей для внешнего порта", Hint: "IP или сети, по одному в строке; чужие адреса закрываются до TLS. Обязателен при внешнем порте.", Kind: KindList, Apply: ApplyRestartNode},
+	{Path: "node.amneziawg_dir", Section: "node", Title: "Каталог AmneziaWG", Hint: "Серверные конфиги AmneziaWG для набора синхронизации; пусто или нет каталога — пропускается.", Kind: KindString, Apply: ApplyRestartNode},
+	{Path: "node.knot_resolver_dir", Section: "node", Title: "Каталог Knot Resolver", Hint: "Откуда берутся custom*.lua для набора синхронизации.", Kind: KindString, Apply: ApplyRestartNode},
 	{Path: "node.antizapret_dir", Section: "node", Title: "Каталог AntiZapret", Hint: "Корень установки AntiZapret-VPN.", Kind: KindString, Apply: ApplyRestartNode},
 	{Path: "node.easyrsa_pki", Section: "node", Title: "Каталог PKI EasyRSA", Hint: "Каталог pki с сертификатами клиентов.", Kind: KindString, Apply: ApplyRestartNode},
 	{Path: "node.wireguard_dir", Section: "node", Title: "Каталог WireGuard", Hint: "Каталог с конфигами интерфейсов.", Kind: KindString, Apply: ApplyRestartNode},
@@ -114,6 +118,8 @@ var fields = []Field{
 	{Path: "telegram.backup_chats", Section: "telegram", Title: "Чаты для бэкапа", Hint: "Числовые ID чатов, по одному в строке.", Kind: KindIntList, Apply: ApplyRestartPanel},
 
 	{Path: "proxy.listen", Section: "proxy", Title: "Адрес прокси-агента", Hint: "Читает отдельный сервис azpanel-proxy на VPS с proxy.sh: после сохранения перезапустите его там.", Kind: KindString, Apply: ApplyForeign},
+	{Path: "proxy.listen_tls", Section: "proxy", Title: "Внешний порт прокси-агента (TLS)", Hint: "адрес:порт, например 0.0.0.0:9101; пусто — выключен. Нужен белый список ниже.", Kind: KindString, Apply: ApplyForeign},
+	{Path: "proxy.allow_ips", Section: "proxy", Title: "Белый список панелей для внешнего порта", Hint: "IP или сети, по одному в строке; обязателен при внешнем порте.", Kind: KindList, Apply: ApplyForeign},
 }
 
 // leaf возвращает значение поля Config по пути из тегов toml.

@@ -32,7 +32,9 @@ type Info struct {
 	Proto     int    `json:"proto"`
 	Version   string `json:"version"`
 	Hostname  string `json:"hostname"`
-	WireGuard bool   `json:"wireguard"` // WIREGUARD_ENABLE=y в setup
+	WireGuard bool   `json:"wireguard"`       // WIREGUARD_ENABLE=y в setup
+	Role      string `json:"role,omitempty"`  // primary | replica; пусто — агент старше этой возможности
+	Group     string `json:"group,omitempty"` // имя группы, в которой узел реплика
 }
 
 type Client struct {

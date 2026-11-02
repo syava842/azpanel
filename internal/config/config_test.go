@@ -301,3 +301,28 @@ func TestTrustedProxiesDefaultAndValidation(t *testing.T) {
 		t.Fatal("мусор принят")
 	}
 }
+
+func TestNodeListenTLS(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		tls   string
+		allow []string
+		api   string
+		ok    bool
+	}{
+		{"выключен", "", nil, "127.0.0.1:9100", true},
+		{"внешний адрес не петлевой", "0.0.0.0:9100", []string{"203.0.113.5", "10.0.0.0/8"}, "127.0.0.1:9100", true},
+		{"только TLS", "198.51.100.7:9100", []string{"203.0.113.5"}, "", true},
+		{"без белого списка", "0.0.0.0:9100", nil, "127.0.0.1:9100", false},
+		{"совпадает с api_listen", "127.0.0.1:9100", []string{"127.0.0.1"}, "127.0.0.1:9100", false},
+		{"без порта", "0.0.0.0", []string{"1.2.3.4"}, "", false},
+		{"порт 0", "0.0.0.0:0", []string{"1.2.3.4"}, "", false},
+		{"неверный список", "", []string{"не адрес"}, "127.0.0.1:9100", false},
+	} {
+		c := Default()
+		c.Node.ListenTLS, c.Node.AllowIPs, c.Node.APIListen = tc.tls, tc.allow, tc.api
+		if err := c.Validate(); (err == nil) != tc.ok {
+			t.Errorf("%s: ошибка %v, ждали ok=%v", tc.name, err, tc.ok)
+		}
+	}
+}

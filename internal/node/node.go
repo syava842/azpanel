@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/syava842/azpanel/internal/agenttls"
 	"github.com/syava842/azpanel/internal/antizapret"
 	"github.com/syava842/azpanel/internal/config"
 	"github.com/syava842/azpanel/internal/limits"
@@ -92,7 +93,7 @@ func Run(ctx context.Context, cfg config.Config, version string, ensureHook func
 		Peer:    PeerChecker(),
 	}
 	go p.Run(ctx, time.Duration(cfg.Node.PollSeconds)*time.Second)
-	if cfg.Node.APIListen != "" {
+	if cfg.Node.APIListen != "" || cfg.Node.ListenTLS != "" {
 		stop, err := startAPI(ctx, cancel, cfg, version, tr, denials, log, ensureHook)
 		if err != nil {
 			log.Error("API агента не запущен — панель узел не увидит, хук работает", "err", err)
@@ -207,7 +208,7 @@ func startAPI(ctx context.Context, exit func(), cfg config.Config, version strin
 		log.Error("azupdate.json не прочитан", "err", err)
 	}
 	az.Resume()
-	ln, err := net.Listen("tcp", n.APIListen)
+	lns, err := listenAPI(n, log)
 	if err != nil {
 		return nil, err
 	}
@@ -221,15 +222,53 @@ func startAPI(ctx context.Context, exit func(), cfg config.Config, version strin
 		ErrorLog:     slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 	}
 	go api.RunWGGuard(ctx, time.Duration(n.PollSeconds)*time.Second)
-	go func() {
-		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Error("API агента остановлен с ошибкой", "err", err)
-		}
-	}()
-	log.Info("API агента запущен", "listen", n.APIListen)
+	for _, ln := range lns {
+		go func() {
+			if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("API агента остановлен с ошибкой", "addr", ln.Addr().String(), "err", err)
+			}
+		}()
+	}
 	return func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		srv.Shutdown(ctx)
 	}, nil
+}
+
+// listenAPI открывает порты API: петлевой (для панели на этом же хосте) и/или
+// внешний по TLS. TLS-порт пускает только адреса из node.allow_ips — до
+// рукопожатия; сертификат лежит в etc/tls и создаётся при первом старте.
+func listenAPI(n config.Node, log *slog.Logger) ([]net.Listener, error) {
+	var lns []net.Listener
+	closeAll := func() {
+		for _, l := range lns {
+			l.Close()
+		}
+	}
+	if n.APIListen != "" {
+		ln, err := net.Listen("tcp", n.APIListen)
+		if err != nil {
+			return nil, err
+		}
+		lns = append(lns, ln)
+		log.Info("API агента запущен", "listen", n.APIListen)
+	}
+	if n.ListenTLS != "" {
+		allow, err := config.ParseAllowIPs(n.AllowIPs)
+		if err != nil {
+			closeAll()
+			return nil, err
+		}
+		ln, fp, err := agenttls.Listen(n.ListenTLS, filepath.Join(paths.Etc(), "tls"), allow, func(remote string) {
+			log.Warn("TLS-порт: адрес вне белого списка закрыт до рукопожатия", "remote", remote)
+		})
+		if err != nil {
+			closeAll()
+			return nil, err
+		}
+		lns = append(lns, ln)
+		log.Info("API агента по TLS запущен", "listen", n.ListenTLS, "fingerprint", agenttls.FormatFingerprint(fp))
+	}
+	return lns, nil
 }

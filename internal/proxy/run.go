@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/syava842/azpanel/internal/agenttls"
 	"github.com/syava842/azpanel/internal/config"
 	"github.com/syava842/azpanel/internal/logx"
 	"github.com/syava842/azpanel/internal/paths"
@@ -46,7 +47,7 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		Log:       log,
 		Now:       time.Now,
 	}
-	ln, err := net.Listen("tcp", cfg.Proxy.Listen)
+	lns, err := listen(cfg.Proxy, log)
 	if err != nil {
 		return err
 	}
@@ -59,9 +60,11 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		IdleTimeout:  time.Minute,
 		ErrorLog:     slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 	}
-	errc := make(chan error, 1)
-	go func() { errc <- srv.Serve(ln) }()
-	log.Info("прокси-агент запущен", "listen", cfg.Proxy.Listen, "version", version)
+	errc := make(chan error, len(lns))
+	for _, ln := range lns {
+		go func() { errc <- srv.Serve(ln) }()
+	}
+	log.Info("прокси-агент запущен", "listen", cfg.Proxy.Listen, "listen_tls", cfg.Proxy.ListenTLS, "version", version)
 	select {
 	case err := <-errc:
 		return err
@@ -72,4 +75,38 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	srv.Shutdown(sctx)
 	log.Info("прокси-агент остановлен")
 	return nil
+}
+
+// listen открывает порты агента прокси: петлевой и/или внешний по TLS с белым
+// списком IP до рукопожатия (сертификат etc/tls/node.{crt,key}, как у узла).
+func listen(p config.Proxy, log *slog.Logger) ([]net.Listener, error) {
+	var lns []net.Listener
+	if p.Listen != "" {
+		ln, err := net.Listen("tcp", p.Listen)
+		if err != nil {
+			return nil, err
+		}
+		lns = append(lns, ln)
+	}
+	if p.ListenTLS != "" {
+		allow, err := config.ParseAllowIPs(p.AllowIPs)
+		if err == nil {
+			var ln net.Listener
+			var fp string
+			ln, fp, err = agenttls.Listen(p.ListenTLS, filepath.Join(paths.Etc(), "tls"), allow, func(remote string) {
+				log.Warn("TLS-порт: адрес вне белого списка закрыт до рукопожатия", "remote", remote)
+			})
+			if err == nil {
+				lns = append(lns, ln)
+				log.Info("TLS-порт прокси-агента открыт", "listen", p.ListenTLS, "fingerprint", agenttls.FormatFingerprint(fp))
+			}
+		}
+		if err != nil {
+			for _, l := range lns {
+				l.Close()
+			}
+			return nil, err
+		}
+	}
+	return lns, nil
 }
