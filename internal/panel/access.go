@@ -55,8 +55,21 @@ var routes = map[string]access{
 	"GET /audit":       accAdmin,
 	"GET /clients/new": accAdmin,
 	"POST /clients":    accAdmin,
-	"GET /{$}":         accAny,
-	"/":                accAny,
+
+	"GET /routing":                       accAdmin,
+	"GET /routing/files/{name}":          accAdmin,
+	"POST /routing/files/{name}/add":     accAdmin,
+	"POST /routing/files/{name}/remove":  accAdmin,
+	"POST /routing/files/{name}/replace": accAdmin,
+	"POST /routing/files/{name}/restore": accAdmin,
+	"GET /settings/antizapret":           accAdmin,
+	"POST /settings/antizapret":          accAdmin,
+	"GET /tasks":                         accAdmin,
+	"GET /tasks/{id}":                    accAdmin,
+	"POST /tasks/start":                  accAdmin,
+
+	"GET /{$}": accAny,
+	"/":        accAny,
 
 	"GET /clients/{name}": accAny,
 	"GET /clients/{name}/profiles/{kind}/{variant}/{file}": accAny,

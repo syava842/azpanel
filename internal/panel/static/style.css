@@ -131,3 +131,7 @@ svg.chart { width: 100%; height: auto; display: block; }
 .chart .key.s1 { fill: var(--c1); }
 .chart .key.s2 { fill: var(--c2); }
 .chart .key.s3 { fill: var(--c3); }
+
+pre.log { background: #11151c; color: #d7dde8; padding: .75rem; border-radius: 6px; overflow-x: auto; max-height: 32rem; white-space: pre-wrap; word-break: break-all; }
+textarea { display: block; width: 100%; margin-top: .25rem; padding: .5rem .6rem; border: 1px solid var(--line); border-radius: 6px; font: 13px/1.4 ui-monospace, Consolas, monospace; background: #fff; color: inherit; }
+.error ul { margin: 0; padding-left: 1.2rem; }

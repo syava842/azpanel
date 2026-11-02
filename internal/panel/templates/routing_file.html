@@ -1,0 +1,94 @@
+{{define "content"}}
+<h1>{{if .File.Title}}{{.File.Title}}{{else}}{{.Name}}{{end}}</h1>
+<p class="muted"><a href="/routing">← Все списки</a> · файл {{.Name}} · {{.File.Lines}} строк · {{.Size}}{{if .KindTitle}} · {{.KindTitle}}{{end}}</p>
+{{if .Changed}}
+<form method="post" action="/tasks/start" class="card">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <input type="hidden" name="kind" value="doall">
+  <p>Изменения вступят в силу после применения.</p>
+  <button type="submit">Применить (doall.sh)</button>
+</form>
+{{end}}
+{{if .Errors}}<div class="error"><ul>{{range .Errors}}<li>{{.}}</li>{{end}}</ul></div>{{end}}
+{{if not .Editable}}
+<p class="muted">Этот файл не относится к спискам маршрутизации и только читается.</p>
+{{end}}
+{{if .Editable}}
+<p class="ranges">
+  {{if .Full}}<a href="{{.Href}}">Записи</a> <b>Целиком</b>{{else}}<b>Записи</b>{{if .CanFull}} <a href="{{.Href}}?tab=full">Целиком</a>{{end}}{{end}}
+  {{if not .CanFull}}<span class="muted">(файл больше 1 МБ: заменить целиком нельзя)</span>{{end}}
+</p>
+{{end}}
+{{if .Full}}
+<form method="post" action="{{.Href}}/replace" class="card">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label>Полное содержимое списка (по записи в строке)
+    <textarea name="content" rows="24" cols="80" spellcheck="false">{{.FullText}}</textarea>
+  </label>
+  <p class="warn">Комментарии и пустые строки здесь не показываются и при сохранении будут удалены. Перед записью агент делает копию.</p>
+  <button type="submit" class="danger">Заменить список целиком</button>
+</form>
+{{else}}
+<div class="toolbar">
+  <form method="get" action="{{.Href}}">
+    <input type="search" name="q" value="{{.Q}}" placeholder="Поиск по записям">
+    <button type="submit">Найти</button>
+  </form>
+  <span class="muted">найдено: {{.Total}}</span>
+</div>
+{{if .Editable}}
+<form method="post" action="{{.Href}}/remove">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+{{end}}
+<div class="table-wrap">
+<table>
+  <thead><tr>{{if .Editable}}<th></th>{{end}}<th>Запись</th></tr></thead>
+  <tbody>
+  {{range .Lines}}
+  <tr>{{if $.Editable}}<td><input type="checkbox" name="del" value="{{.}}"></td>{{end}}<td>{{.}}</td></tr>
+  {{else}}
+  <tr><td colspan="2" class="muted">Записей нет.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{if .Editable}}
+  <p><button type="submit" class="danger">Удалить выбранные</button></p>
+</form>
+{{end}}
+<p class="pager">
+  {{if .Prev}}<a href="{{.Prev}}">← Назад</a>{{end}}
+  {{if .Next}}<a href="{{.Next}}">Дальше →</a>{{end}}
+</p>
+{{if .Editable}}
+<form method="post" action="{{.Href}}/add" class="card">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label>Добавить записи (по одной в строке)
+    <textarea name="lines" rows="6" cols="60" spellcheck="false">{{.AddText}}</textarea>
+  </label>
+  <button type="submit">Добавить</button>
+</form>
+{{end}}
+{{end}}
+{{if .Editable}}
+<h2>Копии</h2>
+{{if .BackupsErr}}<p class="bad">{{.BackupsErr}}</p>{{end}}
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Время</th><th>Размер</th><th></th></tr></thead>
+  <tbody>
+  {{range .Backups}}
+  <tr><td>{{.Time}}</td><td>{{.Size}}</td><td>
+    <form method="post" action="{{$.Href}}/restore" class="inline">
+      <input type="hidden" name="csrf" value="{{$.CSRF}}">
+      <input type="hidden" name="stamp" value="{{.Stamp}}">
+      <button type="submit" class="link">Вернуть</button>
+    </form></td></tr>
+  {{else}}
+  <tr><td colspan="3" class="muted">Копий пока нет.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{end}}
+{{end}}

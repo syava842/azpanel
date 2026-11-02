@@ -1,0 +1,16 @@
+{{define "head"}}{{if .Running}}<meta http-equiv="refresh" content="5">{{end}}{{end}}
+{{define "content"}}
+<h1>Задачи</h1>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Задача</th><th>Начата</th><th>Окончена</th><th>Итог</th></tr></thead>
+  <tbody>
+  {{range .Rows}}
+  <tr><td><a href="{{.Href}}">{{.Kind}}</a></td><td>{{.Started}}</td><td>{{.Ended}}</td><td>{{if .Failure}}<span class="bad">{{.Status}}</span>{{else if .Running}}<span class="warn">{{.Status}}</span>{{else}}<span class="ok">{{.Status}}</span>{{end}}</td></tr>
+  {{else}}
+  <tr><td colspan="4" class="muted">Задач не было.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{end}}

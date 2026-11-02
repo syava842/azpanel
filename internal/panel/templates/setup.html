@@ -1,0 +1,42 @@
+{{define "content"}}
+<h1>Настройки AntiZapret</h1>
+{{if .Next}}
+<div class="card actions">
+  <p>Чтобы изменения вступили в силу, запустите:</p>
+  {{range .Next}}
+  <form method="post" action="/tasks/start">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <input type="hidden" name="kind" value="{{.Kind}}">
+    <button type="submit">{{.Button}}</button>
+    {{if .Warn}}<span class="warn">{{.Warn}}</span>{{end}}
+  </form>
+  {{end}}
+</div>
+{{end}}
+<form method="post" action="/settings/antizapret">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  {{range .Groups}}
+  <h2>{{.Title}}{{if .Note}} <small class="muted">({{.Note}})</small>{{end}}</h2>
+  <div class="card">
+  {{range .Rows}}
+    {{if .Editable}}
+    <label>{{.Title}} <small class="muted">{{.Key}}{{if .Apply}} · {{.Apply}}{{end}}</small>
+      {{if .Options}}
+      <select name="v_{{.Key}}">{{range .Options}}<option value="{{.Value}}"{{if .Sel}} selected{{end}}>{{.Value}}</option>{{end}}</select>
+      {{else if eq .Kind "int"}}
+      <input type="number" name="v_{{.Key}}" value="{{.Value}}"{{if .Min}} min="{{.Min}}"{{end}}{{if .Max}} max="{{.Max}}"{{end}}>
+      {{else}}
+      <input type="text" name="v_{{.Key}}" value="{{.Value}}" spellcheck="false">
+      {{end}}
+      {{if .Hint}}<small class="muted">{{.Hint}}</small>{{end}}
+      {{if .Absent}}<small class="muted">ключа нет в файле; сохранение допишет строку</small>{{end}}
+    </label>
+    {{else}}
+    <p><b>{{.Title}}</b> <small class="muted">{{.Key}}</small>: <code>{{.Value}}</code> <small class="muted">меняется переустановкой AntiZapret</small></p>
+    {{end}}
+  {{end}}
+  </div>
+  {{end}}
+  <p><button type="submit">Сохранить</button></p>
+</form>
+{{end}}

@@ -178,7 +178,11 @@ func (s *Server) guard(h http.HandlerFunc, mode guardMode) http.Handler {
 			return
 		}
 		if !safe {
-			r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
+			limit := int64(maxFormBody)
+			if strings.HasPrefix(r.URL.Path, "/routing/files/") {
+				limit = maxRoutingForm // списки целиком — до 1 МБ текста
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, limit)
 			if err := r.ParseForm(); err != nil {
 				s.errorPage(w, r, http.StatusBadRequest, "неверный запрос")
 				return

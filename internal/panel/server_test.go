@@ -35,6 +35,20 @@ type fakeNode struct {
 	SetLimitFn     func(ctx context.Context, name string, limit int) error
 	SetBlockedFn   func(ctx context.Context, name string, blocked bool) (nodeapi.Result, error)
 	DenialsFn      func(ctx context.Context, since time.Time) ([]nodeapi.Denial, error)
+
+	RoutingFilesFn      func(ctx context.Context) ([]nodeapi.RoutingFile, error)
+	RoutingLinesFn      func(ctx context.Context, name string, o nodeapi.RoutingListOpts) (nodeapi.RoutingPage, error)
+	PatchRoutingFn      func(ctx context.Context, name string, p nodeapi.RoutingPatch) (nodeapi.RoutingPatchResult, error)
+	ReplaceRoutingFn    func(ctx context.Context, name, content string) (nodeapi.RoutingPutResult, error)
+	RoutingBackupsFn    func(ctx context.Context, name string) ([]nodeapi.RoutingBackup, error)
+	RestoreRoutingFn    func(ctx context.Context, name, stamp string) (nodeapi.RoutingFile, error)
+	SetupFn             func(ctx context.Context) ([]nodeapi.SetupEntry, error)
+	SetSetupFn          func(ctx context.Context, values map[string]string) (nodeapi.SetupResult, error)
+	TasksFn             func(ctx context.Context) ([]nodeapi.Task, error)
+	TaskFn              func(ctx context.Context, id string) (nodeapi.TaskDetail, error)
+	ApplyRoutingFn      func(ctx context.Context) (nodeapi.Task, error)
+	RestartAntiZapretFn func(ctx context.Context) (nodeapi.Task, error)
+	RebuildProfilesFn   func(ctx context.Context) (nodeapi.Task, error)
 }
 
 var errNotSet = errors.New("fakeNode: метод не задан")
@@ -110,6 +124,85 @@ func (f *fakeNode) Denials(ctx context.Context, since time.Time) ([]nodeapi.Deni
 		return nil, errNotSet
 	}
 	return f.DenialsFn(ctx, since)
+}
+
+func (f *fakeNode) RoutingFiles(ctx context.Context) ([]nodeapi.RoutingFile, error) {
+	if f.RoutingFilesFn == nil {
+		return nil, errNotSet
+	}
+	return f.RoutingFilesFn(ctx)
+}
+func (f *fakeNode) RoutingLines(ctx context.Context, name string, o nodeapi.RoutingListOpts) (nodeapi.RoutingPage, error) {
+	if f.RoutingLinesFn == nil {
+		return nodeapi.RoutingPage{}, errNotSet
+	}
+	return f.RoutingLinesFn(ctx, name, o)
+}
+func (f *fakeNode) PatchRouting(ctx context.Context, name string, p nodeapi.RoutingPatch) (nodeapi.RoutingPatchResult, error) {
+	if f.PatchRoutingFn == nil {
+		return nodeapi.RoutingPatchResult{}, errNotSet
+	}
+	return f.PatchRoutingFn(ctx, name, p)
+}
+func (f *fakeNode) ReplaceRouting(ctx context.Context, name, content string) (nodeapi.RoutingPutResult, error) {
+	if f.ReplaceRoutingFn == nil {
+		return nodeapi.RoutingPutResult{}, errNotSet
+	}
+	return f.ReplaceRoutingFn(ctx, name, content)
+}
+func (f *fakeNode) RoutingBackups(ctx context.Context, name string) ([]nodeapi.RoutingBackup, error) {
+	if f.RoutingBackupsFn == nil {
+		return nil, errNotSet
+	}
+	return f.RoutingBackupsFn(ctx, name)
+}
+func (f *fakeNode) RestoreRouting(ctx context.Context, name, stamp string) (nodeapi.RoutingFile, error) {
+	if f.RestoreRoutingFn == nil {
+		return nodeapi.RoutingFile{}, errNotSet
+	}
+	return f.RestoreRoutingFn(ctx, name, stamp)
+}
+func (f *fakeNode) Setup(ctx context.Context) ([]nodeapi.SetupEntry, error) {
+	if f.SetupFn == nil {
+		return nil, errNotSet
+	}
+	return f.SetupFn(ctx)
+}
+func (f *fakeNode) SetSetup(ctx context.Context, values map[string]string) (nodeapi.SetupResult, error) {
+	if f.SetSetupFn == nil {
+		return nodeapi.SetupResult{}, errNotSet
+	}
+	return f.SetSetupFn(ctx, values)
+}
+func (f *fakeNode) Tasks(ctx context.Context) ([]nodeapi.Task, error) {
+	if f.TasksFn == nil {
+		return nil, errNotSet
+	}
+	return f.TasksFn(ctx)
+}
+func (f *fakeNode) Task(ctx context.Context, id string) (nodeapi.TaskDetail, error) {
+	if f.TaskFn == nil {
+		return nodeapi.TaskDetail{}, errNotSet
+	}
+	return f.TaskFn(ctx, id)
+}
+func (f *fakeNode) ApplyRouting(ctx context.Context) (nodeapi.Task, error) {
+	if f.ApplyRoutingFn == nil {
+		return nodeapi.Task{}, errNotSet
+	}
+	return f.ApplyRoutingFn(ctx)
+}
+func (f *fakeNode) RestartAntiZapret(ctx context.Context) (nodeapi.Task, error) {
+	if f.RestartAntiZapretFn == nil {
+		return nodeapi.Task{}, errNotSet
+	}
+	return f.RestartAntiZapretFn(ctx)
+}
+func (f *fakeNode) RebuildProfiles(ctx context.Context) (nodeapi.Task, error) {
+	if f.RebuildProfilesFn == nil {
+		return nodeapi.Task{}, errNotSet
+	}
+	return f.RebuildProfilesFn(ctx)
 }
 
 const testPassword = "correct-horse-battery"

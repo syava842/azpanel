@@ -28,7 +28,10 @@ var staticFS embed.FS
 
 const (
 	maxFormBody = 64 << 10
-	loginDelay  = time.Second
+	// maxRoutingForm — предел тела форм редактора списков: вкладка «Целиком»
+	// шлёт до 1 МБ текста, а в urlencoded кириллица раздувается в разы.
+	maxRoutingForm = 4 << 20
+	loginDelay     = time.Second
 
 	maxParallelBcrypt = 4           // одновременных проверок пароля
 	maxLoggedName     = 64          // рун имени в журнале
@@ -51,6 +54,21 @@ type Node interface {
 	SetLimit(ctx context.Context, name string, limit int) error
 	SetBlocked(ctx context.Context, name string, blocked bool) (nodeapi.Result, error)
 	Denials(ctx context.Context, since time.Time) ([]nodeapi.Denial, error)
+
+	// Маршрутизация, setup и фоновые задачи AntiZapret.
+	RoutingFiles(ctx context.Context) ([]nodeapi.RoutingFile, error)
+	RoutingLines(ctx context.Context, name string, o nodeapi.RoutingListOpts) (nodeapi.RoutingPage, error)
+	PatchRouting(ctx context.Context, name string, p nodeapi.RoutingPatch) (nodeapi.RoutingPatchResult, error)
+	ReplaceRouting(ctx context.Context, name, content string) (nodeapi.RoutingPutResult, error)
+	RoutingBackups(ctx context.Context, name string) ([]nodeapi.RoutingBackup, error)
+	RestoreRouting(ctx context.Context, name, stamp string) (nodeapi.RoutingFile, error)
+	Setup(ctx context.Context) ([]nodeapi.SetupEntry, error)
+	SetSetup(ctx context.Context, values map[string]string) (nodeapi.SetupResult, error)
+	Tasks(ctx context.Context) ([]nodeapi.Task, error)
+	Task(ctx context.Context, id string) (nodeapi.TaskDetail, error)
+	ApplyRouting(ctx context.Context) (nodeapi.Task, error)
+	RestartAntiZapret(ctx context.Context) (nodeapi.Task, error)
+	RebuildProfiles(ctx context.Context) (nodeapi.Task, error)
 }
 
 var _ Node = (*nodeapi.HTTPClient)(nil)
@@ -183,6 +201,19 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /clients/{name}/block", s.block)
 	s.route(mux, "POST /clients/{name}/delete", s.deleteClient)
 	s.route(mux, "POST /clients/{name}/owner", s.setOwner)
+
+	// Маршрутизация, настройки AntiZapret, задачи: только администратор.
+	s.route(mux, "GET /routing", s.routingPage)
+	s.route(mux, "GET /routing/files/{name}", s.routingFile)
+	s.route(mux, "POST /routing/files/{name}/add", s.routingAdd)
+	s.route(mux, "POST /routing/files/{name}/remove", s.routingRemove)
+	s.route(mux, "POST /routing/files/{name}/replace", s.routingReplace)
+	s.route(mux, "POST /routing/files/{name}/restore", s.routingRestore)
+	s.route(mux, "GET /settings/antizapret", s.setupPage)
+	s.route(mux, "POST /settings/antizapret", s.setupSave)
+	s.route(mux, "GET /tasks", s.tasksPage)
+	s.route(mux, "GET /tasks/{id}", s.taskPage)
+	s.route(mux, "POST /tasks/start", s.taskStart)
 	s.route(mux, "GET /{$}", s.clientsList)
 	s.route(mux, "/", func(w http.ResponseWriter, r *http.Request) {
 		s.errorPage(w, r, http.StatusNotFound, "страница не найдена")
