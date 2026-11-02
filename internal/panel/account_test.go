@@ -330,6 +330,15 @@ func TestUsersDisableResetDelete(t *testing.T) {
 		t.Error("пароль показан повторно")
 	}
 
+	// сброс пароля самому себе — отказ, сессия жива
+	selfID := "/users/" + strconv.FormatInt(e.admin.ID, 10)
+	if code, body := adminPost(e, c, csrf, selfID+"/password"); code != 400 || !strings.Contains(body, "Аккаунт") {
+		t.Fatalf("сброс себе: %d", code)
+	}
+	if _, ok := e.lookup(c.Value); !ok {
+		t.Error("сессия администратора завершена отказанным сбросом")
+	}
+
 	// сброс 2FA
 	e.srv.DataKey = bytes.Repeat([]byte{7}, 32)
 	sealed, _ := Seal(e.srv.DataKey, []byte("0123456789abcdefghij"))

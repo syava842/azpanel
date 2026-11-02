@@ -258,7 +258,13 @@ func (s *Server) userResetPassword(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, "пароль не хеширован", err)
 		return
 	}
+	sess, _ := session(r)
 	u, ok := s.mutateUser(w, r, false, func(u store.User) (store.User, error) {
+		// Сброс себе завершил бы и текущую сессию, а новый пароль
+		// показывается в ней — администратор остался бы без пароля.
+		if u.ID == sess.UserID {
+			return u, errors.New("свой пароль меняйте на странице «Аккаунт»")
+		}
 		u.Hash, u.MustChange = hash, true
 		if err := s.Store.SetPassword(r.Context(), u.ID, hash, true); err != nil {
 			return u, err
