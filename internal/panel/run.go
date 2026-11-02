@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/syava842/azpanel/internal/config"
-	"github.com/syava842/azpanel/internal/install"
 	"github.com/syava842/azpanel/internal/logx"
 	"github.com/syava842/azpanel/internal/nodeapi"
 	"github.com/syava842/azpanel/internal/paths"
@@ -125,9 +124,7 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		RestartNode: func(ctx context.Context) error {
 			return restartNodeHTTP(ctx, cfg.Panel.NodeURL, token, sec[NodeFingerprintKey])
 		},
-		SyncNginx: func(basePath, listen string) (bool, error) {
-			return install.NewNginx().UpdateSnippet(basePath, listen)
-		},
+		SyncNginx: nginxSyncVia(node),
 	}
 	proxies, err := config.ParseTrustedProxies(cfg.Panel.TrustedProxies)
 	if err != nil {
@@ -202,6 +199,31 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	err = srv.Shutdown(sctx)
 	log.Info("панель остановлена")
 	return err
+}
+
+// nginxSnippetUpdater — то, чем панель просит агента переписать фрагмент nginx;
+// *nodeapi.HTTPClient подходит. Сама панель в /etc/nginx не пишет: у неё нет прав.
+type nginxSnippetUpdater interface {
+	UpdateNginxSnippet(ctx context.Context, req nodeapi.NginxSnippetRequest) (nodeapi.NginxSnippetResult, error)
+}
+
+// nginxSyncVia — Server.SyncNginx через агента: он запускает задачу
+// nginx-snippet (копия, nginx -t, откат, reload), её итог виден в «Задачах».
+// done=false — фрагмента панели в nginx нет, ничего не запущено.
+func nginxSyncVia(n nginxSnippetUpdater) func(basePath, listen string) (bool, error) {
+	return func(basePath, listen string) (bool, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		res, err := n.UpdateNginxSnippet(ctx, nodeapi.NginxSnippetRequest{BasePath: basePath, Upstream: listen})
+		if err != nil {
+			var ne *nodeapi.Error
+			if errors.As(err, &ne) {
+				return false, errors.New(ne.Message)
+			}
+			return false, err
+		}
+		return res.Done, nil
+	}
 }
 
 // listen — занятие порта; в тестах подменяется.

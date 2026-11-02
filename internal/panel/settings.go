@@ -598,7 +598,7 @@ func (s *Server) syncNginx(cfg config.Config) string {
 		s.Log.Warn("фрагмент nginx не обновлён", "err", err)
 		return "Фрагмент nginx не обновлён (" + err.Error() + "): поправьте location и proxy_pass в нём вручную, пока идёт таймер возврата."
 	case done:
-		return "Фрагмент nginx обновлён под новые префикс и адрес."
+		return "Фрагмент nginx переписывается задачей на узле под новые префикс и адрес; итог — в разделе «Задачи»."
 	}
 	return ""
 }

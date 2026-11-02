@@ -791,7 +791,7 @@ func TestSettingsDangerousSyncsNginxAndRestores(t *testing.T) {
 	if rec.Code != 200 || len(calls) != 1 || calls[0].base != "/azpanel/" {
 		t.Fatalf("фрагмент не обновлён: %d %v", rec.Code, calls)
 	}
-	if !strings.Contains(rec.Body.String(), "Фрагмент nginx обновлён") {
+	if !strings.Contains(rec.Body.String(), "Фрагмент nginx переписывается") {
 		t.Fatalf("страница не сообщает об обновлении:\n%s", rec.Body)
 	}
 	e.wasExit()
