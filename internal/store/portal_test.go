@@ -81,7 +81,7 @@ func TestIssueAndListCodes(t *testing.T) {
 	if err := s.RevokeCode(ctx, one[0].ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.RedeemCode(ctx, c1[0], nil, 20); err != nil {
+	if _, err := s.RedeemCode(ctx, c1[0], nil, 1, "c", 20); err != nil {
 		t.Fatal(err)
 	}
 	for st, want := range map[string]int{CodeActive: 3, CodeUsed: 1, CodeRevoked: 1, CodeExpired: 0} {
@@ -101,18 +101,15 @@ func TestIssueAndListCodes(t *testing.T) {
 func TestRedeemCodeOnce(t *testing.T) {
 	s := open(t)
 	_, codes := issue(t, s, IssueParams{Days: 45})
-	c, err := s.RedeemCode(ctx, strings.ToLower(strings.ReplaceAll(codes[0], "-", " ")), nil, 500)
-	if err != nil || c.Days != 45 || c.UsedAt == nil || *c.UsedAt != 500 {
+	c, err := s.RedeemCode(ctx, strings.ToLower(strings.ReplaceAll(codes[0], "-", " ")), nil, 1, "c", 500)
+	if err != nil || c.Days != 45 || c.UsedAt == nil || *c.UsedAt != 500 || c.UsedClient != "c" || c.UsedNode == nil {
 		t.Fatalf("%+v %v", c, err)
 	}
-	if _, err := s.RedeemCode(ctx, codes[0], nil, 501); !errors.Is(err, ErrCodeInvalid) {
+	if _, err := s.RedeemCode(ctx, codes[0], nil, 1, "c", 501); !errors.Is(err, ErrCodeInvalid) {
 		t.Fatalf("второй раз: %v", err)
 	}
-	if err := s.SetCodeTarget(ctx, c.ID, 1, "alice"); err != nil {
-		t.Fatal(err)
-	}
 	got, _ := s.Codes(ctx, CodeFilter{State: CodeUsed}, 600)
-	if len(got) != 1 || got[0].UsedClient != "alice" || *got[0].UsedNode != 1 {
+	if len(got) != 1 || got[0].UsedClient != "c" || *got[0].UsedNode != 1 {
 		t.Fatalf("%+v", got)
 	}
 	if err := s.RevokeCode(ctx, c.ID); !errors.Is(err, ErrNotFound) {
@@ -130,7 +127,7 @@ func TestRedeemCodeParallel(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := s.RedeemCode(ctx, codes[0], nil, 5); err == nil {
+			if _, err := s.RedeemCode(ctx, codes[0], nil, 1, "c", 5); err == nil {
 				mu.Lock()
 				ok++
 				mu.Unlock()
@@ -149,18 +146,18 @@ func TestRedeemCodeUserBound(t *testing.T) {
 	s := open(t)
 	alice, bob := mkUser(t, s, "alice", RoleUser), mkUser(t, s, "bob", RoleUser)
 	_, codes := issue(t, s, IssueParams{UserID: &alice.ID})
-	if _, err := s.RedeemCode(ctx, codes[0], &bob.ID, 5); !errors.Is(err, ErrCodeInvalid) {
+	if _, err := s.RedeemCode(ctx, codes[0], &bob.ID, 1, "c", 5); !errors.Is(err, ErrCodeInvalid) {
 		t.Fatalf("чужой клиент: %v", err)
 	}
-	if _, err := s.RedeemCode(ctx, codes[0], nil, 5); !errors.Is(err, ErrCodeInvalid) {
+	if _, err := s.RedeemCode(ctx, codes[0], nil, 1, "c", 5); !errors.Is(err, ErrCodeInvalid) {
 		t.Fatalf("клиент без владельца: %v", err)
 	}
-	if _, err := s.RedeemCode(ctx, codes[0], &alice.ID, 5); err != nil {
+	if _, err := s.RedeemCode(ctx, codes[0], &alice.ID, 1, "c", 5); err != nil {
 		t.Fatalf("свой клиент: %v", err)
 	}
 	// Код на любого гасится и для клиента с владельцем.
 	_, any := issue(t, s, IssueParams{})
-	if _, err := s.RedeemCode(ctx, any[0], &bob.ID, 5); err != nil {
+	if _, err := s.RedeemCode(ctx, any[0], &bob.ID, 1, "c", 5); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -168,21 +165,21 @@ func TestRedeemCodeUserBound(t *testing.T) {
 func TestRedeemCodeExpiredRevokedGarbage(t *testing.T) {
 	s := open(t)
 	_, exp := issue(t, s, IssueParams{ValidUntil: 100})
-	if _, err := s.RedeemCode(ctx, exp[0], nil, 101); !errors.Is(err, ErrCodeInvalid) {
+	if _, err := s.RedeemCode(ctx, exp[0], nil, 1, "c", 101); !errors.Is(err, ErrCodeInvalid) {
 		t.Fatalf("просрочен: %v", err)
 	}
-	if _, err := s.RedeemCode(ctx, exp[0], nil, 100); err != nil {
+	if _, err := s.RedeemCode(ctx, exp[0], nil, 1, "c", 100); err != nil {
 		t.Fatalf("в последнюю секунду: %v", err)
 	}
 	b, rev := issue(t, s, IssueParams{Count: 2})
 	if n, err := s.RevokeBatch(ctx, b); err != nil || n != 2 {
 		t.Fatalf("отзыв пачки %d %v", n, err)
 	}
-	if _, err := s.RedeemCode(ctx, rev[0], nil, 5); !errors.Is(err, ErrCodeInvalid) {
+	if _, err := s.RedeemCode(ctx, rev[0], nil, 1, "c", 5); !errors.Is(err, ErrCodeInvalid) {
 		t.Fatalf("отозван: %v", err)
 	}
 	for _, g := range []string{"", "AAAA-BBBB", "AAAAAAAAAAAAAAAA"} {
-		if _, err := s.RedeemCode(ctx, g, nil, 5); !errors.Is(err, ErrCodeInvalid) {
+		if _, err := s.RedeemCode(ctx, g, nil, 1, "c", 5); !errors.Is(err, ErrCodeInvalid) {
 			t.Fatalf("мусор %q: %v", g, err)
 		}
 	}

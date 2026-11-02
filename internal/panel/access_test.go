@@ -112,6 +112,16 @@ func TestPermissionsEveryRouteAsUser(t *testing.T) {
 					t.Errorf("%s (%s): код %d, ждали 403", pattern, name, code)
 				}
 			}
+		case pattern == "POST /clients/{name}/redeem":
+			// без кода: чужой клиент — 404, свой — отказ по существу (400)
+			m, p := concrete(pattern, foreignClient, bob.ID)
+			if code := send(e, user, csrf, m, p); code != http.StatusNotFound {
+				t.Errorf("%s чужой: код %d, ждали 404", pattern, code)
+			}
+			m, p = concrete(pattern, ownClient, bob.ID)
+			if code := send(e, user, csrf, m, p); code != http.StatusBadRequest {
+				t.Errorf("%s свой: код %d, ждали 400", pattern, code)
+			}
 		case strings.Contains(pattern, "/clients/{name}"):
 			// GET-маршруты клиента: чужой — 404, свой — 200
 			m, p := concrete(pattern, foreignClient, bob.ID)

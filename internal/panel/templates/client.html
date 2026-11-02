@@ -4,7 +4,8 @@
   <p>Тип: {{if .Client.OpenVPN}}OpenVPN{{end}}{{if and .Client.OpenVPN .Client.WireGuard}} / {{end}}{{if .Client.WireGuard}}WireGuard{{end}}</p>
   <p>Сертификат: {{if .CertSoon}}<span class="warn">{{.Cert}}</span>{{else}}{{.Cert}}{{end}}</p>
   <p>Лимит: {{.Limit}}</p>
-  <p>Состояние: {{if .Client.Blocked}}<span class="bad">заблокирован</span>{{if .WGOnlyBlock}} <small class="muted">({{.NotOnlyOVPN}})</small>{{end}}{{else}}<span class="ok">активен</span>{{end}}</p>
+  {{if .HasStore}}<p>Действует до: {{.EffUntil}}</p>{{end}}
+  <p>Состояние: {{if .Client.Blocked}}<span class="bad">заблокирован</span>{{else}}<span class="ok">активен</span>{{end}}</p>
 </div>
 
 {{if .AutoBlockText}}
@@ -50,6 +51,18 @@
   </form>
 </div>
 {{end}}
+{{end}}
+{{if .HasStore}}
+<h2>Продлить кодом</h2>
+<div class="card">
+  <form method="post" action="{{.Href}}/redeem">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label>Код продления
+      <input type="text" name="code" autocomplete="off" placeholder="XXXX-XXXX-XXXX-XXXX" required>
+    </label>
+    <button type="submit">Продлить</button>
+  </form>
+</div>
 {{end}}
 {{if and .CanManage .Owners}}
 <h2>Владелец</h2>
@@ -116,7 +129,6 @@
   <form method="post" action="{{.Href}}/block">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <input type="hidden" name="blocked" value="{{if .Client.Blocked}}0{{else}}1{{end}}">
-    {{if not .Client.OpenVPN}}<p class="muted">{{.NotOnlyOVPN}}</p>{{end}}
     <button type="submit">{{if .Client.Blocked}}Разблокировать{{else}}Заблокировать{{end}}</button>
   </form>
 

@@ -2,6 +2,7 @@ package panel
 
 import (
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -14,6 +15,7 @@ const (
 // onceEntry — страница с секретом, который показывается один раз.
 type onceEntry struct {
 	title, note, back, backText string
+	batch                       string // не пусто — на странице кнопка «Скачать .txt» (пачка кодов)
 	items                       []string
 	expires                     time.Time
 }
@@ -56,8 +58,14 @@ func (o *onceStore) take(key string, now time.Time) (onceEntry, bool) {
 // одноразовую запись сессии и отвечает переходом 303 на GET /account/once:
 // обновление страницы не повторяет действие.
 func (s *Server) showOnce(w http.ResponseWriter, r *http.Request, title, note, back, backText string, items []string) {
+	s.showOnceFile(w, r, title, note, back, backText, items, "")
+}
+
+// showOnceFile — то же, но со скачиванием: batch (идентификатор пачки) даёт
+// на странице кнопку «Скачать .txt».
+func (s *Server) showOnceFile(w http.ResponseWriter, r *http.Request, title, note, back, backText string, items []string, batch string) {
 	sess, _ := session(r)
-	s.once.put(sess.IDHash, onceEntry{title: title, note: note, back: back, backText: backText, items: items}, s.now())
+	s.once.put(sess.IDHash, onceEntry{title: title, note: note, back: back, backText: backText, items: items, batch: batch}, s.now())
 	http.Redirect(w, r, pathAccountOnce, http.StatusSeeOther)
 }
 
@@ -71,5 +79,5 @@ func (s *Server) oncePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, r, http.StatusOK, "once", map[string]any{"Title": e.title, "Note": e.note, "Items": e.items,
-		"Back": e.back, "BackText": e.backText})
+		"Back": e.back, "BackText": e.backText, "Batch": e.batch, "Joined": strings.Join(e.items, ",")})
 }

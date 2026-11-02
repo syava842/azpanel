@@ -1,0 +1,57 @@
+{{define "content"}}
+<h1>Коды продления</h1>
+<p><a href="/codes/new">Выпустить пачку</a>. Времена — UTC. Открытые значения кодов в панели не хранятся.</p>
+
+<h2>Пачки</h2>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Пачка</th><th>Выпущена (UTC)</th><th>Кем</th><th>На кого</th><th>Дней</th><th>Всего</th><th>Не использовано</th><th>Использовано</th><th>Просрочено</th><th>Отозвано</th><th></th></tr></thead>
+  <tbody>
+  {{range .Batches}}
+  <tr>
+    <td><a href="/codes?batch={{.ID}}">{{.ID}}</a></td><td>{{.Created}}</td><td>{{.By}}</td><td>{{.Who}}</td><td>{{.Days}}</td>
+    <td>{{.Total}}</td><td>{{.Active}}</td><td>{{.Used}}</td><td>{{.Expired}}</td><td>{{.Revoked}}</td>
+    <td>{{if .CanRevoke}}<form method="post" action="/codes/batch/{{.ID}}/revoke" class="inline">
+      <input type="hidden" name="csrf" value="{{$.CSRF}}">
+      <button type="submit" class="link">Отозвать пачку</button>
+    </form>{{end}}</td>
+  </tr>
+  {{else}}
+  <tr><td colspan="11" class="muted">Пачек нет.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+
+<h2>Коды</h2>
+<form method="get" action="/codes" class="inline">
+  <label>Пачка <input type="text" name="batch" value="{{.Batch}}" maxlength="12"></label>
+  <label>Состояние
+    <select name="state">
+      <option value="">любое</option>
+      {{range .States}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Text}}</option>{{end}}
+    </select>
+  </label>
+  <button type="submit">Показать</button>
+</form>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>№</th><th>Пачка</th><th>Состояние</th><th>Дней</th><th>Действует до</th><th>На кого</th><th>Использован</th><th></th></tr></thead>
+  <tbody>
+  {{range .Codes}}
+  <tr>
+    <td>{{.ID}}</td><td>{{.Batch}}</td><td>{{.StateText}}</td><td>{{.Days}}</td><td>{{.ValidUntil}}</td><td>{{.Who}}</td><td>{{.UsedBy}}</td>
+    <td>{{if .CanRevoke}}<form method="post" action="/codes/{{.ID}}/revoke" class="inline">
+      <input type="hidden" name="csrf" value="{{$.CSRF}}">
+      <input type="hidden" name="batch" value="{{$.Batch}}">
+      <button type="submit" class="link">Отозвать</button>
+    </form>{{end}}</td>
+  </tr>
+  {{else}}
+  <tr><td colspan="8" class="muted">Кодов нет.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{if .More}}<p class="muted">Показаны первые 500 кодов; сузьте выбор пачкой или состоянием.</p>{{end}}
+{{end}}

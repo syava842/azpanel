@@ -112,6 +112,7 @@ type Server struct {
 	pages      map[string]*template.Template
 	registered []string   // шаблоны маршрутов Handler(): сверяются с таблицей прав
 	usersMu    sync.Mutex // действия над пользователями — по одному (защита последнего администратора)
+	redeemMu   sync.Mutex // ввод кодов: проверка срока, гашение и продление — одним куском
 	access     accessState
 	once       onceStore // секреты «показать один раз»
 
@@ -182,6 +183,15 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /users/{id}/2fa/reset", s.userReset2FA)
 	s.route(mux, "POST /users/{id}/sessions/revoke", s.userRevoke)
 	s.route(mux, "POST /users/{id}/delete", s.userDelete)
+	s.route(mux, "POST /users/{id}/access", s.userAccess)
+
+	// Коды продления: только администратор; ввод кода — в карточке клиента.
+	s.route(mux, "GET /codes", s.codesPage)
+	s.route(mux, "GET /codes/new", s.codesNewForm)
+	s.route(mux, "POST /codes", s.codesIssue)
+	s.route(mux, "POST /codes/download", s.codesDownload)
+	s.route(mux, "POST /codes/{id}/revoke", s.codeRevoke)
+	s.route(mux, "POST /codes/batch/{batch}/revoke", s.codeBatchRevoke)
 
 	// Настройки: только администратор.
 	s.route(mux, "GET /settings/access", s.accessPage)
@@ -202,6 +212,7 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /clients/{name}/block", s.block)
 	s.route(mux, "POST /clients/{name}/delete", s.deleteClient)
 	s.route(mux, "POST /clients/{name}/owner", s.setOwner)
+	s.route(mux, "POST /clients/{name}/redeem", s.redeemCode)
 
 	// Маршрутизация, настройки AntiZapret, задачи: только администратор.
 	s.route(mux, "GET /routing", s.routingPage)

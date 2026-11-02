@@ -25,7 +25,6 @@ const (
 	clientTimeout  = 3 * time.Minute  // на одного клиента: агент может ждать client.sh до двух минут
 	dbWriteTimeout = 10 * time.Second // запись в базу после вызова агента, мимо отмены ctx
 	defaultHistory = 30
-	wgSkipEvery    = 24 * time.Hour
 	reasonExpired  = "срок действия истёк"
 	reasonTraffic  = "лимит трафика исчерпан"
 	reasonGone     = "причина блокировки ушла"
@@ -49,7 +48,6 @@ type Collector struct {
 	lastHour int64 // час (Unix/3600) последнего успешного Rollup
 	online   int
 
-	wgNoted map[string]time.Time // когда в журнал писали «WG-клиент пропущен» (под tickMu)
 	// goneOwned — клиенты с владельцем, которых не оказалось у агента на
 	// прошлом проходе (под tickMu): владелец снимается со второго раза подряд.
 	goneOwned map[string]bool
@@ -143,6 +141,7 @@ func (c *Collector) Tick(ctx context.Context) error {
 	step("свёртка", stepTimeout, func(ctx context.Context) error { return c.rollup(ctx, now) })
 	// у автоблокировки свои тайм-ауты: на чтение и на каждого клиента отдельно
 	step("автоблокировка", 0, func(ctx context.Context) error { return c.autoBlock(ctx, now) })
+	step("напоминания", stepTimeout, func(ctx context.Context) error { return c.remindExpiring(ctx, now) })
 	return errors.Join(errs...)
 }
 
@@ -317,6 +316,10 @@ func (c *Collector) autoBlock(ctx context.Context, now time.Time) error {
 	}
 	rctx, cancel = read()
 	cards, err := c.Store.Cards(rctx, c.NodeID)
+	var limits map[string]store.ClientLimit
+	if err == nil {
+		limits, err = c.Store.ClientLimits(rctx, c.NodeID)
+	}
 	cancel()
 	if err != nil {
 		return err
@@ -346,6 +349,12 @@ func (c *Collector) autoBlock(ctx context.Context, now time.Time) error {
 		if !ok {
 			continue
 		}
+		// Срок — действующий: меньший из срока карточки и срока владельца.
+		// card — копия, карточка в базе остаётся как есть; отпечатки причин
+		// считаются от того же срока.
+		if l, ok := limits[cl.Name]; ok {
+			card.AccessUntil = l.Effective()
+		}
 		// Две причины независимы: снятая вручную блокировка по сроку (отпечаток
 		// совпал) не отключает проверку лимита трафика.
 		reason := ""
@@ -363,12 +372,6 @@ func (c *Collector) autoBlock(ctx context.Context, now time.Time) error {
 				!skipHas(card.AutoSkip, blockFingerprint(store.AutoBlockTraffic, card, now)) {
 				reason = store.AutoBlockTraffic
 			}
-		}
-		if reason != "" && card.AutoBlock == "" && !cl.Blocked && !cl.OpenVPN {
-			// блокировка действует только на OpenVPN (этап 7 добавит WireGuard):
-			// не ставим флаг, который ничего не закрывает
-			c.noteWGSkip(ctx, now, cl.Name, reason)
-			continue
 		}
 		cctx, cancel := context.WithTimeout(ctx, clientTimeout)
 		err := c.applyAutoBlock(cctx, now, cl, card, reason)
@@ -471,19 +474,6 @@ func activeFingerprints(ctx context.Context, st *store.Store, node int64, name, 
 		out = append(out, blockFingerprint(store.AutoBlockTraffic, card, now))
 	}
 	return out
-}
-
-// noteWGSkip пишет в журнал, что WG-клиент пропущен, не чаще раза в сутки.
-func (c *Collector) noteWGSkip(ctx context.Context, now time.Time, name, reason string) {
-	if last, ok := c.wgNoted[name]; ok && now.Sub(last) < wgSkipEvery {
-		return
-	}
-	if c.wgNoted == nil {
-		c.wgNoted = map[string]time.Time{}
-	}
-	c.wgNoted[name] = now
-	c.audit(ctx, now, "автоблокировка", name, "не заблокирован",
-		"пропущен: блокировка WireGuard появится позже ("+reasonText(reason)+")")
 }
 
 // blockFingerprint — отпечаток причины блокировки: меняется вместе со сроком,

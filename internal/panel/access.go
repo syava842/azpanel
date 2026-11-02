@@ -50,6 +50,14 @@ var routes = map[string]access{
 	"POST /users/{id}/2fa/reset":       accAdmin,
 	"POST /users/{id}/sessions/revoke": accAdmin,
 	"POST /users/{id}/delete":          accAdmin,
+	"POST /users/{id}/access":          accAdmin,
+
+	"GET /codes":                       accAdmin,
+	"GET /codes/new":                   accAdmin,
+	"POST /codes":                      accAdmin,
+	"POST /codes/download":             accAdmin,
+	"POST /codes/{id}/revoke":          accAdmin,
+	"POST /codes/batch/{batch}/revoke": accAdmin,
 
 	"GET /monitor":     accAdmin,
 	"GET /audit":       accAdmin,
@@ -80,6 +88,8 @@ var routes = map[string]access{
 	"POST /clients/{name}/block":                           accAdmin,
 	"POST /clients/{name}/delete":                          accAdmin,
 	"POST /clients/{name}/owner":                           accAdmin,
+	// «Продлить кодом»: администратор и владелец клиента (visibleClient)
+	"POST /clients/{name}/redeem": accAny,
 }
 
 // route регистрирует маршрут по таблице прав; маршрута нет в таблице — паника

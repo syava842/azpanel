@@ -155,7 +155,11 @@ func (s *Server) userView(w http.ResponseWriter, r *http.Request, u store.User, 
 			clients = append(clients, clientLink{x.Name, clientHref(x.Name)})
 		}
 	}
-	data := map[string]any{"U": u, "Href": userHref(u), "RoleText": roleText(u.Role), "IsAdminRole": u.Role == store.RoleAdmin,
+	until := ""
+	if u.AccessUntil != nil {
+		until = untilText(u.AccessUntil)
+	}
+	data := map[string]any{"Until": until, "UntilStamp": untilStamp(u.AccessUntil), "U": u, "Href": userHref(u), "RoleText": roleText(u.Role), "IsAdminRole": u.Role == store.RoleAdmin,
 		"Has2FA": len(u.TOTPSecret) > 0, "Sessions": rows, "Clients": clients, "IsSelf": u.ID == sess.UserID}
 	if errText != "" {
 		data["Error"] = errText
@@ -327,4 +331,28 @@ func (s *Server) userDelete(w http.ResponseWriter, r *http.Request) {
 		s.audit(r, "user_delete", u.Login, roleText(u.Role), "удалён")
 		redirectMsg(w, r, "/users", "user_deleted")
 	}
+}
+
+// userAccess задаёт срок доступа пользователя (пусто — без срока): действует
+// на все его клиенты, у клиента — меньший из его срока и этого.
+func (s *Server) userAccess(w http.ResponseWriter, r *http.Request) {
+	u, ok := s.pathUser(w, r)
+	if !ok {
+		return
+	}
+	until, err := parseUntil(strings.TrimSpace(r.PostForm.Get("until")))
+	if err != nil {
+		s.userView(w, r, u, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.Store.SetUserAccessUntil(r.Context(), u.ID, until); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			s.errorPage(w, r, http.StatusNotFound, "пользователь не найден")
+			return
+		}
+		s.internalError(w, r, "срок доступа не сохранён", err)
+		return
+	}
+	s.audit(r, "user_access", u.Login, "доступ до: "+untilText(u.AccessUntil), "доступ до: "+untilText(until))
+	redirectMsg(w, r, userHref(u), "user_access_saved")
 }

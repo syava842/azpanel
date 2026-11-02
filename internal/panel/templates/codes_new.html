@@ -1,0 +1,24 @@
+{{define "content"}}
+<h1>Выпуск кодов продления</h1>
+<p><a href="/codes">К списку кодов</a></p>
+<form method="post" action="/codes" class="card narrow">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label>Сколько кодов (1–{{.MaxCount}})
+    <input type="number" name="count" min="1" max="{{.MaxCount}}" value="{{.Form.Count}}" required>
+  </label>
+  <label>На сколько дней продлевает каждый код (1–{{.MaxDays}})
+    <input type="number" name="days" min="1" max="{{.MaxDays}}" value="{{.Form.Days}}" required>
+  </label>
+  <label>Код действует до (ГГГГ-ММ-ДД, конец дня по UTC)
+    <input type="text" name="until" placeholder="2026-12-31" value="{{.Form.Until}}" required>
+  </label>
+  <label>На кого
+    <select name="user">
+      <option value=""{{if not .Form.User}} selected{{end}}>любой пользователь</option>
+      {{range .Users}}<option value="{{.ID}}"{{if .Selected}} selected{{end}}>{{.Login}}</option>{{end}}
+    </select>
+  </label>
+  <p class="muted">Код на пользователя гасится только для клиентов этого пользователя. Коды покажутся один раз после выпуска.</p>
+  <button type="submit">Выпустить</button>
+</form>
+{{end}}

@@ -251,9 +251,10 @@ func (s *Store) RevokeBatch(ctx context.Context, batch string) (int64, error) {
 // RedeemCode гасит код одним UPDATE: два одновременных ввода дают ровно один
 // успех. userID — владелец клиента, для которого вводят код (nil — владельца
 // нет); код на конкретного пользователя гасится только для его клиентов.
+// node и client — клиент, на котором применён код: пишутся в тот же UPDATE,
+// поэтому погашенный код всегда знает, где он потрачен.
 // Неверный, погашенный, отозванный, просроченный и чужой код — ErrCodeInvalid.
-// На каком клиенте применён код, записывает SetCodeTarget.
-func (s *Store) RedeemCode(ctx context.Context, code string, userID *int64, now int64) (Code, error) {
+func (s *Store) RedeemCode(ctx context.Context, code string, userID *int64, node int64, client string, now int64) (Code, error) {
 	norm, ok := NormalizeCode(code)
 	if !ok {
 		return Code{}, ErrCodeInvalid
@@ -262,17 +263,12 @@ func (s *Store) RedeemCode(ctx context.Context, code string, userID *int64, now 
 	if userID != nil {
 		uid = *userID
 	}
-	c, err := scanCode(s.db.QueryRowContext(ctx, `UPDATE unlock_codes SET used_at = ?
+	c, err := scanCode(s.db.QueryRowContext(ctx, `UPDATE unlock_codes SET used_at = ?, used_node = ?, used_client = ?
 		WHERE hash = ? AND used_at IS NULL AND revoked = 0 AND valid_until >= ?
 		  AND (user_id IS NULL OR user_id = ?)
-		RETURNING `+codeCols, now, hashCode(norm), now, uid))
+		RETURNING `+codeCols, now, node, client, hashCode(norm), now, uid))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Code{}, ErrCodeInvalid
 	}
 	return c, err
-}
-
-// SetCodeTarget записывает в погашенный код, на каком клиенте его применили.
-func (s *Store) SetCodeTarget(ctx context.Context, id, node int64, client string) error {
-	return s.setFields(ctx, `UPDATE unlock_codes SET used_node = ?, used_client = ? WHERE id = ? AND used_at IS NOT NULL`, node, client, id)
 }

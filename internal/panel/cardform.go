@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/syava842/azpanel/internal/nodeapi"
@@ -75,6 +74,9 @@ func (s *Server) addHistory(r *http.Request, c nodeapi.Client, data map[string]a
 		return
 	}
 	data["CardForm"] = newCardForm(card)
+	if eff, err := s.Store.EffectiveUntil(r.Context(), s.NodeID, c.Name); err == nil {
+		data["EffUntil"] = untilStamp(eff)
+	}
 	data["AutoBlockText"] = autoBlockText(c, card)
 }
 
@@ -86,15 +88,11 @@ func parseCardForm(r *http.Request, old store.Card) (store.Card, error) {
 		return c, fmt.Errorf("заметка: не больше %d символов", maxNoteRunes)
 	}
 	c.Note = note
-	c.AccessUntil = nil
-	if v := strings.TrimSpace(r.PostForm.Get("until")); v != "" {
-		t, err := time.Parse("2006-01-02", v)
-		if err != nil {
-			return c, fmt.Errorf("доступ до: нужна дата в виде ГГГГ-ММ-ДД")
-		}
-		end := t.UTC().Add(24*time.Hour - time.Second).Unix() // конец дня по UTC
-		c.AccessUntil = &end
+	until, err := parseUntil(strings.TrimSpace(r.PostForm.Get("until")))
+	if err != nil {
+		return c, err
 	}
+	c.AccessUntil = until
 	gb := 0.0
 	if v := strings.TrimSpace(r.PostForm.Get("limit_gb")); v != "" {
 		var err error
@@ -176,6 +174,10 @@ func (s *Server) forgetAutoBlock(r *http.Request, c nodeapi.Client) {
 	card, err := s.Store.Card(r.Context(), s.NodeID, c.Name)
 	if err != nil || card.AutoBlock == "" {
 		return
+	}
+	// отпечаток считается от действующего срока, как у сборщика
+	if eff, err := s.Store.EffectiveUntil(r.Context(), s.NodeID, c.Name); err == nil {
+		card.AccessUntil = eff
 	}
 	fp := strings.Join(activeFingerprints(r.Context(), s.Store, s.NodeID, c.Name, card.AutoBlock, card, s.now()), skipSep)
 	if err := s.Store.SetAutoBlock(r.Context(), s.NodeID, c.Name, "", fp); err != nil {

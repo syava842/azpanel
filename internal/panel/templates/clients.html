@@ -19,7 +19,7 @@
     <td class="online">{{if $.NoOnline}}—{{else}}{{.Online}}{{end}}</td>
     <td class="limit">{{.Limit}}</td>
     {{if $.HasStore}}<td class="traffic">{{.Traffic}}</td><td class="until">{{.Until}}</td>{{end}}
-    <td>{{if .Blocked}}<span class="bad">заблокирован{{if .Auto}} автоматически{{end}}</span>{{if .WGOnly}} <small class="muted">({{$.NotOnlyOVPN}})</small>{{end}}{{end}}</td>
+    <td>{{if .Blocked}}<span class="bad">заблокирован{{if .Auto}} автоматически{{end}}</span>{{end}}</td>
   </tr>
   {{else}}
   <tr><td colspan="{{if .HasStore}}8{{else}}6{{end}}" class="muted">Клиентов нет.</td></tr>

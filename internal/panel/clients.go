@@ -20,7 +20,6 @@ const (
 	maxQRProfile = 2900 // байт; больше в QR не помещается
 	qrSize       = 512
 	certWarnDays = 30
-	notOnlyOVPN  = "блокировка действует только на OpenVPN"
 )
 
 // clientRow — строка списка клиентов, всё уже превращено в текст.
@@ -34,7 +33,6 @@ type clientRow struct {
 	Online   int
 	Limit    string
 	Blocked  bool
-	WGOnly   bool // заблокирован, но блокировка к нему не применима
 	Auto     bool // блокировку поставила панель
 	Traffic  string
 	Until    string
@@ -114,14 +112,16 @@ func (s *Server) clientsList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var cards map[string]store.Card
+	var limits map[string]store.ClientLimit
 	var traffic map[string]store.Bytes
 	if s.Store != nil {
-		var cerr, terr error
+		var cerr, lerr, terr error
 		cards, cerr = s.Store.Cards(r.Context(), s.NodeID)
+		limits, lerr = s.Store.ClientLimits(r.Context(), s.NodeID)
 		traffic, terr = s.traffic30(r.Context(), s.now())
-		if cerr != nil || terr != nil {
-			s.Log.Warn("история клиентов не прочитана", "cards", cerr, "traffic", terr)
-			cards, traffic = nil, nil
+		if cerr != nil || lerr != nil || terr != nil {
+			s.Log.Warn("история клиентов не прочитана", "cards", cerr, "limits", lerr, "traffic", terr)
+			cards, limits, traffic = nil, nil, nil
 		}
 	}
 	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
@@ -144,16 +144,21 @@ func (s *Server) clientsList(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		row := clientRow{Name: c.Name, Href: clientHref(c.Name), OpenVPN: c.OpenVPN, WG: c.WireGuard,
-			Online: online[c.Name], Limit: "—", Blocked: c.Blocked, WGOnly: c.Blocked && !c.OpenVPN}
+			Online: online[c.Name], Limit: "—", Blocked: c.Blocked}
 		row.Cert, row.CertSoon = certText(c.CertExpires)
 		if c.Limit > 0 {
 			row.Limit = strconv.Itoa(c.Limit)
 		}
 		row.Traffic, row.Until = "—", "—"
 		if card, ok := cards[c.Name]; ok {
-			row.Until = untilText(card.AccessUntil)
-			if card.AccessUntil != nil {
-				row.untilTS = *card.AccessUntil
+			// действующий срок: меньший из срока карточки и срока владельца
+			eff := card.AccessUntil
+			if l, ok := limits[c.Name]; ok {
+				eff = l.Effective()
+			}
+			row.Until = untilText(eff)
+			if eff != nil {
+				row.untilTS = *eff
 			}
 			row.Auto = c.Blocked && card.AutoBlock != ""
 		}
@@ -166,7 +171,7 @@ func (s *Server) clientsList(w http.ResponseWriter, r *http.Request) {
 	}
 	sortKey := r.URL.Query().Get("sort")
 	sortRows(rows, sortKey)
-	data := map[string]any{"Rows": rows, "Q": r.URL.Query().Get("q"), "NoOnline": sessErr != "", "NotOnlyOVPN": notOnlyOVPN,
+	data := map[string]any{"Rows": rows, "Q": r.URL.Query().Get("q"), "NoOnline": sessErr != "",
 		"Sort": sortKey, "HasStore": s.Store != nil}
 	if sessErr != "" {
 		data["Error"] = sessErr
@@ -315,6 +320,11 @@ var msgTexts = map[string]string{
 	"owner_set":        "владелец назначен",
 	"owner_cleared":    "владелец снят",
 
+	"access_extended":   "доступ продлён на %d дн.",
+	"user_access_saved": "срок доступа пользователя сохранён",
+	"code_revoked":      "код отозван",
+	"codes_revoked":     "отозвано кодов: %d",
+
 	"routing_changed": "список изменён; изменения вступят в силу после применения",
 	"setup_saved":     "настройки сохранены; чтобы они вступили в силу, запустите задачи ниже",
 	"setup_nochange":  "ничего не изменилось",
@@ -350,8 +360,7 @@ func flashText(r *http.Request) string {
 // card показывает карточку клиента; сбой сессий или профилей карточку не
 // роняет, а выводится на ней текстом. errText — ошибка действия, если была.
 func (s *Server) card(w http.ResponseWriter, r *http.Request, c nodeapi.Client, status int, errText string) {
-	data := map[string]any{"Client": c, "Name": c.Name, "Href": clientHref(c.Name), "NotOnlyOVPN": notOnlyOVPN,
-		"WGOnlyBlock": c.Blocked && !c.OpenVPN}
+	data := map[string]any{"Client": c, "Name": c.Name, "Href": clientHref(c.Name)}
 	sess, _ := session(r)
 	data["CanManage"] = sess.IsAdmin()
 	if sess.IsAdmin() {
@@ -531,9 +540,6 @@ func (s *Server) block(w http.ResponseWriter, r *http.Request) {
 		// ручной блок поверх автоблока становится ручным: сборщик его не снимет
 		s.makeManualBlock(r, c)
 		after := fmt.Sprintf("заблокирован, разорвано сессий: %d", res.Killed)
-		if c.WireGuard {
-			after += " (только OpenVPN)"
-		}
 		s.done(w, r, c, "block", "не заблокирован", after, "blocked", res.Killed)
 		return
 	}

@@ -56,7 +56,7 @@ func TestClientsList(t *testing.T) {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"azpanel-test-1", "bob", "Новый клиент", "заблокирован", "блокировка действует только на OpenVPN", `<td class="online">2</td>`, `<td class="limit">—</td>`, `<td class="limit">3</td>`} {
+	for _, want := range []string{"azpanel-test-1", "bob", "Новый клиент", "заблокирован", `<td class="online">2</td>`, `<td class="limit">—</td>`, `<td class="limit">3</td>`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("нет %q", want)
 		}
@@ -180,11 +180,11 @@ func TestClientCard(t *testing.T) {
 	}
 	// Клиент только с WireGuard: нет продления и удаления OpenVPN.
 	body = get(e, c, "/clients/wg-only").Body.String()
-	if strings.Contains(body, "Продлить") || strings.Contains(body, "Удалить OpenVPN") || !strings.Contains(body, "Удалить WireGuard") {
+	if strings.Contains(body, "Продлить сертификат") || strings.Contains(body, "Удалить OpenVPN") || !strings.Contains(body, "Удалить WireGuard") {
 		t.Errorf("кнопки wg-only: %s", body)
 	}
-	if !strings.Contains(body, "блокировка действует только на OpenVPN") {
-		t.Error("нет пометки про блокировку")
+	if strings.Contains(body, "только на OpenVPN") {
+		t.Error("осталась пометка про блокировку только OpenVPN")
 	}
 	// Сбой профилей не роняет карточку.
 	e.node.ProfilesFn = nil

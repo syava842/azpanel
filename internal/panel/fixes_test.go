@@ -109,8 +109,8 @@ func TestCollectorTrafficCheckedWhenExpiredSkipped(t *testing.T) {
 	}
 }
 
-// M3: клиента только с WireGuard не автоблокируем, в журнал — раз в сутки.
-func TestCollectorWGOnlySkippedLoggedOncePerDay(t *testing.T) {
+// M3: клиента только с WireGuard сборщик блокирует так же (блок WG есть у агента).
+func TestCollectorBlocksWGOnly(t *testing.T) {
 	e := newCollEnv(t)
 	ctx := context.Background()
 	past := e.now.Add(-time.Hour).Unix()
@@ -120,17 +120,22 @@ func TestCollectorWGOnlySkippedLoggedOncePerDay(t *testing.T) {
 		e.tick(t)
 		e.advance(time.Minute)
 	}
-	if len(e.blocks) != 0 {
-		t.Fatalf("WG-клиент заблокирован: %v", e.blocks)
+	if len(e.blocks) != 1 || e.blocks[0] != "w:true" {
+		t.Fatalf("блокировки: %v", e.blocks)
+	}
+	if c, _ := e.st.Card(ctx, store.LocalNode, "w"); c.AutoBlock != store.AutoBlockExpired {
+		t.Fatalf("карточка: %+v", c)
 	}
 	list, _, _ := e.st.AuditList(ctx, 10, 0, "")
-	if len(list) != 1 || !strings.Contains(list[0].After, "WireGuard появится позже") {
+	if len(list) != 1 || !strings.Contains(list[0].After, "заблокирован") {
 		t.Fatalf("журнал: %+v", list)
 	}
-	e.advance(25 * time.Hour)
+	// продлили — сборщик разблокирует и WG-клиента
+	future := e.now.Add(48 * time.Hour).Unix()
+	e.st.SaveCardFields(ctx, store.Card{Node: store.LocalNode, Name: "w", AccessUntil: &future})
 	e.tick(t)
-	if list, _, _ = e.st.AuditList(ctx, 10, 0, ""); len(list) != 2 {
-		t.Fatalf("сутки спустя запись не повторена: %+v", list)
+	if len(e.blocks) != 2 || e.blocks[1] != "w:false" {
+		t.Fatalf("блокировки: %v", e.blocks)
 	}
 }
 
@@ -181,20 +186,13 @@ func TestManualBlockOverAutoBlockBecomesManual(t *testing.T) {
 	if card.AutoBlock != "" || card.AutoSkip != "x" {
 		t.Fatalf("карточка: %+v", card)
 	}
-	// у клиента с WireGuard в журнале оговорка
+	// в журнале блокировки нет оговорки «только OpenVPN»
 	post(e, c, "/clients/both/block", url.Values{"csrf": {csrf}, "blocked": {"1"}})
 	list, _, _ := e.srv.Store.AuditList(ctx, 10, 0, "block")
-	var both, bob string
 	for _, x := range list {
-		switch x.Target {
-		case "both":
-			both = x.After
-		case "bob":
-			bob = x.After
+		if strings.Contains(x.After, "только OpenVPN") {
+			t.Fatalf("журнал: %q", x.After)
 		}
-	}
-	if !strings.Contains(both, "только OpenVPN") || strings.Contains(bob, "только OpenVPN") {
-		t.Fatalf("журнал: both=%q bob=%q", both, bob)
 	}
 }
 

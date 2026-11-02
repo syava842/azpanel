@@ -36,6 +36,16 @@
   {{end}}
 </div>
 
+<h2>Доступ до</h2>
+<form method="post" action="{{.Href}}/access" class="card narrow">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <p>Сейчас: {{.UntilStamp}}. Срок распространяется на все клиенты пользователя: у клиента действует меньший из его срока и срока пользователя.</p>
+  <label>Доступ до (ГГГГ-ММ-ДД, конец дня по UTC; пусто — без срока)
+    <input type="text" name="until" placeholder="2026-12-31" value="{{.Until}}">
+  </label>
+  <button type="submit">Сохранить срок</button>
+</form>
+
 <h2>Клиенты</h2>
 <ul>
   {{range .Clients}}<li><a href="{{.Href}}">{{.Name}}</a></li>

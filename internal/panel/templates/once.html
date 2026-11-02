@@ -4,6 +4,14 @@
   <p>{{.Note}}</p>
   <pre>{{range .Items}}{{.}}
 {{end}}</pre>
+  {{if .Batch}}
+  <form method="post" action="/codes/download">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <input type="hidden" name="batch" value="{{.Batch}}">
+    <input type="hidden" name="codes" value="{{.Joined}}">
+    <button type="submit">Скачать .txt</button>
+  </form>
+  {{end}}
   <p><a href="{{.Back}}">{{.BackText}}</a></p>
 </div>
 {{end}}
