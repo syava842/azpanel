@@ -91,13 +91,14 @@ func cmdPanelPasswd(args []string, in io.Reader, readTerm func() ([]byte, error)
 	if err != nil {
 		return err
 	}
-	if err := secrets.Set(paths.SecretsFile(), panel.SecretAdminHash, hash); err != nil {
-		return err
-	}
+	// Хеш и имя — одной записью: иначе сбой между ними оставил бы новый
+	// пароль при старом имени.
+	kv := map[string]string{panel.SecretAdminHash: hash}
 	if user != "" {
-		if err := secrets.Set(paths.SecretsFile(), panel.SecretAdminUser, user); err != nil {
-			return err
-		}
+		kv[panel.SecretAdminUser] = user
+	}
+	if err := secrets.SetMany(paths.SecretsFile(), kv); err != nil {
+		return err
 	}
 	fmt.Fprintln(out, "пароль задан; перезапустите панель: systemctl restart azpanel-panel")
 	return nil

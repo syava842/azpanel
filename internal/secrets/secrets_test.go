@@ -71,3 +71,38 @@ func TestNewToken(t *testing.T) {
 		t.Fatalf("a = %q, b = %q", a, b)
 	}
 }
+
+func TestSetManyAtomicAndKeepsOthers(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "secrets.env")
+	if err := Set(p, "KEEP", "1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetMany(p, map[string]string{"A_KEY": "x=y", "B_KEY": "2", "KEEP": "3"}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m) != 3 || m["A_KEY"] != "x=y" || m["B_KEY"] != "2" || m["KEEP"] != "3" {
+		t.Fatalf("m = %v", m)
+	}
+}
+
+func TestSetManyBadInputWritesNothing(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "secrets.env")
+	if err := Set(p, "KEEP", "1"); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(p)
+	if err := SetMany(p, map[string]string{"GOOD": "1", "bad key": "x"}); err == nil {
+		t.Fatal("плохой ключ принят")
+	}
+	if err := SetMany(p, map[string]string{"GOOD": "1", "OTHER": "a\nb"}); err == nil {
+		t.Fatal("значение с переводом строки принято")
+	}
+	after, _ := os.ReadFile(p)
+	if string(before) != string(after) {
+		t.Fatalf("файл изменён: %q -> %q", before, after)
+	}
+}

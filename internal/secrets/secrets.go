@@ -50,17 +50,28 @@ func Load(path string) (map[string]string, error) {
 // Set меняет или добавляет один ключ, остальные сохраняет. Комментарии
 // файла при этом не сохраняются: файл пишет только azpanel.
 func Set(path, key, value string) error {
-	if !keyRe.MatchString(key) {
-		return fmt.Errorf("недопустимое имя ключа %q", key)
-	}
-	if strings.ContainsAny(value, "\r\n") {
-		return errors.New("значение секрета не может содержать перевод строки")
+	return SetMany(path, map[string]string{key: value})
+}
+
+// SetMany меняет или добавляет несколько ключей одной атомарной записью:
+// записаны либо все, либо ни один. При ошибке проверки ключей и значений
+// файл не трогается.
+func SetMany(path string, kv map[string]string) error {
+	for key, value := range kv {
+		if !keyRe.MatchString(key) {
+			return fmt.Errorf("недопустимое имя ключа %q", key)
+		}
+		if strings.ContainsAny(value, "\r\n") {
+			return errors.New("значение секрета не может содержать перевод строки")
+		}
 	}
 	m, err := Load(path)
 	if err != nil {
 		return err
 	}
-	m[key] = value
+	for k, v := range kv {
+		m[k] = v
+	}
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
