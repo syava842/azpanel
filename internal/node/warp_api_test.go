@@ -39,7 +39,7 @@ func newWarpEnv(t *testing.T, installed bool) warpEnv {
 		case "status json":
 			return status, nil
 		case "domainslist":
-			return []byte("example.com\n# c\ngemini.google.com\n"), nil
+			return []byte("example.com|user|1\n# c\ngemini.google.com|gemini|0\n"), nil
 		case "iplist":
 			return []byte("198.51.100.0/24\n"), nil
 		}
@@ -113,6 +113,10 @@ func TestWarpLists(t *testing.T) {
 	d, err := e.client.WarpDomains(context.Background())
 	if err != nil || strings.Join(d.Lines, "|") != "example.com|gemini.google.com" {
 		t.Fatalf("%+v %v", d, err)
+	}
+	if len(d.Domains) != 2 || d.Domains[0] != (nodeapi.WarpDomain{Domain: "example.com", Source: "user", Enabled: true}) ||
+		d.Domains[1].Source != "gemini" || d.Domains[1].Enabled {
+		t.Fatalf("разобранные домены: %+v", d.Domains)
 	}
 	ips, err := e.client.WarpIPs(context.Background())
 	if err != nil || len(ips.Lines) != 1 {

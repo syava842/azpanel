@@ -91,7 +91,7 @@ func (a *API) warpSummary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, nodeapi.Warp{Builtin: a.warpBuiltin(r), AZ: a.Warp.Warper.Status(r.Context())})
 }
 
-func (a *API) warpLists(w http.ResponseWriter, r *http.Request, list func() ([]string, error), what string) {
+func (a *API) warpLists(w http.ResponseWriter, r *http.Request, list func() (nodeapi.WarpList, error), what string) {
 	if !a.warpReady(w) {
 		return
 	}
@@ -99,12 +99,12 @@ func (a *API) warpLists(w http.ResponseWriter, r *http.Request, list func() ([]s
 		writeErr(w, http.StatusConflict, "AZ-WARP не установлен")
 		return
 	}
-	lines, err := list()
+	out, err := list()
 	if err != nil {
 		a.fail(w, what+" не прочитан", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, nodeapi.WarpList{Lines: lines})
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (a *API) warpDomains(w http.ResponseWriter, r *http.Request) {
@@ -112,7 +112,14 @@ func (a *API) warpDomains(w http.ResponseWriter, r *http.Request) {
 		a.warpReady(w)
 		return
 	}
-	a.warpLists(w, r, func() ([]string, error) { return a.Warp.Warper.Domains(r.Context()) }, "список доменов")
+	a.warpLists(w, r, func() (nodeapi.WarpList, error) {
+		entries, err := a.Warp.Warper.Domains(r.Context())
+		list := nodeapi.WarpList{Lines: []string{}, Domains: entries}
+		for _, e := range entries {
+			list.Lines = append(list.Lines, e.Domain)
+		}
+		return list, err
+	}, "список доменов")
 }
 
 func (a *API) warpIPs(w http.ResponseWriter, r *http.Request) {
@@ -120,7 +127,10 @@ func (a *API) warpIPs(w http.ResponseWriter, r *http.Request) {
 		a.warpReady(w)
 		return
 	}
-	a.warpLists(w, r, func() ([]string, error) { return a.Warp.Warper.IPs(r.Context()) }, "список подсетей")
+	a.warpLists(w, r, func() (nodeapi.WarpList, error) {
+		lines, err := a.Warp.Warper.IPs(r.Context())
+		return nodeapi.WarpList{Lines: lines}, err
+	}, "список подсетей")
 }
 
 // warpRun запускает warp-run: команды warper по порядку, разделённые «--».

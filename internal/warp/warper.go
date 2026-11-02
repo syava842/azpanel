@@ -237,16 +237,46 @@ func listLines(out []byte) []string {
 	return lines
 }
 
+// DomainEntry — строка «warper domainslist»: домен|источник|включён
+// (например, «claud.ai|user|1»). Источник — user, gemini, chatgpt…
+type DomainEntry struct {
+	Domain  string `json:"domain"`
+	Source  string `json:"source,omitempty"`
+	Enabled bool   `json:"enabled"`
+}
+
+// parseDomainLine разбирает строку списка доменов. Строка без «|» — просто
+// домен (включён, источник неизвестен): старый вывод warper.
+func parseDomainLine(l string) DomainEntry {
+	parts := strings.Split(l, "|")
+	e := DomainEntry{Domain: strings.TrimSpace(parts[0]), Enabled: true}
+	if len(parts) > 1 {
+		e.Source = strings.TrimSpace(parts[1])
+	}
+	if len(parts) > 2 {
+		if f := strings.TrimSpace(parts[2]); f != "" {
+			e.Enabled = f == "1"
+		}
+	}
+	return e
+}
+
 // Domains — вывод «warper domainslist».
-func (w *Warper) Domains(ctx context.Context) ([]string, error) {
+func (w *Warper) Domains(ctx context.Context) ([]DomainEntry, error) {
 	out, err := w.run(ctx, "domainslist")
 	if err != nil {
 		return nil, err
 	}
-	return listLines(out), nil
+	entries := []DomainEntry{}
+	for _, l := range listLines(out) {
+		if e := parseDomainLine(l); e.Domain != "" {
+			entries = append(entries, e)
+		}
+	}
+	return entries, nil
 }
 
-// IPs — вывод «warper iplist».
+// IPs — вывод «warper iplist»: подсети CIDR по строке.
 func (w *Warper) IPs(ctx context.Context) ([]string, error) {
 	out, err := w.run(ctx, "iplist")
 	if err != nil {

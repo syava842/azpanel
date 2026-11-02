@@ -14,6 +14,8 @@ type (
 	WarpOp             = warp.Op
 	WarpInstallAnswers = warp.InstallAnswers
 	WarpWGManual       = warp.WGManual
+	// WarpDomain — строка списка доменов: домен, источник (user, gemini, chatgpt…), включён.
+	WarpDomain = warp.DomainEntry
 )
 
 // WarpPeer — пир встроенного WARP (публичные ключи не передаются).
@@ -36,9 +38,12 @@ type Warp struct {
 	AZ      WarpStatus  `json:"az"`
 }
 
-// WarpList — вывод warper domainslist либо iplist.
+// WarpList — вывод warper domainslist либо iplist. Lines — домены (без
+// источника и флага) либо подсети; Domains — те же домены с источником и
+// флагом, только для списка доменов.
 type WarpList struct {
-	Lines []string `json:"lines"`
+	Lines   []string     `json:"lines"`
+	Domains []WarpDomain `json:"domains,omitempty"`
 }
 
 // WarpEdit — правки списков. Sync: после правок выполнить синхронизацию

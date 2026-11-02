@@ -194,11 +194,38 @@ func TestRunStepsStopsOnFailureAndHidesSecrets(t *testing.T) {
 }
 
 func TestDomainsListParsing(t *testing.T) {
+	// Образец с 94: домен|источник|включён.
+	sample := "# комментарий\n\x1b[0;32mclaud.ai|user|1\x1b[0m\n\ngemini.google.com|gemini|0\n chat.openai.com|chatgpt|1 \nold.example.com\n*.wild.example|user|\n"
 	w := &Warper{Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		return []byte("# комментарий\n\x1b[0;32mexample.com\x1b[0m\n\n  gemini.google.com \n"), nil
+		return []byte(sample), nil
 	}}
 	got, err := w.Domains(context.Background())
-	if err != nil || strings.Join(got, "|") != "example.com|gemini.google.com" {
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []DomainEntry{
+		{Domain: "claud.ai", Source: "user", Enabled: true},
+		{Domain: "gemini.google.com", Source: "gemini", Enabled: false},
+		{Domain: "chat.openai.com", Source: "chatgpt", Enabled: true},
+		{Domain: "old.example.com", Enabled: true},
+		{Domain: "*.wild.example", Source: "user", Enabled: true},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("%+v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("строка %d: %+v, ждали %+v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestIPsListParsing(t *testing.T) {
+	w := &Warper{Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte("198.51.100.0/24\n# c\n203.0.113.0/24\n"), nil
+	}}
+	got, err := w.IPs(context.Background())
+	if err != nil || strings.Join(got, "|") != "198.51.100.0/24|203.0.113.0/24" {
 		t.Fatalf("%v %v", got, err)
 	}
 }
