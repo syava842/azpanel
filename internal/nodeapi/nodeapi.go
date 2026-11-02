@@ -428,6 +428,9 @@ type SetupEntry struct {
 	Options  []string `json:"options,omitempty"`
 	Min      int      `json:"min,omitempty"`
 	Max      int      `json:"max,omitempty"`
+	// Present false — ключа нет в файле (value пусто); его можно задать,
+	// агент допишет строку.
+	Present bool `json:"present"`
 }
 
 // SetupPut — новые значения ключей.

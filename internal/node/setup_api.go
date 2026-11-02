@@ -33,7 +33,7 @@ func (a *API) getSetup(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, nodeapi.SetupEntry{
 			Key: e.Key, Value: e.Value, Kind: e.Kind, Apply: apply, Title: e.Title, Editable: e.Editable,
-			Hint: e.Hint, Options: e.Options, Min: e.Min, Max: e.Max,
+			Hint: e.Hint, Options: e.Options, Min: e.Min, Max: e.Max, Present: e.Present,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)

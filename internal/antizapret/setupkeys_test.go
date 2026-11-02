@@ -307,3 +307,48 @@ func TestSetupSetKeepsMode(t *testing.T) {
 		t.Fatalf("права: %v", info.Mode().Perm())
 	}
 }
+
+func TestSetupListShowsMissingTableKeys(t *testing.T) {
+	s := newSetup(t, sampleSetup)
+	list, err := s.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byKey := map[string]SetupEntry{}
+	seenMissing := false
+	for _, e := range list {
+		byKey[e.Key] = e
+		if !e.Present {
+			seenMissing = true
+		} else if seenMissing {
+			t.Fatalf("ключ из файла %s после отсутствующих", e.Key)
+		}
+		if IsSecretSetupKey(e.Key) {
+			t.Fatalf("секрет в ответе: %+v", e)
+		}
+	}
+	for k := range setupKeys {
+		if _, ok := byKey[k]; !ok && !IsSecretSetupKey(k) {
+			t.Errorf("ключ таблицы %s не показан", k)
+		}
+	}
+	if e := byKey["VPN_ADBLOCK"]; e.Present || e.Value != "" || !e.Editable || e.Kind != SetupYN {
+		t.Fatalf("отсутствующий ключ: %+v", e)
+	}
+	if e := byKey["ROUTE_ALL"]; !e.Present || e.Value != "n" {
+		t.Fatalf("ключ из файла: %+v", e)
+	}
+	if e := byKey["SOME_NEW_KEY"]; !e.Present {
+		t.Fatalf("неизвестный ключ из файла: %+v", e)
+	}
+	// Отсутствующий ключ можно задать: строка дописывается в конец.
+	if _, err := s.Set(map[string]string{"VPN_ADBLOCK": "y"}); err != nil {
+		t.Fatal(err)
+	}
+	list, _ = s.List()
+	for _, e := range list {
+		if e.Key == "VPN_ADBLOCK" && (!e.Present || e.Value != "y") {
+			t.Fatalf("после записи: %+v", e)
+		}
+	}
+}

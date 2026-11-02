@@ -178,6 +178,7 @@ type SetupEntry struct {
 	Options  []string
 	Min, Max int
 	Editable bool
+	Present  bool // false — ключа нет в файле, он известен только таблице
 }
 
 // KeyError — причина отказа по ключу.
@@ -241,6 +242,8 @@ func parseSetupLine(line string) (setupLine, bool) {
 
 // List — ключи файла в порядке появления, без секретов. Повторный ключ
 // показывается один раз с последним значением, как его прочтёт bash.
+// Следом, по алфавиту, идут ключи таблицы, которых в файле нет (Present=false,
+// значение пусто): их можно задать, Set допишет строку в конец.
 func (s *SetupFile) List() ([]SetupEntry, error) {
 	data, err := os.ReadFile(s.Path)
 	if err != nil {
@@ -263,14 +266,28 @@ func (s *SetupFile) List() ([]SetupEntry, error) {
 		if IsSecretSetupKey(k) {
 			continue
 		}
-		e := SetupEntry{Key: k, Value: vals[k]}
-		if def, ok := LookupSetupKey(k); ok {
-			e.Kind, e.Apply, e.Title, e.Hint = def.Kind, def.Apply, def.Title, def.Hint
-			e.Options, e.Min, e.Max, e.Editable = def.Options, def.Min, def.Max, def.Editable
+		out = append(out, makeSetupEntry(k, vals[k], true))
+	}
+	var missing []string
+	for k := range setupKeys {
+		if _, in := vals[k]; !in && !IsSecretSetupKey(k) {
+			missing = append(missing, k)
 		}
-		out = append(out, e)
+	}
+	sort.Strings(missing)
+	for _, k := range missing {
+		out = append(out, makeSetupEntry(k, "", false))
 	}
 	return out, nil
+}
+
+func makeSetupEntry(k, val string, present bool) SetupEntry {
+	e := SetupEntry{Key: k, Value: val, Present: present}
+	if def, ok := LookupSetupKey(k); ok {
+		e.Kind, e.Apply, e.Title, e.Hint = def.Kind, def.Apply, def.Title, def.Hint
+		e.Options, e.Min, e.Max, e.Editable = def.Options, def.Min, def.Max, def.Editable
+	}
+	return e
 }
 
 // Set проверяет все значения и записывает изменившиеся. Есть хоть одна ошибка —

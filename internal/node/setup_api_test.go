@@ -52,8 +52,14 @@ func TestAPISetupGetHidesSecrets(t *testing.T) {
 			t.Fatalf("apply должен быть массивом: %+v", s)
 		}
 	}
-	if len(list) != 7 || list[0].Key != "WIREGUARD_ENABLE" {
+	if list[0].Key != "WIREGUARD_ENABLE" || !list[0].Present {
 		t.Fatalf("%+v", list)
+	}
+	if s := list[by["VPN_ADBLOCK"]]; s.Present || s.Value != "" || !s.Editable || s.Kind != "yn" {
+		t.Fatalf("ключ таблицы, которого нет в файле: %+v", s)
+	}
+	if s := list[by["ROUTE_ALL"]]; !s.Present {
+		t.Fatalf("%+v", s)
 	}
 	if s := list[by["ROUTE_ALL"]]; s.Kind != "yn" || !s.Editable || strings.Join(s.Apply, ",") != "doall" || s.Value != "n" || s.Title == "" {
 		t.Fatalf("%+v", s)
