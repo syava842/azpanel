@@ -39,7 +39,7 @@ type API struct {
 	Inventory     antizapret.Inventory
 	ClientSh      *antizapret.ClientSh
 	AntiZapretDir string
-	BackupDir     string // куда client.sh 8 кладёт backup*.tar.gz; пусто — /root
+	BackupDir     string // куда client.sh 8 кладёт backup*.tar.gz; пусто — node.antizapret_dir
 	SocketDir     string
 	Sampler       *sysinfo.Sampler
 	Denials       *Denials                   // отказы хука; nil — журнал пуст
