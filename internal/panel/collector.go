@@ -50,6 +50,9 @@ type Collector struct {
 	online   int
 
 	wgNoted map[string]time.Time // когда в журнал писали «WG-клиент пропущен» (под tickMu)
+	// goneOwned — клиенты с владельцем, которых не оказалось у агента на
+	// прошлом проходе (под tickMu): владелец снимается со второго раза подряд.
+	goneOwned map[string]bool
 
 	mu    sync.Mutex // защищает историю адресов и результат Flapping
 	addrs map[string]*peerAddrs
@@ -318,6 +321,7 @@ func (c *Collector) autoBlock(ctx context.Context, now time.Time) error {
 	if err != nil {
 		return err
 	}
+	c.releaseGoneOwners(ctx, now, clients)
 	totals := map[string]map[string]store.Bytes{} // период -> имя -> трафик
 	totalsFor := func(period string) (map[string]store.Bytes, error) {
 		if t, ok := totals[period]; ok {
@@ -381,6 +385,44 @@ func (c *Collector) autoBlock(ctx context.Context, now time.Time) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// releaseGoneOwners снимает владельца с карточки клиента, которого нет у
+// агента два прохода подряд: иначе клиент, пересозданный на сервере с тем же
+// именем мимо панели, достался бы прежнему владельцу. Один проход не
+// считается: сбой чтения у агента не должен лишать людей их клиентов.
+func (c *Collector) releaseGoneOwners(ctx context.Context, now time.Time, clients []nodeapi.Client) {
+	rctx, cancel := context.WithTimeout(ctx, stepTimeout)
+	owned, err := c.Store.OwnedClients(rctx, c.NodeID)
+	cancel()
+	if err != nil {
+		c.log().Warn("сборщик: владельцы клиентов не прочитаны", "err", err)
+		return
+	}
+	alive := make(map[string]bool, len(clients))
+	for _, cl := range clients {
+		alive[cl.Name] = true
+	}
+	next := map[string]bool{}
+	for _, name := range owned {
+		if alive[name] {
+			continue
+		}
+		if !c.goneOwned[name] {
+			next[name] = true // первый раз: запоминаем
+			continue
+		}
+		wctx, wcancel := context.WithTimeout(context.WithoutCancel(ctx), dbWriteTimeout)
+		err := c.Store.SetOwner(wctx, c.NodeID, name, nil)
+		wcancel()
+		if err != nil {
+			c.log().Warn("сборщик: владелец не снят", "client", name, "err", err)
+			next[name] = true
+			continue
+		}
+		c.audit(ctx, now, "owner_cleared", name, "", "владелец снят: клиент пропал")
+	}
+	c.goneOwned = next
 }
 
 // agentUnreachable: ошибка — тайм-аут или сбой сети, а не ответ агента

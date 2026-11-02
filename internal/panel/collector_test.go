@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -327,5 +328,49 @@ func TestCollectorManualUnblockSkipsTrafficUntilLimitChanges(t *testing.T) {
 	e.tick(t)
 	if len(e.blocks) != 1 {
 		t.Fatalf("блокировки = %v", e.blocks)
+	}
+}
+
+func TestCollectorReleasesOwnerOfGoneClient(t *testing.T) {
+	e := newCollEnv(t)
+	ctx := context.Background()
+	u, err := e.st.CreateUser(ctx, store.User{Login: "bob", Hash: "x", Role: store.RoleUser})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.clients = []nodeapi.Client{{Name: "alive", OpenVPN: true}, {Name: "gone", OpenVPN: true}}
+	for _, n := range []string{"alive", "gone"} {
+		if err := e.st.SetOwner(ctx, store.LocalNode, n, &u.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.tick(t)
+	e.clients = e.clients[:1] // «gone» удалён на сервере мимо панели
+	e.advance(time.Minute)
+	e.tick(t)
+	if _, has, _ := e.st.OwnerOf(ctx, store.LocalNode, "gone"); !has {
+		t.Fatal("владелец снят с первого же прохода")
+	}
+	// Клиент вернулся на проход — отсчёт начинается заново.
+	e.clients = append(e.clients, nodeapi.Client{Name: "gone", OpenVPN: true})
+	e.advance(time.Minute)
+	e.tick(t)
+	e.clients = e.clients[:1]
+	e.advance(time.Minute)
+	e.tick(t)
+	if _, has, _ := e.st.OwnerOf(ctx, store.LocalNode, "gone"); !has {
+		t.Fatal("владелец снят, хотя пропажа была не два прохода подряд")
+	}
+	e.advance(time.Minute)
+	e.tick(t)
+	if _, has, _ := e.st.OwnerOf(ctx, store.LocalNode, "gone"); has {
+		t.Fatal("владелец пропавшего клиента не снят")
+	}
+	if _, has, _ := e.st.OwnerOf(ctx, store.LocalNode, "alive"); !has {
+		t.Fatal("владелец живого клиента снят")
+	}
+	list, _, _ := e.st.AuditList(ctx, 20, 0, "owner_cleared")
+	if len(list) != 1 || !strings.Contains(list[0].After, "клиент пропал") || list[0].Target != "gone" {
+		t.Fatalf("журнал: %+v", list)
 	}
 }
