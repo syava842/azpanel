@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/syava842/azpanel/internal/config"
 	"github.com/syava842/azpanel/internal/nodeapi"
 	"github.com/syava842/azpanel/internal/store"
 )
@@ -47,6 +48,12 @@ type Collector struct {
 	lastTick time.Time
 	lastHour int64 // час (Unix/3600) последнего успешного Rollup
 	online   int
+
+	// Alerts — настройки уведомлений бота; nil — сборщик их не кладёт.
+	Alerts *config.Telegram
+	sys    nodeapi.System // ресурсы последнего прохода (под tickMu)
+	sysOK  bool           // агент ответил на последнем проходе
+	alert  alertState
 
 	// goneOwned — клиенты с владельцем, которых не оказалось у агента на
 	// прошлом проходе (под tickMu): владелец снимается со второго раза подряд.
@@ -138,6 +145,7 @@ func (c *Collector) Tick(ctx context.Context) error {
 		return c.collectTraffic(ctx, now, s)
 	})
 	step("ресурсы", stepTimeout, func(ctx context.Context) error { return c.collectResources(ctx, now) })
+	step("уведомления", stepTimeout, func(ctx context.Context) error { return c.alerts(ctx, now) })
 	step("свёртка", stepTimeout, func(ctx context.Context) error { return c.rollup(ctx, now) })
 	// у автоблокировки свои тайм-ауты: на чтение и на каждого клиента отдельно
 	step("автоблокировка", 0, func(ctx context.Context) error { return c.autoBlock(ctx, now) })
@@ -202,6 +210,7 @@ func delta(cur, old int64) int64 {
 
 func (c *Collector) collectResources(ctx context.Context, now time.Time) error {
 	sys, err := c.Node.System(ctx)
+	c.sys, c.sysOK = sys, err == nil
 	if err != nil {
 		return err
 	}
