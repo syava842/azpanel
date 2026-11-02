@@ -22,7 +22,7 @@
     {{if .Editable}}
     <label>{{.Title}} <small class="muted">{{.Key}}{{if .Apply}} · {{.Apply}}{{end}}</small>
       {{if .Options}}
-      <select name="v_{{.Key}}">{{range .Options}}<option value="{{.Value}}"{{if .Sel}} selected{{end}}>{{.Value}}</option>{{end}}</select>
+      <select name="v_{{.Key}}">{{range .Options}}<option value="{{.Value}}"{{if .Sel}} selected{{end}}>{{if .Label}}{{.Label}}{{else}}{{.Value}}{{end}}</option>{{end}}</select>
       {{else if eq .Kind "int"}}
       <input type="number" name="v_{{.Key}}" value="{{.Value}}"{{if .Min}} min="{{.Min}}"{{end}}{{if .Max}} max="{{.Max}}"{{end}}>
       {{else}}

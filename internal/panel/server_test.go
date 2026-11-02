@@ -39,7 +39,8 @@ type fakeNode struct {
 	RoutingFilesFn      func(ctx context.Context) ([]nodeapi.RoutingFile, error)
 	RoutingLinesFn      func(ctx context.Context, name string, o nodeapi.RoutingListOpts) (nodeapi.RoutingPage, error)
 	PatchRoutingFn      func(ctx context.Context, name string, p nodeapi.RoutingPatch) (nodeapi.RoutingPatchResult, error)
-	ReplaceRoutingFn    func(ctx context.Context, name, content string) (nodeapi.RoutingPutResult, error)
+	RoutingRawFn        func(ctx context.Context, name string) (nodeapi.RoutingRaw, error)
+	ReplaceRoutingFn    func(ctx context.Context, name, content, baseSHA string) (nodeapi.RoutingPutResult, error)
 	RoutingBackupsFn    func(ctx context.Context, name string) ([]nodeapi.RoutingBackup, error)
 	RestoreRoutingFn    func(ctx context.Context, name, stamp string) (nodeapi.RoutingFile, error)
 	SetupFn             func(ctx context.Context) ([]nodeapi.SetupEntry, error)
@@ -144,11 +145,17 @@ func (f *fakeNode) PatchRouting(ctx context.Context, name string, p nodeapi.Rout
 	}
 	return f.PatchRoutingFn(ctx, name, p)
 }
-func (f *fakeNode) ReplaceRouting(ctx context.Context, name, content string) (nodeapi.RoutingPutResult, error) {
+func (f *fakeNode) RoutingRaw(ctx context.Context, name string) (nodeapi.RoutingRaw, error) {
+	if f.RoutingRawFn == nil {
+		return nodeapi.RoutingRaw{}, errNotSet
+	}
+	return f.RoutingRawFn(ctx, name)
+}
+func (f *fakeNode) ReplaceRouting(ctx context.Context, name, content, baseSHA string) (nodeapi.RoutingPutResult, error) {
 	if f.ReplaceRoutingFn == nil {
 		return nodeapi.RoutingPutResult{}, errNotSet
 	}
-	return f.ReplaceRoutingFn(ctx, name, content)
+	return f.ReplaceRoutingFn(ctx, name, content, baseSHA)
 }
 func (f *fakeNode) RoutingBackups(ctx context.Context, name string) ([]nodeapi.RoutingBackup, error) {
 	if f.RoutingBackupsFn == nil {

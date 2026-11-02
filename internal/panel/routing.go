@@ -16,13 +16,13 @@ import (
 const (
 	routingPageSize = 200     // строк списка на странице
 	fullTabMax      = 1 << 20 // «Целиком» — только для файлов до 1 МБ
-	fullTabPages    = 200     // страховка цикла сборки файла: 200 страниц по 1000 строк
 	maxPageNumber   = 100000
 )
 
 var (
 	reRoutingName  = regexp.MustCompile(`^[a-z0-9-]+\.txt$`)
 	reRoutingStamp = regexp.MustCompile(`^[0-9]{8}T[0-9]{6}\.[0-9]{3}Z$`)
+	reSHA256       = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
 // kindTitles — подписи видов списков.
@@ -78,14 +78,21 @@ type fileView struct {
 	AddText  string
 	FullText string // подставляется вместо загруженного содержимого
 	HasFull  bool
+	BaseSHA  string // отпечаток текста, с которого начата правка «Целиком»
 	Errors   []string
 	Changed  bool
+	NoChange string // уведомление «ничего не изменилось»
 	Status   int
 }
 
 // routingFile — страница списка: поиск, страницы по 200 строк, правка.
 func (s *Server) routingFile(w http.ResponseWriter, r *http.Request) {
 	v := fileView{Tab: r.URL.Query().Get("tab"), Changed: r.URL.Query().Get("msg") == "routing_changed", Status: http.StatusOK}
+	if r.URL.Query().Get("msg") == "routing_nochange" {
+		if n, err := strconv.Atoi(r.URL.Query().Get("n")); err == nil && n >= 0 && n <= 1_000_000 {
+			v.NoChange = fmt.Sprintf("ничего не изменилось: строк пропущено — %d (уже были в списке или не найдены)", n)
+		}
+	}
 	s.fileView(w, r, v)
 }
 
@@ -122,20 +129,23 @@ func (s *Server) fileView(w http.ResponseWriter, r *http.Request, v fileView) {
 	full := v.Tab == "full" && canFull
 	data := map[string]any{"File": file, "Name": name, "Href": routingHref(name), "Editable": editable, "Q": q,
 		"Size": humanBytes(uint64(max(file.Bytes, 0))), "KindTitle": kindTitles[file.Kind],
-		"CanFull": canFull, "Full": full, "AddText": v.AddText, "Changed": v.Changed}
+		"CanFull": canFull, "Full": full, "AddText": v.AddText, "Changed": v.Changed, "NoChange": v.NoChange}
 	if len(v.Errors) > 0 {
 		data["Errors"] = v.Errors
 	}
 	if full {
-		text := v.FullText
+		text, sum := v.FullText, v.BaseSHA
 		if !v.HasFull {
-			if text, err = s.loadWhole(r, name); err != nil {
+			raw, err := s.Node.RoutingRaw(r.Context(), name)
+			if err != nil {
 				st, tx := s.agentErr(err)
 				s.errorPage(w, r, st, tx)
 				return
 			}
+			text, sum = raw.Content, raw.SHA256
 		}
 		data["FullText"] = text
+		data["BaseSHA"] = sum
 	} else {
 		pg, err := s.Node.RoutingLines(r.Context(), name, nodeapi.RoutingListOpts{Query: q, Offset: (page - 1) * routingPageSize, Limit: routingPageSize})
 		if err != nil {
@@ -183,25 +193,6 @@ func backupRows(bs []nodeapi.RoutingBackup) []backupRow {
 		out = append(out, row)
 	}
 	return out
-}
-
-// loadWhole собирает записи списка страницами по 1000 (предел агента).
-func (s *Server) loadWhole(r *http.Request, name string) (string, error) {
-	var b strings.Builder
-	for i := 0; i < fullTabPages; i++ {
-		pg, err := s.Node.RoutingLines(r.Context(), name, nodeapi.RoutingListOpts{Offset: i * 1000, Limit: 1000})
-		if err != nil {
-			return "", err
-		}
-		for _, l := range pg.Lines {
-			b.WriteString(l)
-			b.WriteByte('\n')
-		}
-		if (i+1)*1000 >= pg.Total || len(pg.Lines) == 0 {
-			break
-		}
-	}
-	return b.String(), nil
 }
 
 // splitInput режет textarea на непустые строки; orig[i] — номер i-й строки
@@ -254,7 +245,12 @@ func (s *Server) routingAdd(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.Log.Warn("действие", "user", s.user(r), "op", "routing_add", "file", name, "err", err)
 		st, tx := s.agentErr(err)
+		s.auditRefused(r, "routing_add", name, st, tx)
 		s.fileView(w, r, fileView{AddText: text, Status: st, Errors: []string{tx}})
+		return
+	}
+	if noChange(res) {
+		redirectMsg(w, r, routingHref(name), "routing_nochange", res.Skipped)
 		return
 	}
 	if !res.Applied { // агент отвечает 200, но файл не менялся
@@ -281,7 +277,12 @@ func (s *Server) routingRemove(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.Log.Warn("действие", "user", s.user(r), "op", "routing_remove", "file", name, "err", err)
 		st, tx := s.agentErr(err)
+		s.auditRefused(r, "routing_remove", name, st, tx)
 		s.fileView(w, r, fileView{Status: st, Errors: []string{tx}})
+		return
+	}
+	if noChange(res) {
+		redirectMsg(w, r, routingHref(name), "routing_nochange", res.Skipped)
 		return
 	}
 	if !res.Applied {
@@ -300,15 +301,22 @@ func (s *Server) routingReplace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	text := strings.ReplaceAll(r.PostForm.Get("content"), "\r\n", "\n")
-	res, err := s.Node.ReplaceRouting(r.Context(), name, text)
+	sum := r.PostForm.Get("base_sha256")
+	if !reSHA256.MatchString(sum) {
+		s.fileView(w, r, fileView{Tab: "full", FullText: text, HasFull: true, Status: http.StatusBadRequest,
+			Errors: []string{"форма устарела: откройте вкладку «Целиком» заново"}})
+		return
+	}
+	res, err := s.Node.ReplaceRouting(r.Context(), name, text, sum)
 	if err != nil {
 		s.Log.Warn("действие", "user", s.user(r), "op", "routing_replace", "file", name, "err", err)
 		st, tx := s.agentErr(err)
-		s.fileView(w, r, fileView{Tab: "full", FullText: text, HasFull: true, Status: st, Errors: []string{tx}})
+		s.auditRefused(r, "routing_replace", name, st, tx)
+		s.fileView(w, r, fileView{Tab: "full", FullText: text, HasFull: true, BaseSHA: sum, Status: st, Errors: []string{tx}})
 		return
 	}
 	if !res.Applied {
-		s.fileView(w, r, fileView{Tab: "full", FullText: text, HasFull: true, Status: http.StatusBadRequest,
+		s.fileView(w, r, fileView{Tab: "full", FullText: text, HasFull: true, BaseSHA: sum, Status: http.StatusBadRequest,
 			Errors: errorsOrDefault(lineErrors(res.Errors, nil))})
 		return
 	}
@@ -331,12 +339,24 @@ func (s *Server) routingRestore(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.Node.RestoreRouting(r.Context(), name, stamp); err != nil {
 		s.Log.Warn("действие", "user", s.user(r), "op", "routing_restore", "file", name, "err", err)
 		st, tx := s.agentErr(err)
+		s.auditRefused(r, "routing_restore", name, st, tx)
 		s.fileView(w, r, fileView{Status: st, Errors: []string{tx}})
 		return
 	}
 	s.Log.Info("действие", "user", s.user(r), "op", "routing_restore", "file", name, "stamp", stamp)
 	s.audit(r, "routing_restore", name, "", stamp)
 	redirectRouting(w, r, name)
+}
+
+// noChange: агент ответил 200, ошибок строк нет, а правка ничего не изменила
+// (всё добавляемое уже есть, удаляемое не найдено) — это не ошибка.
+func noChange(res nodeapi.RoutingPatchResult) bool {
+	return !res.Applied && len(res.Errors) == 0 && res.Skipped > 0
+}
+
+// auditRefused пишет в журнал действий отказ агента (в том числе 409).
+func (s *Server) auditRefused(r *http.Request, op, target string, status int, text string) {
+	s.audit(r, op, target, "", fmt.Sprintf("отказ (%d): %s", status, text))
 }
 
 func errorsOrDefault(e []string) []string {

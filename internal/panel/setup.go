@@ -54,6 +54,7 @@ var applyTexts = map[string]string{
 
 type optionRow struct {
 	Value string
+	Label string // подпись, если отличается от значения
 	Sel   bool
 }
 
@@ -112,8 +113,15 @@ func buildSetupGroups(entries []nodeapi.SetupEntry, typed map[string]string) []s
 			opts = []string{"y", "n"}
 		}
 		if e.Editable && len(opts) > 0 {
-			if val == "" { // ключа нет в файле: пустой пункт, пока не выбрано
-				row.Options = append(row.Options, optionRow{Value: "", Sel: true})
+			// Текущее значение вне вариантов (пусто, «Y», «4», записано вручную)
+			// — первый пункт: иначе браузер выбрал бы за человека первый вариант,
+			// и форма молча поменяла бы ключ.
+			if !contains(opts, e.Value) {
+				o := optionRow{Value: e.Value, Sel: val == e.Value}
+				if e.Value != "" {
+					o.Label = e.Value + " (нестандартное)"
+				}
+				row.Options = append(row.Options, o)
 			}
 			for _, o := range opts {
 				row.Options = append(row.Options, optionRow{Value: o, Sel: o == val})
@@ -129,6 +137,15 @@ func buildSetupGroups(entries []nodeapi.SetupEntry, typed map[string]string) []s
 		}
 	}
 	return res
+}
+
+func contains(list []string, v string) bool {
+	for _, x := range list {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }
 
 // parseApply оставляет в параметре apply только известные способы, в
@@ -201,6 +218,7 @@ func (s *Server) setupSave(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.Log.Warn("действие", "user", s.user(r), "op", "setup_set", "keys", strings.Join(keys, ","), "err", err)
 		st, tx := s.agentErr(err)
+		s.auditRefused(r, "setup_set", "setup", st, tx+" ("+strings.Join(keys, ",")+")")
 		s.setupView(w, r, st, tx, typed)
 		return
 	}

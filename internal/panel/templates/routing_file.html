@@ -9,6 +9,7 @@
   <button type="submit">Применить (doall.sh)</button>
 </form>
 {{end}}
+{{if .NoChange}}<p class="muted">{{.NoChange}}</p>{{end}}
 {{if .Errors}}<div class="error"><ul>{{range .Errors}}<li>{{.}}</li>{{end}}</ul></div>{{end}}
 {{if not .Editable}}
 <p class="muted">Этот файл не относится к спискам маршрутизации и только читается.</p>
@@ -22,10 +23,11 @@
 {{if .Full}}
 <form method="post" action="{{.Href}}/replace" class="card">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
-  <label>Полное содержимое списка (по записи в строке)
+  <input type="hidden" name="base_sha256" value="{{.BaseSHA}}">
+  <label>Полное содержимое списка (как в файле, с комментариями)
     <textarea name="content" rows="24" cols="80" spellcheck="false">{{.FullText}}</textarea>
   </label>
-  <p class="warn">Комментарии и пустые строки здесь не показываются и при сохранении будут удалены. Перед записью агент делает копию.</p>
+  <p class="warn">Файл показан как есть. Если он изменился после открытия страницы (другой администратор, задача), сохранение будет отклонено. Перед записью агент делает копию.</p>
   <button type="submit" class="danger">Заменить список целиком</button>
 </form>
 {{else}}

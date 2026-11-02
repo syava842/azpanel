@@ -40,6 +40,8 @@ func newTaskRow(t nodeapi.Task) taskRow {
 	switch {
 	case t.Finished == nil:
 		row.Running, row.Status = true, "идёт"
+	case t.TimedOut:
+		row.Ended, row.Status, row.Failure = formatTime(t.Finished), "остановлена по пределу времени", true
 	case t.Interrupted && t.ExitCode == nil:
 		row.Ended, row.Status, row.Failure = formatTime(t.Finished), "прервана перезапуском агента, итог неизвестен", true
 	case t.ExitCode == nil:
@@ -105,6 +107,7 @@ func (s *Server) taskStart(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.Log.Warn("действие", "user", s.user(r), "op", "task_start", "kind", kind, "err", err)
 		st, tx := s.agentErr(err)
+		s.auditRefused(r, "task_start", kind, st, tx)
 		s.errorPage(w, r, st, tx)
 		return
 	}

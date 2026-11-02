@@ -174,17 +174,17 @@ func TestRoutingRemoveAndRestoreAndReplace(t *testing.T) {
 	}
 
 	var content string
-	e.node.ReplaceRoutingFn = func(_ context.Context, _, text string) (nodeapi.RoutingPutResult, error) {
+	e.node.ReplaceRoutingFn = func(_ context.Context, _, text, _ string) (nodeapi.RoutingPutResult, error) {
 		content = text
 		return nodeapi.RoutingPutResult{Applied: true, Lines: 1}, nil
 	}
-	if rec := post(e, c, "/routing/files/include-hosts.txt/replace", url.Values{"csrf": {csrf}, "content": {"z.example.com\r\n"}}); rec.Code != 303 || content != "z.example.com\n" {
+	if rec := post(e, c, "/routing/files/include-hosts.txt/replace", url.Values{"csrf": {csrf}, "base_sha256": {testSHA}, "content": {"z.example.com\r\n"}}); rec.Code != 303 || content != "z.example.com\n" {
 		t.Errorf("replace: %d %q", rec.Code, content)
 	}
-	e.node.ReplaceRoutingFn = func(context.Context, string, string) (nodeapi.RoutingPutResult, error) {
+	e.node.ReplaceRoutingFn = func(context.Context, string, string, string) (nodeapi.RoutingPutResult, error) {
 		return nodeapi.RoutingPutResult{Applied: false, Errors: []nodeapi.RoutingLineError{{Line: 1, Value: "x", Reason: "плохо"}}}, nil
 	}
-	rec = post(e, c, "/routing/files/include-hosts.txt/replace", url.Values{"csrf": {csrf}, "content": {"x\n"}})
+	rec = post(e, c, "/routing/files/include-hosts.txt/replace", url.Values{"csrf": {csrf}, "base_sha256": {testSHA}, "content": {"x\n"}})
 	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "строка 1: x — плохо") {
 		t.Errorf("replace с ошибкой: %d %s", rec.Code, rec.Body)
 	}
@@ -198,12 +198,15 @@ func TestRoutingRemoveAndRestoreAndReplace(t *testing.T) {
 func TestRoutingFullTabBigBody(t *testing.T) {
 	e, c := routingEnv(t)
 	var content string
-	e.node.ReplaceRoutingFn = func(_ context.Context, _, text string) (nodeapi.RoutingPutResult, error) {
+	e.node.ReplaceRoutingFn = func(_ context.Context, _, text, _ string) (nodeapi.RoutingPutResult, error) {
 		content = text
 		return nodeapi.RoutingPutResult{Applied: true}, nil
 	}
+	e.node.RoutingRawFn = func(_ context.Context, name string) (nodeapi.RoutingRaw, error) {
+		return nodeapi.RoutingRaw{Name: name, Content: "a.example.com\n", SHA256: testSHA}, nil
+	}
 	big := strings.Repeat("host.example.com\n", 10000) // 170 КБ: больше обычного предела форм
-	rec := post(e, c, "/routing/files/include-hosts.txt/replace", url.Values{"csrf": {csrfOf(t, e, c)}, "content": {big}})
+	rec := post(e, c, "/routing/files/include-hosts.txt/replace", url.Values{"csrf": {csrfOf(t, e, c)}, "base_sha256": {testSHA}, "content": {big}})
 	if rec.Code != 303 || content != big {
 		t.Fatalf("%d, получено %d байт", rec.Code, len(content))
 	}
@@ -351,8 +354,9 @@ func TestSetupSaveErrorKeepsInput(t *testing.T) {
 	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "OPENVPN_HOST: недопустимый адрес") || !strings.Contains(rec.Body.String(), `value="bad host"`) {
 		t.Errorf("%d %s", rec.Code, rec.Body)
 	}
-	if list, _, _ := e.st.AuditList(context.Background(), 10, 0, "setup_set"); len(list) != 0 {
-		t.Error("неудача записана в журнал")
+	// Отказ агента — в журнал действий.
+	if list, _, _ := e.st.AuditList(context.Background(), 10, 0, "setup_set"); len(list) != 1 || !strings.Contains(list[0].After, "отказ (400)") {
+		t.Errorf("отказ не записан в журнал: %+v", list)
 	}
 }
 
