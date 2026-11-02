@@ -121,12 +121,15 @@ type TaskDetail struct {
 
 type ErrorBody struct {
 	Error string `json:"error"`
+	// Questions — вопросы миграции конфига без ответа (409 на POST /v1/update).
+	Questions []UpdateQuestion `json:"questions,omitempty"`
 }
 
 // Error — ответ агента с кодом 4xx или 5xx.
 type Error struct {
-	Status  int
-	Message string
+	Status    int
+	Message   string
+	Questions []UpdateQuestion // только у 409 на POST /v1/update
 }
 
 func (e *Error) Error() string {
@@ -249,20 +252,26 @@ func (c *HTTPClient) do(ctx context.Context, method, path string, in, out any) e
 
 func (c *HTTPClient) raw(ctx context.Context, method, path string, in any) ([]byte, error) {
 	var rd io.Reader
+	ctype := ""
 	if in != nil {
 		b, err := json.Marshal(in)
 		if err != nil {
 			return nil, err
 		}
-		rd = bytes.NewReader(b)
+		rd, ctype = bytes.NewReader(b), "application/json"
 	}
+	return c.rawBody(ctx, method, path, ctype, rd)
+}
+
+// rawBody — запрос с готовым телом (JSON или multipart).
+func (c *HTTPClient) rawBody(ctx context.Context, method, path, ctype string, rd io.Reader) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, rd)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Token)
-	if in != nil {
-		req.Header.Set("Content-Type", "application/json")
+	if ctype != "" {
+		req.Header.Set("Content-Type", ctype)
 	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
@@ -275,7 +284,7 @@ func (c *HTTPClient) raw(ctx context.Context, method, path string, in any) ([]by
 		if json.Unmarshal(body, &e) != nil || e.Error == "" {
 			e.Error = http.StatusText(resp.StatusCode)
 		}
-		return nil, &Error{Status: resp.StatusCode, Message: e.Error}
+		return nil, &Error{Status: resp.StatusCode, Message: e.Error, Questions: e.Questions}
 	}
 	return body, err
 }

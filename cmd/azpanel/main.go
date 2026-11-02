@@ -50,6 +50,8 @@ func run(args []string) int {
 		return report(cmdUser(args[1:], os.Stdout))
 	case "limit":
 		return report(cmdLimit(args[1:], os.Stdout))
+	case "update":
+		return report(cmdUpdate(args[1:], os.Stdin, os.Stdout))
 	case "internal":
 		return report(cmdInternal(args[1:], os.Stdout))
 	case "sessions":
@@ -165,6 +167,7 @@ func usage() {
   azpanel limit unset <клиент>         снять лимит
   azpanel limit get <клиент>
   azpanel limit list
+  azpanel update [--check] [--yes]     обновить azpanel до последнего релиза (с бэкапом и откатом)
   azpanel sessions                     сессии и лимиты по клиентам
   azpanel hook install|uninstall|status
   azpanel hook connect|disconnect      вызывается OpenVPN

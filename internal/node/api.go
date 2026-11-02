@@ -50,6 +50,7 @@ type API struct {
 	AZVersion     *antizapret.VersionService // версия AntiZapret по коммитам; nil — не настроена
 	Telemt        *TelemtService             // telemt; nil — не настроен
 	Warp          *WarpService               // WARP; nil — не настроен
+	Update        *UpdateService             // самообновление azpanel; nil — не настроено
 	Services      func(ctx context.Context) ([]sysinfo.Service, error)
 	WGShow        func(ctx context.Context, iface string) ([]antizapret.WGPeer, error)
 	Kill          func(sock, name string, timeout time.Duration) (int, error)
@@ -103,6 +104,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/antizapret/restore", a.azRestore)
 	a.registerTelemt(mux)
 	a.registerWarp(mux)
+	a.registerUpdate(mux)
 	return a.auth(mux)
 }
 
@@ -118,6 +120,9 @@ func (a *API) auth(next http.Handler) http.Handler {
 		limit := int64(maxAPIBody)
 		if strings.HasPrefix(r.URL.Path, "/v1/routing/files/") && (r.Method == http.MethodPut || r.Method == http.MethodPatch) {
 			limit = maxRoutingBody
+		}
+		if r.URL.Path == "/v1/update" && r.Method == http.MethodPost {
+			limit = maxUpdateBody
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		next.ServeHTTP(w, r)

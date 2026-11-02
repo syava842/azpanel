@@ -19,6 +19,7 @@ import (
 	"github.com/syava842/azpanel/internal/secrets"
 	"github.com/syava842/azpanel/internal/sysinfo"
 	"github.com/syava842/azpanel/internal/telemt"
+	"github.com/syava842/azpanel/internal/update"
 	"github.com/syava842/azpanel/internal/warp"
 )
 
@@ -182,6 +183,10 @@ func startAPI(ctx context.Context, cfg config.Config, version string, tr *Tracke
 	paramsDir := filepath.Join(paths.Data(), "params")
 	api.Telemt = &TelemtService{Env: telemt.NewEnv(), Self: paths.Binary(), ParamsDir: paramsDir}
 	api.Warp = &WarpService{Warper: &warp.Warper{}, Self: paths.Binary(), ParamsDir: paramsDir}
+	api.Update = &UpdateService{
+		Root: paths.Root(), Pub: update.ReleasePublicKey, Self: paths.Binary(), ParamsDir: paramsDir,
+		StageDir: filepath.Join(paths.Data(), "update", "stage"),
+	}
 	api.Services = func(ctx context.Context) ([]sysinfo.Service, error) {
 		// systemctl может зависнуть (например, при перегруженном dbus).
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
