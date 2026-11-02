@@ -171,3 +171,39 @@ func TestRunCreatesDBAndCollects(t *testing.T) {
 		t.Fatalf("точки ресурсов: %+v", pts)
 	}
 }
+
+// Занятый порт: Run возвращает ошибку, а сборщик не успевает ни разу
+// обратиться к агенту (в его проходе срабатывают автоблокировки).
+func TestRunBusyPortNoCollect(t *testing.T) {
+	runEnv(t)
+	token := strings.Repeat("ef", 32)
+	secrets.Set(paths.SecretsFile(), secrets.NodeToken, token)
+	var calls atomic.Int32
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Write([]byte(`[]`))
+	}))
+	defer agent.Close()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	cfg := config.Default()
+	cfg.Panel.Listen = ln.Addr().String()
+	cfg.Panel.NodeURL = agent.URL
+	// Занятие порта «затягивается»: будь сборщик запущен раньше, за это время
+	// он успел бы обратиться к агенту.
+	old := listen
+	listen = func(network, addr string) (net.Listener, error) {
+		time.Sleep(300 * time.Millisecond)
+		return old(network, addr)
+	}
+	defer func() { listen = old }()
+	if err := Run(context.Background(), cfg, "test"); err == nil {
+		t.Fatal("занятый порт: ждали ошибку")
+	}
+	if n := calls.Load(); n != 0 {
+		t.Fatalf("агента вызвали %d раз при занятом порте", n)
+	}
+}

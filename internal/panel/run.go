@@ -68,16 +68,6 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		HistoryDays: cfg.Panel.HistoryDays,
 		Log:         log,
 	}
-	// defer срабатывают в обратном порядке: сначала сборщик останавливается
-	// и его ждут, и только потом закрываются геоданные и база.
-	cctx, stopCollector := context.WithCancel(ctx)
-	var colDone sync.WaitGroup
-	colDone.Add(1)
-	go func() { defer colDone.Done(); col.Run(cctx) }()
-	colDone.Add(1)
-	go func() { defer colDone.Done(); purgeSessionsLoop(cctx, st, purgeEvery, log) }()
-	defer func() { stopCollector(); colDone.Wait() }()
-
 	s := &Server{
 		Node:      node,
 		Store:     st,
@@ -92,10 +82,21 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		DataKey:         dataKey,
 		RequireAdmin2FA: cfg.Panel.RequireAdmin2FA,
 	}
-	ln, err := net.Listen("tcp", cfg.Panel.Listen)
+	ln, err := listen("tcp", cfg.Panel.Listen)
 	if err != nil {
 		return err
 	}
+	// Фоновые задачи стартуют только после занятия порта: при занятом порте
+	// сборщик не должен успеть сделать проход (в нём срабатывают автоблокировки).
+	// defer срабатывают в обратном порядке: сначала сборщик останавливается
+	// и его ждут, и только потом закрываются геоданные и база.
+	cctx, stopCollector := context.WithCancel(ctx)
+	var colDone sync.WaitGroup
+	colDone.Add(1)
+	go func() { defer colDone.Done(); col.Run(cctx) }()
+	colDone.Add(1)
+	go func() { defer colDone.Done(); purgeSessionsLoop(cctx, st, purgeEvery, log) }()
+	defer func() { stopCollector(); colDone.Wait() }()
 	srv := &http.Server{
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -120,6 +121,9 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	log.Info("панель остановлена")
 	return err
 }
+
+// listen — занятие порта; в тестах подменяется.
+var listen = net.Listen
 
 const purgeEvery = time.Hour
 
