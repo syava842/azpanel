@@ -29,6 +29,9 @@ const (
 	maxTail       = 64 << 10 // хвост журнала в ответе по задаче
 	taskLogMaxAge = 30 * 24 * time.Hour
 	rotateEvery   = 24 * time.Hour
+	// orphanGrace — запас сверх предела вида: дольше юнит жить не может
+	// (RuntimeMaxSec), значит, ожидание дальше бессмысленно.
+	orphanGrace = 10 * time.Minute
 )
 
 // Виды задач. Этапы 5, 10 и 11 добавят свои.
@@ -296,6 +299,14 @@ func (t *Tasks) waitOrphan(id string) {
 		every = 2 * time.Second
 	}
 	for t.state(Unit(id)) != unitInactive {
+		if task, ok := t.Get(id); ok && t.now().After(task.Started.Add(t.timeout(task.Kind)+orphanGrace)) {
+			// Юнит не отвечает дольше любого мыслимого срока: состояние
+			// неизвестно, очередь не должна висеть вечно.
+			appendLog(task.Log, "юнит задачи не отвечает дольше предела времени — состояние неизвестно, задача закрыта без кода\n")
+			t.logger().Warn("ожидание задачи прекращено: юнит не отвечает дольше предела", "id", id, "kind", task.Kind)
+			t.finish(id, nil, true, false)
+			return
+		}
 		select {
 		case <-t.context().Done():
 			return // агент останавливается: задачу подхватит следующий запуск

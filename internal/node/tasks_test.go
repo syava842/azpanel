@@ -594,3 +594,36 @@ func TestExitWrapperRealShell(t *testing.T) {
 		t.Fatal("временный файл остался")
 	}
 }
+
+func TestTasksOrphanGivesUpAfterDeadline(t *testing.T) {
+	root := t.TempDir()
+	state := filepath.Join(root, "tasks.json")
+	os.WriteFile(state, []byte(`[{"id":"cccccccccccc","kind":"profiles","started":"2026-11-02T10:00:00Z","log":"/x/c.log"}]`), 0o640)
+	started := time.Date(2026, 11, 2, 10, 0, 0, 0, time.UTC)
+	var mu sync.Mutex
+	now := started.Add(35 * time.Minute)
+	tk := &Tasks{
+		LogDir: root, StatePath: state, PollEvery: 5 * time.Millisecond,
+		Now: func() time.Time { mu.Lock(); defer mu.Unlock(); return now },
+		// systemd не отвечает вовсе.
+		Active: func(context.Context, string) (bool, error) { return false, errors.New("dbus занят") },
+		Exec:   func(context.Context, string, ...string) (int, []byte, error) { return 0, nil, nil },
+	}
+	if err := tk.Load(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if g, _ := tk.Get("cccccccccccc"); g.Finished != nil {
+		t.Fatalf("до предела задача должна ждать: %+v", g)
+	}
+	mu.Lock()
+	now = started.Add(30*time.Minute + 10*time.Minute + time.Second)
+	mu.Unlock()
+	got := waitFinished(t, tk, "cccccccccccc")
+	if got.ExitCode != nil || !got.Interrupted || got.TimedOut {
+		t.Fatalf("задача должна закрыться без кода: %+v", got)
+	}
+	if _, busy := tk.Running(); busy {
+		t.Fatal("очередь должна освободиться")
+	}
+}
