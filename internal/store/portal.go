@@ -122,6 +122,34 @@ func (s *Store) DeleteUserLink(ctx context.Context, userID int64) error {
 	return err
 }
 
+// DeleteDownloadLinks снимает все одноразовые ссылки клиента: после удаления
+// и пересоздания клиента с тем же именем старая ссылка не должна отдавать
+// новые ключи.
+func (s *Store) DeleteDownloadLinks(ctx context.Context, node int64, client string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM download_links WHERE node_id = ? AND client = ?`, node, client)
+	return err
+}
+
+// LinkedClients — имена клиентов узла, у которых есть ссылка портала или
+// одноразовая ссылка.
+func (s *Store) LinkedClients(ctx context.Context, node int64) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT client FROM portal_links WHERE kind = 'c' AND node_id = ?
+		UNION SELECT client FROM download_links WHERE node_id = ? ORDER BY 1`, node, node)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
 // DownloadLink — одноразовая ссылка на скачивание файла конфигурации.
 type DownloadLink struct {
 	Hash     string
@@ -237,6 +265,21 @@ func (s *Store) Attempts(ctx context.Context, key string, since int64) (int, err
 	var n int
 	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM attempts WHERE key = ? AND ts >= ?`, key, since).Scan(&n)
 	return n, err
+}
+
+// LastAttempt — время самой поздней попытки под ключом начиная с since
+// включительно; ok=false — попыток нет.
+func (s *Store) LastAttempt(ctx context.Context, key string, since int64) (ts int64, ok bool, err error) {
+	var v sql.NullInt64
+	err = s.db.QueryRowContext(ctx, `SELECT max(ts) FROM attempts WHERE key = ? AND ts >= ?`, key, since).Scan(&v)
+	return v.Int64, v.Valid, err
+}
+
+// RefundAttempt снимает одну попытку под ключом key, записанную в момент ts
+// (резерв, не оправдавшийся ошибкой кода).
+func (s *Store) RefundAttempt(ctx context.Context, key string, ts int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM attempts WHERE rowid = (SELECT rowid FROM attempts WHERE key = ? AND ts = ? LIMIT 1)`, key, ts)
+	return err
 }
 
 // PurgeAttempts стирает попытки старше before.

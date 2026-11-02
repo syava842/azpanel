@@ -78,6 +78,8 @@ const (
 	MinTrafficDays = 35
 	// AuditKeepDays — сколько суток хранить журнал действий.
 	AuditKeepDays = 365
+	// OutboxKeepDays — сколько суток хранить уже отправленные уведомления.
+	OutboxKeepDays = 30
 )
 
 // Rollup сворачивает минуты законченных часов в часовые точки и удаляет
@@ -107,6 +109,10 @@ func (s *Store) Rollup(ctx context.Context, now int64, historyDays int) error {
 			{`DELETE FROM traffic_hour WHERE ts < ?`, []any{trafficCut}},
 			{`DELETE FROM resource_hour WHERE ts < ?`, []any{hourCut}},
 			{`DELETE FROM audit WHERE ts < ?`, []any{auditCut}},
+			// истёкшие одноразовые ссылки уже недоступны (мёртвые и несуществующие
+			// отвечают одинаково); отправленные уведомления нужны разве что для разбора
+			{`DELETE FROM download_links WHERE expires < ?`, []any{now}},
+			{`DELETE FROM outbox WHERE sent IS NOT NULL AND sent < ?`, []any{now - OutboxKeepDays*86400}},
 		}
 		for _, st := range stmts {
 			if _, err := t.ExecContext(ctx, st.q, st.args...); err != nil {

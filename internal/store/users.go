@@ -218,11 +218,24 @@ func (s *Store) AdvanceTOTPStep(ctx context.Context, id, step int64) (bool, erro
 }
 
 // DeleteUser удаляет пользователя; сессии и коды уходят каскадом, у его
-// клиентов владелец снимается.
+// клиентов владелец снимается. Срок доступа пользователя переходит на
+// карточки его клиентов: иначе клиенты, заблокированные по этому сроку,
+// разблокировались бы и стали бессрочными.
 func (s *Store) DeleteUser(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)
-	return err
+	return s.tx(ctx, func(t *sql.Tx) error {
+		if _, err := t.ExecContext(ctx, passLimitSQL+` WHERE owner_id = ?`, id, id); err != nil {
+			return err
+		}
+		_, err := t.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)
+		return err
+	})
 }
+
+// passLimitSQL переносит срок владельца (первый параметр — его id) на карточки
+// клиентов; без срока у владельца ничего не меняет. Условие отбора дописывает
+// вызывающий.
+const passLimitSQL = `UPDATE client_cards SET access_until = MIN(COALESCE(access_until, o.u), o.u)
+	FROM (SELECT access_until AS u FROM users WHERE id = ? AND access_until IS NOT NULL) AS o`
 
 // AdminCount — число не отключённых администраторов.
 func (s *Store) AdminCount(ctx context.Context) (int, error) {
@@ -286,8 +299,22 @@ func (s *Store) SetOwner(ctx context.Context, node int64, client string, userID 
 			ON CONFLICT(node_id, name) DO UPDATE SET owner_id = excluded.owner_id`, node, client, *userID)
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE client_cards SET owner_id = NULL WHERE node_id = ? AND name = ?`, node, client)
-	return err
+	// срок владельца остаётся на клиенте, иначе снятие владельца снимало бы и срок
+	return s.tx(ctx, func(t *sql.Tx) error {
+		var oid sql.NullInt64
+		err := t.QueryRowContext(ctx, `SELECT owner_id FROM client_cards WHERE node_id = ? AND name = ?`, node, client).Scan(&oid)
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && !oid.Valid) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if _, err := t.ExecContext(ctx, passLimitSQL+` WHERE node_id = ? AND name = ?`, oid.Int64, node, client); err != nil {
+			return err
+		}
+		_, err = t.ExecContext(ctx, `UPDATE client_cards SET owner_id = NULL WHERE node_id = ? AND name = ?`, node, client)
+		return err
+	})
 }
 
 // ClientsOf — клиенты пользователя по узлу и имени.

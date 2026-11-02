@@ -197,6 +197,12 @@ type CodeFilter struct {
 
 // Codes — коды по фильтру, новые сверху; состояние считается на момент now.
 func (s *Store) Codes(ctx context.Context, f CodeFilter, now int64) ([]Code, error) {
+	return s.CodesPage(ctx, f, now, 0, 0)
+}
+
+// CodesPage — то же постранично: limit строк, начиная с offset; limit <= 0 —
+// без предела.
+func (s *Store) CodesPage(ctx context.Context, f CodeFilter, now int64, limit, offset int) ([]Code, error) {
 	q := `SELECT ` + codeCols + ` FROM unlock_codes WHERE 1=1`
 	var args []any
 	if f.Batch != "" {
@@ -218,7 +224,12 @@ func (s *Store) Codes(ctx context.Context, f CodeFilter, now int64) ([]Code, err
 	default:
 		return nil, fmt.Errorf("неизвестное состояние кода %q", f.State)
 	}
-	rows, err := s.db.QueryContext(ctx, q+` ORDER BY id DESC`, args...)
+	q += ` ORDER BY id DESC`
+	if limit > 0 {
+		q += ` LIMIT ? OFFSET ?`
+		args = append(args, limit, max(offset, 0))
+	}
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -230,6 +241,50 @@ func (s *Store) Codes(ctx context.Context, f CodeFilter, now int64) ([]Code, err
 			return nil, err
 		}
 		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// BatchStat — сводка по пачке: число кодов по состояниям на момент запроса.
+type BatchStat struct {
+	Batch                                 string
+	Created                               int64
+	CreatedBy                             string
+	UserID                                *int64
+	Days                                  int64
+	Total, Active, Used, Expired, Revoked int
+}
+
+// Batches — сводки по пачкам, новые сверху, не больше limit (<= 0 — все);
+// считает база, а не перечитывание всех кодов.
+func (s *Store) Batches(ctx context.Context, now int64, limit int) ([]BatchStat, error) {
+	q := `SELECT batch, min(created), max(created_by), max(user_id), max(days), count(*),
+		sum(used_at IS NULL AND revoked = 0 AND valid_until >= ?),
+		sum(used_at IS NOT NULL),
+		sum(used_at IS NULL AND revoked = 0 AND valid_until < ?),
+		sum(used_at IS NULL AND revoked = 1)
+		FROM unlock_codes GROUP BY batch ORDER BY max(id) DESC`
+	args := []any{now, now}
+	if limit > 0 {
+		q += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []BatchStat{}
+	for rows.Next() {
+		var b BatchStat
+		var uid sql.NullInt64
+		if err := rows.Scan(&b.Batch, &b.Created, &b.CreatedBy, &uid, &b.Days, &b.Total, &b.Active, &b.Used, &b.Expired, &b.Revoked); err != nil {
+			return nil, err
+		}
+		if uid.Valid {
+			b.UserID = &uid.Int64
+		}
+		out = append(out, b)
 	}
 	return out, rows.Err()
 }
