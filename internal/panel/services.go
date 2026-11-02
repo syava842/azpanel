@@ -51,7 +51,7 @@ var _ ServiceNode = (*nodeapi.HTTPClient)(nil)
 
 // svc возвращает узел с методами сервисов; нет — страница с ошибкой 501.
 func (s *Server) svc(w http.ResponseWriter, r *http.Request) (ServiceNode, bool) {
-	if n := s.serviceNode(); n != nil {
+	if n := s.serviceFor(r); n != nil {
 		return n, true
 	}
 	s.errorPage(w, r, http.StatusNotImplemented, "этот агент не поддерживает управление сервисами")
@@ -102,4 +102,12 @@ func (s *Server) serviceRefused(w http.ResponseWriter, r *http.Request, op, targ
 	st, tx := s.svcErr(err)
 	s.auditRefused(r, op, target, st, tx)
 	s.errorPage(w, r, st, tx)
+}
+
+// serviceFor — сервисные методы выбранного узла; без выбора — узел панели.
+func (s *Server) serviceFor(r *http.Request) ServiceNode {
+	if c := selected(r); c != nil {
+		return c.svc
+	}
+	return s.serviceNode()
 }

@@ -16,6 +16,9 @@
     <a href="{{url "/"}}">Клиенты</a>
     {{if .IsAdmin}}
     <a href="{{url "/monitor"}}">Сейчас</a>
+    <a href="{{url "/nodes"}}">Узлы</a>
+    <a href="{{url "/groups"}}">Группы</a>
+    <a href="{{url "/proxy"}}">Прокси</a>
     <a href="{{url "/routing"}}">Маршрутизация</a>
     <a href="{{url "/settings/antizapret"}}">AntiZapret</a>
     <a href="{{url "/antizapret/update"}}">Обновление AZ</a>
@@ -38,6 +41,8 @@
   {{end}}
 </header>
 <main>
+  {{if .NodeSwitch}}<div class="nodebar">Узел: {{range .NodeSwitch}}{{if .Current}}<b>{{.Name}}</b>{{else}}<a href="{{url .Path}}?node={{.ID}}">{{.Name}}</a>{{end}} {{end}}</div>{{end}}
+  {{if .Replica}}<div class="flash">Узел — реплика группы «{{.ReplicaGroup}}»: клиенты, списки и настройки AntiZapret меняются на основном, здесь они только читаются.</div>{{end}}
   {{if .Msg}}<div class="flash">{{.Msg}}</div>{{end}}
   {{if .Error}}<div class="error">{{.Error}}</div>{{end}}
   {{template "content" .}}

@@ -67,7 +67,7 @@ func (s *Server) addHistory(r *http.Request, c nodeapi.Client, data map[string]a
 	} else {
 		data["TrafficChart"], data["TrafficDown"], data["TrafficUp"] = chart, down, up
 	}
-	card, err := s.Store.Card(r.Context(), s.NodeID, c.Name)
+	card, err := s.Store.Card(r.Context(), s.nodeIDFor(r), c.Name)
 	if err != nil {
 		s.Log.Warn("карточка клиента не прочитана", "client", c.Name, "err", err)
 		data["HistoryErr"] = "карточка недоступна"
@@ -75,7 +75,7 @@ func (s *Server) addHistory(r *http.Request, c nodeapi.Client, data map[string]a
 		return
 	}
 	data["CardForm"] = newCardForm(card)
-	if eff, err := s.Store.EffectiveUntil(r.Context(), s.NodeID, c.Name); err == nil {
+	if eff, err := s.Store.EffectiveUntil(r.Context(), s.nodeIDFor(r), c.Name); err == nil {
 		data["EffUntil"] = untilStamp(eff)
 	}
 	data["AutoBlockText"] = autoBlockText(c, card)
@@ -141,7 +141,7 @@ func (s *Server) saveCard(w http.ResponseWriter, r *http.Request) {
 		s.card(w, r, c, http.StatusServiceUnavailable, "база панели недоступна")
 		return
 	}
-	old, err := s.Store.Card(r.Context(), s.NodeID, c.Name)
+	old, err := s.Store.Card(r.Context(), s.nodeIDFor(r), c.Name)
 	if err != nil {
 		s.Log.Error("карточка не прочитана", "client", c.Name, "err", err)
 		s.card(w, r, c, http.StatusInternalServerError, "карточка недоступна")
@@ -172,16 +172,16 @@ func (s *Server) forgetAutoBlock(ctx context.Context, c nodeapi.Client) {
 	if s.Store == nil {
 		return
 	}
-	card, err := s.Store.Card(ctx, s.NodeID, c.Name)
+	card, err := s.Store.Card(ctx, s.nodeIDCtx(ctx), c.Name)
 	if err != nil || card.AutoBlock == "" {
 		return
 	}
 	// отпечаток считается от действующего срока, как у сборщика
-	if eff, err := s.Store.EffectiveUntil(ctx, s.NodeID, c.Name); err == nil {
+	if eff, err := s.Store.EffectiveUntil(ctx, s.nodeIDCtx(ctx), c.Name); err == nil {
 		card.AccessUntil = eff
 	}
-	fp := strings.Join(activeFingerprints(ctx, s.Store, s.NodeID, c.Name, card.AutoBlock, card, s.now()), skipSep)
-	if err := s.Store.SetAutoBlock(ctx, s.NodeID, c.Name, "", fp); err != nil {
+	fp := strings.Join(activeFingerprints(ctx, s.Store, s.nodeIDCtx(ctx), c.Name, card.AutoBlock, card, s.now()), skipSep)
+	if err := s.Store.SetAutoBlock(ctx, s.nodeIDCtx(ctx), c.Name, "", fp); err != nil {
 		s.Log.Warn("отметка автоблокировки не снята", "client", c.Name, "err", err)
 	}
 }
@@ -193,11 +193,11 @@ func (s *Server) makeManualBlock(ctx context.Context, c nodeapi.Client) {
 	if s.Store == nil {
 		return
 	}
-	card, err := s.Store.Card(ctx, s.NodeID, c.Name)
+	card, err := s.Store.Card(ctx, s.nodeIDCtx(ctx), c.Name)
 	if err != nil || card.AutoBlock == "" {
 		return
 	}
-	if err := s.Store.SetAutoBlock(ctx, s.NodeID, c.Name, "", card.AutoSkip); err != nil {
+	if err := s.Store.SetAutoBlock(ctx, s.nodeIDCtx(ctx), c.Name, "", card.AutoSkip); err != nil {
 		s.Log.Warn("отметка автоблокировки не снята", "client", c.Name, "err", err)
 	}
 }

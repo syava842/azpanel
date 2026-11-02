@@ -58,7 +58,7 @@ func (s *Server) agentErr(err error) (int, string) {
 }
 
 func (s *Server) routingPage(w http.ResponseWriter, r *http.Request) {
-	files, err := s.Node.RoutingFiles(r.Context())
+	files, err := s.nodeFor(r).RoutingFiles(r.Context())
 	if err != nil {
 		st, tx := s.agentErr(err)
 		s.errorPage(w, r, st, tx)
@@ -102,7 +102,7 @@ func (s *Server) fileView(w http.ResponseWriter, r *http.Request, v fileView) {
 		s.errorPage(w, r, http.StatusNotFound, "список не найден")
 		return
 	}
-	files, err := s.Node.RoutingFiles(r.Context())
+	files, err := s.nodeFor(r).RoutingFiles(r.Context())
 	if err != nil {
 		st, tx := s.agentErr(err)
 		s.errorPage(w, r, st, tx)
@@ -119,7 +119,7 @@ func (s *Server) fileView(w http.ResponseWriter, r *http.Request, v fileView) {
 		s.errorPage(w, r, http.StatusNotFound, "список не найден")
 		return
 	}
-	editable := file.Kind != ""
+	editable := file.Kind != "" && !replicaFor(r)
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	page := 1
 	if n, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && n >= 1 {
@@ -136,7 +136,7 @@ func (s *Server) fileView(w http.ResponseWriter, r *http.Request, v fileView) {
 	if full {
 		text, sum := v.FullText, v.BaseSHA
 		if !v.HasFull {
-			raw, err := s.Node.RoutingRaw(r.Context(), name)
+			raw, err := s.nodeFor(r).RoutingRaw(r.Context(), name)
 			if err != nil {
 				st, tx := s.agentErr(err)
 				s.errorPage(w, r, st, tx)
@@ -147,7 +147,7 @@ func (s *Server) fileView(w http.ResponseWriter, r *http.Request, v fileView) {
 		data["FullText"] = text
 		data["BaseSHA"] = sum
 	} else {
-		pg, err := s.Node.RoutingLines(r.Context(), name, nodeapi.RoutingListOpts{Query: q, Offset: (page - 1) * routingPageSize, Limit: routingPageSize})
+		pg, err := s.nodeFor(r).RoutingLines(r.Context(), name, nodeapi.RoutingListOpts{Query: q, Offset: (page - 1) * routingPageSize, Limit: routingPageSize})
 		if err != nil {
 			st, tx := s.agentErr(err)
 			s.errorPage(w, r, st, tx)
@@ -168,7 +168,7 @@ func (s *Server) fileView(w http.ResponseWriter, r *http.Request, v fileView) {
 		}
 	}
 	if editable {
-		if bs, err := s.Node.RoutingBackups(r.Context(), name); err != nil {
+		if bs, err := s.nodeFor(r).RoutingBackups(r.Context(), name); err != nil {
 			_, tx := s.agentErr(err)
 			data["BackupsErr"] = "копии недоступны: " + tx
 		} else {
@@ -241,7 +241,7 @@ func (s *Server) routingAdd(w http.ResponseWriter, r *http.Request) {
 		s.fileView(w, r, fileView{AddText: text, Status: http.StatusBadRequest, Errors: []string{"нет строк для добавления"}})
 		return
 	}
-	res, err := s.Node.PatchRouting(r.Context(), name, nodeapi.RoutingPatch{Add: lines})
+	res, err := s.nodeFor(r).PatchRouting(r.Context(), name, nodeapi.RoutingPatch{Add: lines})
 	if err != nil {
 		s.Log.Warn("действие", "user", s.user(r), "op", "routing_add", "file", name, "err", err)
 		st, tx := s.agentErr(err)
@@ -273,7 +273,7 @@ func (s *Server) routingRemove(w http.ResponseWriter, r *http.Request) {
 		s.fileView(w, r, fileView{Status: http.StatusBadRequest, Errors: []string{"ничего не выбрано"}})
 		return
 	}
-	res, err := s.Node.PatchRouting(r.Context(), name, nodeapi.RoutingPatch{Remove: sel})
+	res, err := s.nodeFor(r).PatchRouting(r.Context(), name, nodeapi.RoutingPatch{Remove: sel})
 	if err != nil {
 		s.Log.Warn("действие", "user", s.user(r), "op", "routing_remove", "file", name, "err", err)
 		st, tx := s.agentErr(err)
@@ -307,7 +307,7 @@ func (s *Server) routingReplace(w http.ResponseWriter, r *http.Request) {
 			Errors: []string{"форма устарела: откройте вкладку «Целиком» заново"}})
 		return
 	}
-	res, err := s.Node.ReplaceRouting(r.Context(), name, text, sum)
+	res, err := s.nodeFor(r).ReplaceRouting(r.Context(), name, text, sum)
 	if err != nil {
 		s.Log.Warn("действие", "user", s.user(r), "op", "routing_replace", "file", name, "err", err)
 		st, tx := s.agentErr(err)
@@ -336,7 +336,7 @@ func (s *Server) routingRestore(w http.ResponseWriter, r *http.Request) {
 		s.fileView(w, r, fileView{Status: http.StatusBadRequest, Errors: []string{"метка копии не распознана"}})
 		return
 	}
-	if _, err := s.Node.RestoreRouting(r.Context(), name, stamp); err != nil {
+	if _, err := s.nodeFor(r).RestoreRouting(r.Context(), name, stamp); err != nil {
 		s.Log.Warn("действие", "user", s.user(r), "op", "routing_restore", "file", name, "err", err)
 		st, tx := s.agentErr(err)
 		s.auditRefused(r, "routing_restore", name, st, tx)

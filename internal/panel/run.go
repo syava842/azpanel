@@ -148,7 +148,7 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 	cctx, stopCollector := context.WithCancel(ctx)
 	var colDone sync.WaitGroup
 	colDone.Add(1)
-	go func() { defer colDone.Done(); col.Run(cctx) }()
+	go func() { defer colDone.Done(); s.RunCollectors(cctx, col) }()
 	colDone.Add(1)
 	go func() { defer colDone.Done(); purgeSessionsLoop(cctx, st, purgeEvery, log) }()
 	colDone.Add(1)

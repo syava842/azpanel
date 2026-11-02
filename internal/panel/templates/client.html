@@ -146,7 +146,7 @@
   {{end}}
 </ul>
 
-{{if .CanManage}}
+{{if and .CanManage (not .Replica)}}
 <h2>Действия</h2>
 <div class="card actions">
   {{if .Client.OpenVPN}}

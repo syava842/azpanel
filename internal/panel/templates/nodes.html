@@ -1,0 +1,21 @@
+{{define "content"}}
+<h1>Узлы</h1>
+<div class="toolbar"><a class="button" href="{{url "/nodes/new"}}">Добавить узел</a> <a href="{{url "/groups"}}">Группы синхронизации</a></div>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Имя</th><th>Адрес</th><th>Версия агента</th><th>Протокол</th><th>Связь</th><th>Роль в группе</th></tr></thead>
+  <tbody>
+  {{range .Rows}}
+  <tr>
+    <td><a href="{{url .Href}}">{{.Name}}</a></td>
+    <td>{{.Addr}}</td>
+    <td>{{.Version}}</td>
+    <td>{{.Proto}}</td>
+    <td class="{{if .Online}}{{if .Old}}warn{{else}}ok{{end}}{{else if .Pending}}muted{{else}}bad{{end}}">{{.Status}}</td>
+    <td>{{.Role}}{{if .Group}} ({{.Group}}){{end}}</td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{end}}

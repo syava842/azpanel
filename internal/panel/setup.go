@@ -169,7 +169,7 @@ func (s *Server) setupPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) setupView(w http.ResponseWriter, r *http.Request, status int, errText string, typed map[string]string) {
-	entries, err := s.Node.Setup(r.Context())
+	entries, err := s.nodeFor(r).Setup(r.Context())
 	if err != nil {
 		st, tx := s.agentErr(err)
 		s.errorPage(w, r, st, tx)
@@ -185,7 +185,7 @@ func (s *Server) setupView(w http.ResponseWriter, r *http.Request, status int, e
 // setupSave отправляет агенту только изменённые ключи. Задачи сами не
 // запускаются: страница после сохранения предлагает их кнопками.
 func (s *Server) setupSave(w http.ResponseWriter, r *http.Request) {
-	entries, err := s.Node.Setup(r.Context())
+	entries, err := s.nodeFor(r).Setup(r.Context())
 	if err != nil {
 		st, tx := s.agentErr(err)
 		s.errorPage(w, r, st, tx)
@@ -214,7 +214,7 @@ func (s *Server) setupSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sort.Strings(keys)
-	res, err := s.Node.SetSetup(r.Context(), changed)
+	res, err := s.nodeFor(r).SetSetup(r.Context(), changed)
 	if err != nil {
 		s.Log.Warn("действие", "user", s.user(r), "op", "setup_set", "keys", strings.Join(keys, ","), "err", err)
 		st, tx := s.agentErr(err)

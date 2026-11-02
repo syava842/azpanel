@@ -210,7 +210,7 @@ func (s *Server) azView(w http.ResponseWriter, r *http.Request, status int, errT
 		} else {
 			data["Pre"] = pf
 		}
-		if entries, err := s.Node.Setup(ctx); err == nil {
+		if entries, err := s.nodeFor(r).Setup(ctx); err == nil {
 			data["Reinstall"] = azReinstallRows(entries, typed)
 		}
 	}
@@ -229,7 +229,7 @@ func (s *Server) azStart(w http.ResponseWriter, r *http.Request) {
 	typed := map[string]string{}
 	values := map[string]string{}
 	var keys []string
-	if entries, err := s.Node.Setup(ctx); err == nil {
+	if entries, err := s.nodeFor(r).Setup(ctx); err == nil {
 		for _, e := range entries {
 			if !contains(e.Apply, nodeapi.ApplyReinstall) {
 				continue

@@ -86,9 +86,9 @@ func (s *Server) monitor(w http.ResponseWriter, r *http.Request) {
 	)
 	now := s.now()
 	wg.Add(3)
-	go func() { defer wg.Done(); sys, sysErr = s.Node.System(ctx) }()
-	go func() { defer wg.Done(); sess, sessErr = s.Node.Sessions(ctx) }()
-	go func() { defer wg.Done(); dens, denErr = s.Node.Denials(ctx, now.Add(-denialsWindow)) }()
+	go func() { defer wg.Done(); sys, sysErr = s.nodeFor(r).System(ctx) }()
+	go func() { defer wg.Done(); sess, sessErr = s.nodeFor(r).Sessions(ctx) }()
+	go func() { defer wg.Done(); dens, denErr = s.nodeFor(r).Denials(ctx, now.Add(-denialsWindow)) }()
 	wg.Wait()
 
 	data := map[string]any{}
@@ -108,8 +108,8 @@ func (s *Server) monitor(w http.ResponseWriter, r *http.Request) {
 		data["SessionsErr"] = "сессии недоступны: " + tx
 	} else {
 		var flap map[string]bool
-		if s.Collector != nil {
-			flap = s.Collector.Flapping()
+		if col := s.collectorFor(r); col != nil {
+			flap = col.Flapping()
 		}
 		rows := make([]liveSession, 0, len(sess))
 		for _, x := range sess {

@@ -92,6 +92,15 @@ var routes = map[string]access{
 	"GET /tasks/{id}":                    accAdmin,
 	"POST /tasks/start":                  accAdmin,
 
+	"GET /nodes":               accAdmin,
+	"GET /nodes/new":           accAdmin,
+	"POST /nodes":              accAdmin,
+	"GET /nodes/{id}":          accAdmin,
+	"POST /nodes/{id}/probe":   accAdmin,
+	"POST /nodes/{id}/connect": accAdmin,
+	"POST /nodes/{id}/check":   accAdmin,
+	"POST /nodes/{id}/delete":  accAdmin,
+
 	"GET /antizapret/update":          accAdmin,
 	"POST /antizapret/update":         accAdmin,
 	"POST /antizapret/update/restore": accAdmin,
@@ -153,7 +162,7 @@ func (s *Server) route(mux *http.ServeMux, pattern string, h http.HandlerFunc) {
 		panic(fmt.Sprintf("panel: маршрут %q не внесён в таблицу прав", pattern))
 	}
 	s.registered = append(s.registered, pattern)
-	mux.Handle(pattern, s.require(a, h))
+	mux.Handle(pattern, s.require(a, s.scoped(pattern, h)))
 }
 
 // require оборачивает обработчик проверкой права a. Не администратор на
@@ -189,7 +198,7 @@ func (s *Server) visibleClient(r *http.Request, name string) bool {
 	if s.Store == nil {
 		return false
 	}
-	owner, has, err := s.Store.OwnerOf(r.Context(), s.NodeID, name)
+	owner, has, err := s.Store.OwnerOf(r.Context(), s.nodeIDFor(r), name)
 	if err != nil {
 		s.Log.Warn("владелец клиента не прочитан", "client", name, "err", err)
 		return false
@@ -205,7 +214,7 @@ func (s *Server) ownedNames(r *http.Request, userID int64) (map[string]bool, err
 	}
 	out := map[string]bool{}
 	for _, x := range refs {
-		if x.Node == s.NodeID {
+		if x.Node == s.nodeIDFor(r) {
 			out[x.Name] = true
 		}
 	}

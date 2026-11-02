@@ -1,0 +1,56 @@
+{{define "content"}}
+<h1>Узел «{{.Node.Name}}»</h1>
+<div class="card">
+  <table><tbody>
+    <tr><th>Адрес</th><td>{{if .Local}}этот сервер{{else if .Addr}}{{.Addr}}{{else}}—{{end}}</td></tr>
+    <tr><th>Отпечаток сертификата (SHA-256)</th><td><code>{{if .Fingerprint}}{{.Fingerprint}}{{else}}—{{end}}</code></td></tr>
+    <tr><th>Роль в группе</th><td>{{.Role}}{{if .Group}} ({{.Group}}){{end}}</td></tr>
+  </tbody></table>
+</div>
+{{if .Check}}<div class="flash">{{.Check}}</div>{{end}}
+
+{{if .Pending}}
+<h2>Установка агента</h2>
+<p>Выполните на сервере узла (от root). Ключ содержит токен — не публикуйте команду.</p>
+{{if .Command}}<pre class="card"><code>{{.Command}}</code></pre>{{else}}<div class="error">Ключ не восстановить: проверьте ключ данных панели.</div>{{end}}
+<p>После установки узел напечатает отпечаток своего сертификата. Введите адрес узла (хост или хост:порт, по умолчанию порт 9100).</p>
+{{end}}
+
+{{if .ProbeFP}}
+<h2>Сверьте отпечаток</h2>
+{{if .Changed}}<div class="error">Сертификат узла сменился. Закрепляйте новый, только если узел переустанавливали.</div>{{end}}
+<form method="post" action="{{url .Href "/connect"}}" class="card narrow">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <input type="hidden" name="addr" value="{{.ProbeAddr}}">
+  <input type="hidden" name="fp" value="{{.ProbeFP}}">
+  <p>Узел {{.ProbeAddr}} предъявил сертификат с отпечатком:</p>
+  <p><code>{{.ProbeFPText}}</code></p>
+  <label><input type="checkbox" name="confirm" value="1"> Отпечаток совпадает с напечатанным на узле</label>
+  <button type="submit">Закрепить и подключить</button>
+</form>
+{{else if not .Local}}
+<form method="post" action="{{url .Href "/probe"}}" class="card narrow">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label>Адрес узла
+    <input type="text" name="addr" value="{{.TypedAddr}}" placeholder="203.0.113.5:9100" required>
+  </label>
+  <button type="submit">{{if .Pending}}Подключить{{else}}Закрепить отпечаток заново{{end}}</button>
+</form>
+{{end}}
+
+{{if not .Local}}
+{{if not .Pending}}
+<form method="post" action="{{url .Href "/check"}}" class="inline">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <button type="submit">Проверить связь</button>
+</form>
+{{end}}
+<h2>Удаление</h2>
+<form method="post" action="{{url .Href "/delete"}}" class="card narrow">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label><input type="checkbox" name="confirm" value="1"> Удалить узел из панели вместе с карточками и историей его клиентов (на самом сервере ничего не меняется)</label>
+  <button type="submit" class="danger">Удалить узел</button>
+</form>
+{{end}}
+<p><a href="{{url "/nodes"}}">К списку узлов</a></p>
+{{end}}

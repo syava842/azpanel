@@ -80,7 +80,7 @@ func newSessionRow(x nodeapi.Session) sessionRow {
 // lookup находит клиента из пути среди клиентов агента; нет — 404 и false.
 func (s *Server) lookup(w http.ResponseWriter, r *http.Request) (nodeapi.Client, bool) {
 	name := r.PathValue("name")
-	list, err := s.Node.Clients(r.Context())
+	list, err := s.nodeFor(r).Clients(r.Context())
 	if err != nil {
 		st, tx := s.nodeErr(err)
 		s.errorPage(w, r, st, tx)
@@ -97,7 +97,7 @@ func (s *Server) lookup(w http.ResponseWriter, r *http.Request) (nodeapi.Client,
 }
 
 func (s *Server) clientsList(w http.ResponseWriter, r *http.Request) {
-	list, err := s.Node.Clients(r.Context())
+	list, err := s.nodeFor(r).Clients(r.Context())
 	if err != nil {
 		st, tx := s.nodeErr(err)
 		s.errorPage(w, r, st, tx)
@@ -105,7 +105,7 @@ func (s *Server) clientsList(w http.ResponseWriter, r *http.Request) {
 	}
 	online := map[string]int{}
 	sessErr := ""
-	if ss, err := s.Node.Sessions(r.Context()); err != nil {
+	if ss, err := s.nodeFor(r).Sessions(r.Context()); err != nil {
 		_, sessErr = s.nodeErr(err)
 		sessErr = "сессии недоступны: " + sessErr
 	} else {
@@ -118,8 +118,8 @@ func (s *Server) clientsList(w http.ResponseWriter, r *http.Request) {
 	var traffic map[string]store.Bytes
 	if s.Store != nil {
 		var cerr, lerr, terr error
-		cards, cerr = s.Store.Cards(r.Context(), s.NodeID)
-		limits, lerr = s.Store.ClientLimits(r.Context(), s.NodeID)
+		cards, cerr = s.Store.Cards(r.Context(), s.nodeIDFor(r))
+		limits, lerr = s.Store.ClientLimits(r.Context(), s.nodeIDFor(r))
 		traffic, terr = s.traffic30(r.Context(), s.now())
 		if cerr != nil || lerr != nil || terr != nil {
 			s.Log.Warn("история клиентов не прочитана", "cards", cerr, "limits", lerr, "traffic", terr)
@@ -248,7 +248,7 @@ func (s *Server) createClient(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	existed, known := s.clientExists(r.Context(), name)
-	if _, err := s.Node.CreateClient(r.Context(), nodeapi.CreateClient{Name: name, Kind: kind, Days: days}); err != nil {
+	if _, err := s.nodeFor(r).CreateClient(r.Context(), nodeapi.CreateClient{Name: name, Kind: kind, Days: days}); err != nil {
 		s.Log.Warn("действие", "user", s.user(r), "op", "create", "client", name, "err", err)
 		st, tx := s.nodeErr(err)
 		fail(st, tx)
@@ -268,7 +268,7 @@ func (s *Server) clientExists(ctx context.Context, name string) (exists, known b
 	if s.Store == nil {
 		return false, false
 	}
-	list, err := s.Node.Clients(ctx)
+	list, err := s.nodeCtx(ctx).Clients(ctx)
 	if err != nil {
 		return false, false
 	}
@@ -284,19 +284,19 @@ func (s *Server) clientExists(ctx context.Context, name string) (exists, known b
 // карточка и трафик прежнего владельца имени (удалённого мимо панели) не
 // должны блокировать и считаться в лимит.
 func (s *Server) dropStaleHistory(ctx context.Context, name string) {
-	if err := s.Store.DeleteCard(ctx, s.NodeID, name); err != nil {
+	if err := s.Store.DeleteCard(ctx, s.nodeIDCtx(ctx), name); err != nil {
 		s.Log.Warn("старая карточка не удалена", "client", name, "err", err)
 	}
-	if err := s.Store.DeleteTraffic(ctx, s.NodeID, name); err != nil {
+	if err := s.Store.DeleteTraffic(ctx, s.nodeIDCtx(ctx), name); err != nil {
 		s.Log.Warn("старый трафик не удалён", "client", name, "err", err)
 	}
-	if err := s.Store.DeleteClientLink(ctx, s.NodeID, name); err != nil {
+	if err := s.Store.DeleteClientLink(ctx, s.nodeIDCtx(ctx), name); err != nil {
 		s.Log.Warn("старая ссылка портала не удалена", "client", name, "err", err)
 	}
-	if err := s.Store.DeleteDownloadLinks(ctx, s.NodeID, name); err != nil {
+	if err := s.Store.DeleteDownloadLinks(ctx, s.nodeIDCtx(ctx), name); err != nil {
 		s.Log.Warn("старые одноразовые ссылки не удалены", "client", name, "err", err)
 	}
-	if err := s.Store.DeleteClientKinds(ctx, s.NodeID, name); err != nil {
+	if err := s.Store.DeleteClientKinds(ctx, s.nodeIDCtx(ctx), name); err != nil {
 		s.Log.Warn("старое ограничение профилей бота не удалено", "client", name, "err", err)
 	}
 }
@@ -396,7 +396,7 @@ func (s *Server) card(w http.ResponseWriter, r *http.Request, c nodeapi.Client, 
 		data["Error"] = errText
 	}
 	sessions := []sessionRow{}
-	if ss, err := s.Node.Sessions(r.Context()); err != nil {
+	if ss, err := s.nodeFor(r).Sessions(r.Context()); err != nil {
 		_, tx := s.nodeErr(err)
 		data["SessionsErr"] = "сессии недоступны: " + tx
 	} else {
@@ -408,7 +408,7 @@ func (s *Server) card(w http.ResponseWriter, r *http.Request, c nodeapi.Client, 
 	}
 	data["Sessions"] = sessions
 	profiles := []profileRow{}
-	if ps, err := s.Node.Profiles(r.Context(), c.Name); err != nil {
+	if ps, err := s.nodeFor(r).Profiles(r.Context(), c.Name); err != nil {
 		_, tx := s.nodeErr(err)
 		data["ProfilesErr"] = "профили недоступны: " + tx
 	} else {
@@ -441,7 +441,7 @@ func (s *Server) profileFile(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	data, err := s.Node.Profile(r.Context(), c.Name, nodeapi.Profile{Kind: r.PathValue("kind"), Variant: r.PathValue("variant"), File: r.PathValue("file")})
+	data, err := s.nodeFor(r).Profile(r.Context(), c.Name, nodeapi.Profile{Kind: r.PathValue("kind"), Variant: r.PathValue("variant"), File: r.PathValue("file")})
 	if err != nil {
 		st, tx := s.nodeErr(err)
 		s.errorPage(w, r, st, tx)
@@ -479,7 +479,7 @@ func (s *Server) profileQR(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	data, err := s.Node.Profile(r.Context(), c.Name, nodeapi.Profile{Kind: nodeapi.KindWireGuard, Variant: r.PathValue("variant"), File: r.PathValue("file")})
+	data, err := s.nodeFor(r).Profile(r.Context(), c.Name, nodeapi.Profile{Kind: nodeapi.KindWireGuard, Variant: r.PathValue("variant"), File: r.PathValue("file")})
 	if err != nil {
 		st, tx := s.nodeErr(err)
 		s.errorPage(w, r, st, tx)
@@ -518,13 +518,13 @@ func (s *Server) renew(w http.ResponseWriter, r *http.Request) {
 		s.card(w, r, c, http.StatusBadRequest, err.Error())
 		return
 	}
-	if _, err := s.Node.Renew(r.Context(), c.Name, days); err != nil {
+	if _, err := s.nodeFor(r).Renew(r.Context(), c.Name, days); err != nil {
 		s.failed(w, r, c, "renew", err)
 		return
 	}
 	// файл профиля OpenVPN после перевыпуска другой: прежние одноразовые ссылки гасим
 	if s.Store != nil && c.OpenVPN {
-		if err := s.Store.DeleteDownloadLinks(r.Context(), s.NodeID, c.Name); err != nil {
+		if err := s.Store.DeleteDownloadLinks(r.Context(), s.nodeIDFor(r), c.Name); err != nil {
 			s.Log.Warn("одноразовые ссылки клиента не удалены", "client", c.Name, "err", err)
 		}
 	}
@@ -542,7 +542,7 @@ func (s *Server) setLimit(w http.ResponseWriter, r *http.Request) {
 		s.card(w, r, c, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := s.Node.SetLimit(r.Context(), c.Name, limit); err != nil {
+	if err := s.nodeFor(r).SetLimit(r.Context(), c.Name, limit); err != nil {
 		s.failed(w, r, c, "limit", err)
 		return
 	}
@@ -571,7 +571,7 @@ func (s *Server) block(w http.ResponseWriter, r *http.Request) {
 		s.card(w, r, c, http.StatusBadRequest, "поле blocked: 1 или 0")
 		return
 	}
-	res, err := s.Node.SetBlocked(r.Context(), c.Name, blocked)
+	res, err := s.nodeFor(r).SetBlocked(r.Context(), c.Name, blocked)
 	if err != nil {
 		s.failed(w, r, c, map[bool]string{true: "block", false: "unblock"}[blocked], err)
 		return
@@ -601,7 +601,7 @@ func (s *Server) deleteClient(w http.ResponseWriter, r *http.Request) {
 		s.card(w, r, c, http.StatusBadRequest, "для удаления впишите имя клиента")
 		return
 	}
-	if _, err := s.Node.DeleteClient(r.Context(), kind, c.Name); err != nil {
+	if _, err := s.nodeFor(r).DeleteClient(r.Context(), kind, c.Name); err != nil {
 		s.failed(w, r, c, "delete", err)
 		return
 	}
@@ -617,19 +617,19 @@ func (s *Server) dropDeletedRecords(ctx context.Context, c nodeapi.Client, kind 
 	if s.Store == nil || (kind == nodeapi.KindOpenVPN && c.WireGuard) || (kind == nodeapi.KindWireGuard && c.OpenVPN) {
 		return
 	}
-	if err := s.Store.DeleteCard(ctx, s.NodeID, c.Name); err != nil {
+	if err := s.Store.DeleteCard(ctx, s.nodeIDCtx(ctx), c.Name); err != nil {
 		s.Log.Warn("карточка клиента не удалена", "client", c.Name, "err", err)
 	}
 	// ссылка портала клиента уходит вместе с ним
-	if err := s.Store.DeleteClientLink(ctx, s.NodeID, c.Name); err != nil {
+	if err := s.Store.DeleteClientLink(ctx, s.nodeIDCtx(ctx), c.Name); err != nil {
 		s.Log.Warn("ссылка портала клиента не удалена", "client", c.Name, "err", err)
 	}
 	// одноразовые ссылки ищут профиль по имени: пересозданный клиент отдал бы новые ключи
-	if err := s.Store.DeleteDownloadLinks(ctx, s.NodeID, c.Name); err != nil {
+	if err := s.Store.DeleteDownloadLinks(ctx, s.nodeIDCtx(ctx), c.Name); err != nil {
 		s.Log.Warn("одноразовые ссылки клиента не удалены", "client", c.Name, "err", err)
 	}
 	// ограничение типов профилей для бота относится к имени: новый клиент не должен его унаследовать
-	if err := s.Store.DeleteClientKinds(ctx, s.NodeID, c.Name); err != nil {
+	if err := s.Store.DeleteClientKinds(ctx, s.nodeIDCtx(ctx), c.Name); err != nil {
 		s.Log.Warn("ограничение профилей бота не снято", "client", c.Name, "err", err)
 	}
 }
@@ -645,7 +645,7 @@ func (s *Server) addOwner(r *http.Request, c nodeapi.Client, data map[string]any
 		s.Log.Warn("пользователи не прочитаны", "err", err)
 		return
 	}
-	owner, has, err := s.Store.OwnerOf(r.Context(), s.NodeID, c.Name)
+	owner, has, err := s.Store.OwnerOf(r.Context(), s.nodeIDFor(r), c.Name)
 	if err != nil {
 		s.Log.Warn("владелец клиента не прочитан", "client", c.Name, "err", err)
 		return
@@ -688,12 +688,12 @@ func (s *Server) setOwner(w http.ResponseWriter, r *http.Request) {
 		uid, login = &u.ID, u.Login
 	}
 	before := "нет"
-	if old, has, err := s.Store.OwnerOf(r.Context(), s.NodeID, c.Name); err == nil && has {
+	if old, has, err := s.Store.OwnerOf(r.Context(), s.nodeIDFor(r), c.Name); err == nil && has {
 		if u, err := s.Store.UserByID(r.Context(), old); err == nil {
 			before = u.Login
 		}
 	}
-	if err := s.Store.SetOwner(r.Context(), s.NodeID, c.Name, uid); err != nil {
+	if err := s.Store.SetOwner(r.Context(), s.nodeIDFor(r), c.Name, uid); err != nil {
 		s.internalError(w, r, "владелец не сохранён", err)
 		return
 	}

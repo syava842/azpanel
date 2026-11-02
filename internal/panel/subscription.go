@@ -78,13 +78,13 @@ var errManualBlock = errors.New("клиент заблокирован адми�
 func (s *Server) redeemForClient(ctx context.Context, c nodeapi.Client, owner *int64, code string) (extendResult, error) {
 	now := s.now()
 	if c.Blocked {
-		card, err := s.Store.Card(ctx, s.NodeID, c.Name)
+		card, err := s.Store.Card(ctx, s.nodeIDCtx(ctx), c.Name)
 		if err != nil {
 			return extendResult{}, err
 		}
 		if card.AutoBlock == "" {
 			// без срока продлевать нечего — это важнее блокировки
-			if eff, err := s.Store.EffectiveUntil(ctx, s.NodeID, c.Name); err != nil {
+			if eff, err := s.Store.EffectiveUntil(ctx, s.nodeIDCtx(ctx), c.Name); err != nil {
 				return extendResult{}, err
 			} else if eff == nil {
 				return extendResult{}, store.ErrNoLimit
@@ -92,14 +92,14 @@ func (s *Server) redeemForClient(ctx context.Context, c nodeapi.Client, owner *i
 			return extendResult{}, errManualBlock
 		}
 	}
-	rc, bef, after, err := s.Store.RedeemAndExtend(ctx, code, owner, s.NodeID, c.Name, now.Unix())
+	rc, bef, after, err := s.Store.RedeemAndExtend(ctx, code, owner, s.nodeIDCtx(ctx), c.Name, now.Unix())
 	if err != nil {
 		return extendResult{}, err
 	}
 	res := extendResult{Before: bef, After: after, Days: rc.Days}
 	if c.OpenVPN && c.CertExpires != nil && c.CertExpires.Sub(time.Unix(after, 0)) < certMinRemain {
 		days := int((after-now.Unix())/secondsInDay) + certRenewExtra
-		if _, err := s.Node.Renew(ctx, c.Name, min(days, maxRenewDays)); err != nil {
+		if _, err := s.nodeCtx(ctx).Renew(ctx, c.Name, min(days, maxRenewDays)); err != nil {
 			res.CertErr = err
 		} else {
 			res.CertRenewed = true
@@ -124,7 +124,7 @@ func (c *Collector) remindExpiring(ctx context.Context, now time.Time) error {
 		return nil
 	}
 	today := now.Format("2006-01-02")
-	if v, ok, err := c.Store.Meta(ctx, remindDayKey); err != nil {
+	if v, ok, err := c.Store.Meta(ctx, c.mk(remindDayKey)); err != nil {
 		return err
 	} else if ok && v == today {
 		return nil
@@ -163,7 +163,7 @@ func (c *Collector) remindExpiring(ctx context.Context, now time.Time) error {
 		return a.until < b.until
 	})
 	for _, g := range keys {
-		mk := fmt.Sprintf("%s%d:%d:%d", remindGroupKey, g.user, g.until, g.days)
+		mk := fmt.Sprintf("%s%d:%d:%d", c.mkp(remindGroupKey), g.user, g.until, g.days)
 		if _, done, err := c.Store.Meta(ctx, mk); err != nil {
 			return err
 		} else if done {
@@ -183,7 +183,7 @@ func (c *Collector) remindExpiring(ctx context.Context, now time.Time) error {
 			return err
 		}
 	}
-	return c.Store.SetMeta(ctx, remindDayKey, today)
+	return c.Store.SetMeta(ctx, c.mk(remindDayKey), today)
 }
 
 // redeemCode — «Продлить кодом» в карточке клиента: администратор и владелец
@@ -198,7 +198,7 @@ func (s *Server) redeemCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var owner *int64
-	if id, has, err := s.Store.OwnerOf(r.Context(), s.NodeID, c.Name); err != nil {
+	if id, has, err := s.Store.OwnerOf(r.Context(), s.nodeIDFor(r), c.Name); err != nil {
 		s.internalError(w, r, "владелец клиента не прочитан", err)
 		return
 	} else if has {

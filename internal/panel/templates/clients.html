@@ -5,7 +5,7 @@
     <input type="search" name="q" value="{{.Q}}" placeholder="Поиск по имени">
     <button type="submit">Найти</button>
   </form>
-  {{if .IsAdmin}}<a class="button" href="{{url "/clients/new"}}">Новый клиент</a>{{end}}
+  {{if and .IsAdmin (not .Replica)}}<a class="button" href="{{url "/clients/new"}}">Новый клиент</a>{{end}}
 </div>
 <div class="table-wrap">
 <table>

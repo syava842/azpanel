@@ -50,7 +50,7 @@ func (c *Collector) notify(ctx context.Context, now time.Time, kind, text string
 	if !c.alertOn(kind) {
 		return nil
 	}
-	_, err := c.Store.Enqueue(ctx, kind, nil, bot.NoticeJSON(text), now.Unix())
+	_, err := c.Store.Enqueue(ctx, kind, nil, bot.NoticeJSON(c.titled(text)), now.Unix())
 	return err
 }
 
@@ -86,7 +86,7 @@ func (c *Collector) loadDown(ctx context.Context) error {
 	if st.downLoaded {
 		return nil
 	}
-	v, found, err := c.Store.Meta(ctx, metaNodeDown)
+	v, found, err := c.Store.Meta(ctx, c.mk(metaNodeDown))
 	if err != nil {
 		return err
 	}
@@ -97,9 +97,9 @@ func (c *Collector) loadDown(ctx context.Context) error {
 func (c *Collector) setDown(ctx context.Context, down bool) error {
 	c.alert.down = down
 	if down {
-		return c.Store.SetMeta(ctx, metaNodeDown, "1")
+		return c.Store.SetMeta(ctx, c.mk(metaNodeDown), "1")
 	}
-	return c.Store.ClearMeta(ctx, metaNodeDown)
+	return c.Store.ClearMeta(ctx, c.mk(metaNodeDown))
 }
 
 // alertNode: агент не отвечает nodeDownAfter прохода подряд — node_down; «снова
@@ -144,13 +144,13 @@ func (c *Collector) alertLoad(ctx context.Context, now time.Time) error {
 	}
 	if !st.loadLoaded {
 		// «уже отправлено» переживает перезапуск; время начала превышения — нет
-		saved, err := c.Store.MetaPrefix(ctx, metaLoadSent)
+		saved, err := c.Store.MetaPrefix(ctx, c.mkp(metaLoadSent))
 		if err != nil {
 			return err
 		}
 		for k, v := range saved {
 			if v == "1" {
-				st.highSent[strings.TrimPrefix(k, metaLoadSent)] = true
+				st.highSent[strings.TrimPrefix(k, c.mkp(metaLoadSent))] = true
 			}
 		}
 		st.loadLoaded = true
@@ -179,7 +179,7 @@ func (c *Collector) alertLoad(ctx context.Context, now time.Time) error {
 			delete(st.highSince, m.key)
 			if st.highSent[m.key] {
 				delete(st.highSent, m.key)
-				if err := c.Store.ClearMeta(ctx, metaLoadSent+m.key); err != nil && firstErr == nil {
+				if err := c.Store.ClearMeta(ctx, c.mkp(metaLoadSent)+m.key); err != nil && firstErr == nil {
 					firstErr = err
 				}
 			}
@@ -194,7 +194,7 @@ func (c *Collector) alertLoad(ctx context.Context, now time.Time) error {
 			continue
 		}
 		st.highSent[m.key] = true
-		if err := c.Store.SetMeta(ctx, metaLoadSent+m.key, "1"); err != nil && firstErr == nil {
+		if err := c.Store.SetMeta(ctx, c.mkp(metaLoadSent)+m.key, "1"); err != nil && firstErr == nil {
 			firstErr = err
 		}
 		text := fmt.Sprintf("%s: %.0f%% (порог %d%%) уже %d мин.", m.title, m.val, m.limit, int(now.Sub(since)/time.Minute))
@@ -273,7 +273,7 @@ func (c *Collector) alertCerts(ctx context.Context, now time.Time) error {
 	st.certCheckedAt = now
 	today := now.UTC().Format("2006-01-02")
 	var firstErr error
-	warned, err := c.Store.MetaPrefix(ctx, certWarnKey)
+	warned, err := c.Store.MetaPrefix(ctx, c.mkp(certWarnKey))
 	if err != nil {
 		return err
 	}
@@ -287,8 +287,8 @@ func (c *Collector) alertCerts(ctx context.Context, now time.Time) error {
 		if cl.CertExpires == nil || !cl.CertExpires.After(now) || cl.CertExpires.After(now.Add(certWarnWithin)) {
 			continue
 		}
-		soon[certWarnKey+cl.Name] = true
-		if warned[certWarnKey+cl.Name] == today {
+		soon[c.mkp(certWarnKey)+cl.Name] = true
+		if warned[c.mkp(certWarnKey)+cl.Name] == today {
 			continue
 		}
 		list = append(list, due{cl.Name, *cl.CertExpires})
@@ -329,7 +329,7 @@ func (c *Collector) alertCerts(ctx context.Context, now time.Time) error {
 		return err
 	}
 	for _, d := range list {
-		if err := c.Store.SetMeta(ctx, certWarnKey+d.name, today); err != nil && firstErr == nil {
+		if err := c.Store.SetMeta(ctx, c.mkp(certWarnKey)+d.name, today); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}

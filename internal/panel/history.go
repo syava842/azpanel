@@ -64,7 +64,7 @@ func (h histRange) window(now time.Time) (from, to time.Time) {
 // ↓ — сколько клиент получил (Tx сервера), ↑ — сколько отдал (Rx).
 func (s *Server) clientTraffic(ctx context.Context, name string, h histRange, now time.Time) (chart template.HTML, down, up string, err error) {
 	from, to := h.window(now)
-	pts, err := s.Store.TrafficSeries(ctx, s.NodeID, name, from.Unix(), to.Unix()+1, h.Step)
+	pts, err := s.Store.TrafficSeries(ctx, s.nodeIDCtx(ctx), name, from.Unix(), to.Unix()+1, h.Step)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -91,7 +91,7 @@ type resourceCharts struct {
 
 func (s *Server) resourceCharts(ctx context.Context, h histRange, now time.Time) (resourceCharts, error) {
 	from, to := h.window(now)
-	pts, err := s.Store.ResourceSeries(ctx, s.NodeID, from.Unix(), to.Unix()+1, h.Step)
+	pts, err := s.Store.ResourceSeries(ctx, s.nodeIDCtx(ctx), from.Unix(), to.Unix()+1, h.Step)
 	if err != nil {
 		return resourceCharts{}, err
 	}
@@ -133,7 +133,7 @@ func (s *Server) resourceCharts(ctx context.Context, h histRange, now time.Time)
 
 // traffic30 — сводка трафика всех клиентов за 30 суток (для списка).
 func (s *Server) traffic30(ctx context.Context, now time.Time) (map[string]store.Bytes, error) {
-	return s.Store.TrafficTotals(ctx, s.NodeID, now.Add(-30*24*time.Hour).Unix(), now.Unix()+1)
+	return s.Store.TrafficTotals(ctx, s.nodeIDCtx(ctx), now.Add(-30*24*time.Hour).Unix(), now.Unix()+1)
 }
 
 // untilText — «доступ до» для списка и формы: дата UTC или прочерк.

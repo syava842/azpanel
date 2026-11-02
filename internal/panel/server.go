@@ -155,6 +155,7 @@ type Server struct {
 	usersMu    sync.Mutex // действия над пользователями — по одному (защита последнего администратора)
 	attemptMu  keyedMutex // счёт попыток ввода кода: замок на ключ, а не общий на всех
 	access     accessState
+	hub        hubState // узлы, группы, выбор узла страницами
 	settings   settingsState
 	once       onceStore // секреты «показать один раз»
 	az         azMemory  // что видели у обновления AntiZapret
@@ -303,6 +304,16 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "GET /tasks/{id}", s.taskPage)
 	s.route(mux, "POST /tasks/start", s.taskStart)
 
+	// Узлы: только администратор.
+	s.route(mux, "GET /nodes", s.nodesPage)
+	s.route(mux, "GET /nodes/new", s.nodeNewForm)
+	s.route(mux, "POST /nodes", s.nodeCreate)
+	s.route(mux, "GET /nodes/{id}", s.nodePage)
+	s.route(mux, "POST /nodes/{id}/probe", s.nodeProbe)
+	s.route(mux, "POST /nodes/{id}/connect", s.nodeConnect)
+	s.route(mux, "POST /nodes/{id}/check", s.nodeCheck)
+	s.route(mux, "POST /nodes/{id}/delete", s.nodeDelete)
+
 	// Обновление AntiZapret: только администратор.
 	s.route(mux, "GET /antizapret/update", s.azUpdatePage)
 	s.route(mux, "POST /antizapret/update", s.azStart)
@@ -396,6 +407,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, page
 		}
 	}
 	d["Version"] = s.Version
+	s.switchData(r, d)
 	d["Msg"] = flashText(r)
 	var buf bytes.Buffer
 	if err := t.ExecuteTemplate(&buf, "layout.html", d); err != nil {

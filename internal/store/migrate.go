@@ -85,6 +85,23 @@ CREATE TABLE client_kinds (node_id INTEGER NOT NULL, name TEXT NOT NULL, allowed
   PRIMARY KEY (node_id, name));`,
 	// Очередь уведомлений: счётчик неудачных проходов доставки переживает перезапуск.
 	`ALTER TABLE outbox ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;`,
+	// 7: несколько узлов и группы синхронизации (этап 4). Узел: тип (узел или
+	// прокси-агент), закреплённый отпечаток TLS, токен (зашифрован ключом
+	// панели), роль в группе. У локального узла (id 1) адрес и токен не нужны.
+	`ALTER TABLE nodes ADD COLUMN kind TEXT NOT NULL DEFAULT 'node';
+ALTER TABLE nodes ADD COLUMN fingerprint TEXT NOT NULL DEFAULT '';
+ALTER TABLE nodes ADD COLUMN token TEXT NOT NULL DEFAULT '';
+ALTER TABLE nodes ADD COLUMN role TEXT NOT NULL DEFAULT '';
+ALTER TABLE nodes ADD COLUMN group_id INTEGER;
+ALTER TABLE nodes ADD COLUMN created INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE groups (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  domain TEXT NOT NULL DEFAULT '',
+  remotes TEXT NOT NULL DEFAULT '[]',
+  failover INTEGER NOT NULL DEFAULT 0,
+  failover_after INTEGER NOT NULL DEFAULT 120,
+  created INTEGER NOT NULL DEFAULT 0);`,
 }
 
 // SchemaVersion — версия схемы в базе; 0 у пустой.

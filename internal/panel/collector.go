@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +39,7 @@ type Collector struct {
 	Node        Node
 	Store       *store.Store
 	NodeID      int64
+	NodeName    string        // имя узла для уведомлений; пусто у локального
 	Every       time.Duration // panel.collect_seconds
 	HistoryDays int
 	Log         *slog.Logger
@@ -625,4 +627,28 @@ func (c *Collector) audit(ctx context.Context, now time.Time, action, target, be
 	if err != nil {
 		c.log().Warn("сборщик: запись в журнал не удалась", "err", err)
 	}
+}
+
+// mk — ключ meta этого узла: у локального прежний, у остальных с «@id».
+func (c *Collector) mk(base string) string {
+	if c.NodeID == store.LocalNode {
+		return base
+	}
+	return base + "@" + strconv.FormatInt(c.NodeID, 10)
+}
+
+// mkp — то же для префикса, который кончается двоеточием.
+func (c *Collector) mkp(base string) string {
+	if c.NodeID == store.LocalNode {
+		return base
+	}
+	return strings.TrimSuffix(base, ":") + "@" + strconv.FormatInt(c.NodeID, 10) + ":"
+}
+
+// titled добавляет к уведомлению имя узла, если сборщик ведёт не локальный.
+func (c *Collector) titled(text string) string {
+	if c.NodeName == "" || c.NodeID == store.LocalNode {
+		return text
+	}
+	return "[" + c.NodeName + "] " + text
 }

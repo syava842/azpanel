@@ -144,7 +144,7 @@ func (s *Server) updateView(w http.ResponseWriter, r *http.Request, status int, 
 			data["ResultTime"] = formatTime(&t)
 		}
 	}
-	if list, err := s.Node.Tasks(r.Context()); err == nil {
+	if list, err := s.nodeFor(r).Tasks(r.Context()); err == nil {
 		for _, t := range list {
 			if t.Kind == "selfupdate" {
 				row := newTaskRow(t)

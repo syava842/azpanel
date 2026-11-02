@@ -66,7 +66,7 @@ func newTaskRow(t nodeapi.Task) taskRow {
 }
 
 func (s *Server) tasksPage(w http.ResponseWriter, r *http.Request) {
-	list, err := s.Node.Tasks(r.Context())
+	list, err := s.nodeFor(r).Tasks(r.Context())
 	if err != nil {
 		st, tx := s.agentErr(err)
 		s.errorPage(w, r, st, tx)
@@ -88,7 +88,7 @@ func (s *Server) taskPage(w http.ResponseWriter, r *http.Request) {
 		s.errorPage(w, r, http.StatusNotFound, "задача не найдена")
 		return
 	}
-	d, err := s.Node.Task(r.Context(), id)
+	d, err := s.nodeFor(r).Task(r.Context(), id)
 	if err != nil {
 		st, tx := s.agentErr(err)
 		s.errorPage(w, r, st, tx)
@@ -105,11 +105,11 @@ func (s *Server) taskStart(w http.ResponseWriter, r *http.Request) {
 	var start func() (nodeapi.Task, error)
 	switch kind {
 	case "doall":
-		start = func() (nodeapi.Task, error) { return s.Node.ApplyRouting(r.Context()) }
+		start = func() (nodeapi.Task, error) { return s.nodeFor(r).ApplyRouting(r.Context()) }
 	case "restart":
-		start = func() (nodeapi.Task, error) { return s.Node.RestartAntiZapret(r.Context()) }
+		start = func() (nodeapi.Task, error) { return s.nodeFor(r).RestartAntiZapret(r.Context()) }
 	case "profiles":
-		start = func() (nodeapi.Task, error) { return s.Node.RebuildProfiles(r.Context()) }
+		start = func() (nodeapi.Task, error) { return s.nodeFor(r).RebuildProfiles(r.Context()) }
 	default:
 		s.errorPage(w, r, http.StatusBadRequest, "неизвестный вид задачи")
 		return

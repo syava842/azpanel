@@ -1,0 +1,14 @@
+{{define "content"}}
+<h1>Добавить узел</h1>
+<p>Панель выпустит ключ узла: в нём адрес панели (его узел впишет в белый список) и токен агента. Дальше на сервере узла выполняется команда установки, после чего в панели закрепляется отпечаток сертификата узла.</p>
+<form method="post" action="{{url "/nodes"}}" class="card narrow">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label>Имя узла
+    <input type="text" name="name" value="{{.Name}}" maxlength="40" required>
+  </label>
+  <label>Адрес панели для узла (IP, с которого панель обращается к узлу)
+    <input type="text" name="panel_ip" value="{{.PanelIP}}" required>
+  </label>
+  <button type="submit">Выпустить ключ</button>
+</form>
+{{end}}

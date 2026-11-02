@@ -21,7 +21,7 @@
 </p>
 {{end}}
 {{if .Full}}
-<form method="post" action="{{url .Href "/replace"}}" class="card">
+{{if not .Replica}}<form method="post" action="{{url .Href "/replace"}}" class="card">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
   <input type="hidden" name="base_sha256" value="{{.BaseSHA}}">
   <label>Полное содержимое списка (как в файле, с комментариями)
@@ -29,7 +29,7 @@
   </label>
   <p class="warn">Файл показан как есть. Если он изменился после открытия страницы (другой администратор, задача), сохранение будет отклонено. Перед записью агент делает копию.</p>
   <button type="submit" class="danger">Заменить список целиком</button>
-</form>
+</form>{{end}}
 {{else}}
 <div class="toolbar">
   <form method="get" action="{{url .Href}}">
@@ -63,13 +63,13 @@
   {{if .Next}}<a href="{{url .Next}}">Дальше →</a>{{end}}
 </p>
 {{if .Editable}}
-<form method="post" action="{{url .Href "/add"}}" class="card">
+{{if not .Replica}}<form method="post" action="{{url .Href "/add"}}" class="card">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
   <label>Добавить записи (по одной в строке)
     <textarea name="lines" rows="6" cols="60" spellcheck="false">{{.AddText}}</textarea>
   </label>
   <button type="submit">Добавить</button>
-</form>
+</form>{{end}}
 {{end}}
 {{end}}
 {{if .Editable}}
