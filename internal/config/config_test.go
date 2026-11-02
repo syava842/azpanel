@@ -164,3 +164,14 @@ func TestValidateAllowIPs(t *testing.T) {
 		t.Fatalf("ошибка = %v", err)
 	}
 }
+
+func TestParseAllowIPsMappedShortPrefix(t *testing.T) {
+	// ::ffff:10.0.0.0/80 не помещается в IPv4: ошибка, а не пустая запись.
+	if _, err := ParseAllowIPs([]string{"::ffff:10.0.0.0/80"}); err == nil || !strings.Contains(err.Error(), "/96") {
+		t.Fatalf("ждали ошибку про /96, получили %v", err)
+	}
+	got, err := ParseAllowIPs([]string{"::ffff:10.0.0.0/104"})
+	if err != nil || len(got) != 1 || got[0].String() != "10.0.0.0/8" {
+		t.Fatalf("%v %v", got, err)
+	}
+}

@@ -285,3 +285,37 @@ func TestAccessConfigFileKeepsOtherSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Возврат списка: в память сразу, файл — отдельной попыткой, которая повторяется.
+func TestAccessRevertAppliesInMemoryWhenFileBroken(t *testing.T) {
+	e := newAccessEnv(t)
+	if rec := e.post(t, "/settings/access", "10.0.0.1", url.Values{"ips": {"10.0.0.0/8"}}); rec.Code != 200 {
+		t.Fatalf("сохранение: %d %s", rec.Code, rec.Body)
+	}
+	good, err := os.ReadFile(e.cfgFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(e.cfgFile, []byte("это не toml ["), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e.now = e.now.Add(accessConfirmTTL + time.Second)
+	e.srv.CheckPending(context.Background())
+	if !e.srv.Allow.Allows("192.0.2.5") {
+		t.Fatal("запирающий список остался в работе из-за неисправного файла")
+	}
+	if _, ok, _ := e.srv.Pending.Get(context.Background(), pendingAllowIPs); !ok {
+		t.Fatal("запись ожидания снята, хотя файл не записан")
+	}
+	// Файл починили: следующий проход дописывает его и снимает запись.
+	if err := os.WriteFile(e.cfgFile, good, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e.srv.CheckPending(context.Background())
+	if got := e.cfgList(t); len(got) != 0 {
+		t.Fatalf("в файле: %v", got)
+	}
+	if _, ok, _ := e.srv.Pending.Get(context.Background(), pendingAllowIPs); ok {
+		t.Fatal("запись ожидания осталась")
+	}
+}

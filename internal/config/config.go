@@ -185,6 +185,10 @@ func ParseAllowIPs(list []string) ([]netip.Prefix, error) {
 			if err != nil {
 				return nil, fmt.Errorf("%q: неверная сеть", v)
 			}
+			if p.Addr().Is4In6() && p.Bits() < 96 {
+				// Иначе префикс не помещается в IPv4 и запись молча ничего не пускала бы.
+				return nil, fmt.Errorf("%q: сеть IPv4 внутри IPv6 должна быть не короче /96; запишите её как IPv4 (например 10.0.0.0/8)", v)
+			}
 			out = append(out, netip.PrefixFrom(p.Addr().Unmap(), unmapBits(p)).Masked())
 			continue
 		}

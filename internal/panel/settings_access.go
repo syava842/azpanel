@@ -37,7 +37,7 @@ func (s *Server) initAccess() {
 			if s.Pending.Apply == nil {
 				s.Pending.Apply = map[string]func(string) error{}
 			}
-			s.Pending.Apply[pendingAllowIPs] = func(v string) error { return s.applyAllow(splitList(v)) }
+			s.Pending.Apply[pendingAllowIPs] = func(v string) error { return s.restoreAllow(splitList(v)) }
 		}
 	})
 }
@@ -49,30 +49,51 @@ func splitList(v string) []string {
 	})
 }
 
-// applyAllow ставит список в работу и в config.toml. Файл пишется первым:
-// не записался — работа не меняется. Вызывается под access.mu.
+// writeAllowFile пишет список в config.toml.
+func (s *Server) writeAllowFile(list []string) error {
+	if s.NoConfigFile {
+		return nil
+	}
+	file := s.ConfigFile
+	if file == "" {
+		file = paths.ConfigFile()
+	}
+	cfg, err := config.Load(file)
+	if err != nil {
+		return err
+	}
+	cfg.Panel.AllowIPs = list
+	return config.Save(file, cfg)
+}
+
+// applyAllow ставит новый список в работу и в config.toml. Файл пишется
+// первым: не записался — работа не меняется. Вызывается под access.mu.
 func (s *Server) applyAllow(list []string) error {
 	nets, err := config.ParseAllowIPs(list)
 	if err != nil {
 		return err
 	}
-	if !s.NoConfigFile {
-		file := s.ConfigFile
-		if file == "" {
-			file = paths.ConfigFile()
-		}
-		cfg, err := config.Load(file)
-		if err != nil {
-			return err
-		}
-		cfg.Panel.AllowIPs = list
-		if err := config.Save(file, cfg); err != nil {
-			return err
-		}
+	if err := s.writeAllowFile(list); err != nil {
+		return err
 	}
 	s.Allow.Set(nets)
 	s.access.list = list
 	return nil
+}
+
+// restoreAllow возвращает прежний список. Порядок обратный applyAllow: сначала
+// в работу, потом в файл. Иначе неисправный config.toml оставил бы в работе
+// новый (возможно, запирающий) список бессрочно. Ошибка файла возвращается,
+// запись ожидания остаётся, и следующая проверка повторит запись; в память
+// список к тому времени уже поставлен. Вызывается под access.mu.
+func (s *Server) restoreAllow(list []string) error {
+	nets, err := config.ParseAllowIPs(list)
+	if err != nil {
+		return err
+	}
+	s.Allow.Set(nets)
+	s.access.list = list
+	return s.writeAllowFile(list)
 }
 
 // CurrentAllow — записи действующего белого списка.
