@@ -27,6 +27,7 @@ type Config struct {
 	Panel         Panel    `toml:"panel"`
 	Log           Log      `toml:"log"`
 	Telegram      Telegram `toml:"telegram"`
+	Proxy         Proxy    `toml:"proxy"`
 }
 
 type Node struct {
@@ -108,7 +109,8 @@ func Default() Config {
 			HistoryDays:    30,
 			SessionHours:   168,
 		},
-		Log: Log{MaxSizeMB: 10, Keep: 5},
+		Log:   Log{MaxSizeMB: 10, Keep: 5},
+		Proxy: defaultProxy(),
 		Telegram: Telegram{
 			Strangers:   "closed",
 			Notify:      slices.Clone(TelegramNotifyKinds),
@@ -187,7 +189,10 @@ func (c Config) Validate() error {
 	case c.Log.Keep < 1 || c.Log.Keep > 100:
 		return fmt.Errorf("log.keep = %d, нужно 1..100", c.Log.Keep)
 	}
-	return c.Telegram.validate()
+	if err := c.Telegram.validate(); err != nil {
+		return err
+	}
+	return c.Proxy.validate()
 }
 
 func (g Telegram) validate() error {

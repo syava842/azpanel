@@ -1,0 +1,8 @@
+ipv4     2 udp      17 25 src=192.0.2.55 dst=203.0.113.10 sport=51234 dport=443 src=198.51.100.20 dst=203.0.113.10 sport=50443 dport=51234 mark=0 zone=0 use=2
+ipv4     2 udp      17 118 src=192.0.2.77 dst=203.0.113.10 sport=40001 dport=540 src=198.51.100.20 dst=203.0.113.10 sport=51443 dport=22345 [ASSURED] mark=0 zone=0 use=2
+ipv4     2 tcp      6 3598 ESTABLISHED src=192.0.2.88 dst=203.0.113.10 sport=60123 dport=443 src=198.51.100.20 dst=203.0.113.10 sport=50443 dport=60123 [ASSURED] mark=0 zone=0 use=2
+ipv4     2 tcp      6 100 TIME_WAIT src=192.0.2.99 dst=203.0.113.10 sport=60500 dport=80 src=198.51.100.20 dst=203.0.113.10 sport=50080 dport=60500 [ASSURED] mark=0 zone=0 use=1
+ipv4     2 tcp      6 3000 ESTABLISHED src=192.0.2.12 dst=203.0.113.10 sport=55000 dport=22 src=203.0.113.10 dst=192.0.2.12 sport=22 dport=55000 [ASSURED] mark=0 zone=0 use=1
+ipv4     2 udp      17 20 src=192.0.2.33 dst=203.0.113.10 sport=5353 dport=5353 [UNREPLIED] src=203.0.113.10 dst=192.0.2.33 sport=5353 dport=5353 mark=0 zone=0 use=1
+ipv4     2 udp      17 29 src=192.0.2.44 dst=203.0.113.10 sport=33333 dport=50080 [UNREPLIED] src=198.51.100.20 dst=203.0.113.10 sport=50080 dport=33333 mark=0 zone=0 use=1
+ipv6     10 udp     17 25 src=2001:db8::5 dst=2001:db8::1 sport=1000 dport=443 src=2001:db8::1 dst=2001:db8::5 sport=443 dport=1000 mark=0 zone=0 use=1
