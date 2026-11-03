@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/syava842/azpanel/internal/nodeapi"
 )
@@ -65,7 +66,7 @@ func TestAZRetryRunsSameSetupWithSavedBackup(t *testing.T) {
 	if got.Status != nodeapi.AZStatusRunning || got.Retries != 1 || got.Backup != st.Backup || got.Commit != st.Commit {
 		t.Fatalf("%+v", got)
 	}
-	calls := e.ex.callsFor("azretry")
+	calls := waitCalls(e, "azretry")
 	if len(calls) != 1 {
 		t.Fatalf("вызовов повтора: %d", len(calls))
 	}
@@ -93,7 +94,7 @@ func TestAZRetryRunsSameSetupWithSavedBackup(t *testing.T) {
 
 	// Узел перезагрузился, установка дошла до конца: итог ok, счётчик повторов виден.
 	e.reboot()
-	close(e.ex.hold)
+	e.ex.release(t)
 	e.u.Resume()
 	done := e.waitStatus(nodeapi.AZStatusOK)
 	if done.Retries != 1 || done.CanRetry {
@@ -277,5 +278,47 @@ func TestAZRetryAPI(t *testing.T) {
 	got, err := e.client.AZRetry(ctx)
 	if err != nil || got.Status != nodeapi.AZStatusRunning || got.Retries != 1 {
 		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+// waitCalls ждёт вызова подменного systemd-run: задача запускает его в
+// горутине, и сразу после Start/Retry вызова может ещё не быть.
+func waitCalls(e *azEnv, name string) [][]string {
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if c := e.ex.callsFor(name); len(c) > 0 {
+			return c
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return nil
+}
+
+// Повтор и восстановление тоже ждут замка операций над клиентами: client.sh
+// пишет те же PKI и конфиги WireGuard.
+func TestAZRetryAndRestoreTakeGate(t *testing.T) {
+	busy := func() (func(), bool) { return nil, false }
+	var pre *PreflightError
+
+	e := newAZ(t)
+	st := lateFailure(t, e)
+	os.WriteFile(filepath.Join(e.backup, st.Backup), []byte("tgz"), 0o600)
+	e.u.Gate = busy
+	if _, err := e.u.Retry(context.Background()); !errors.As(err, &pre) || !pre.Busy {
+		t.Fatalf("повтор при занятом замке: %v", err)
+	}
+	if got := e.u.State(); got.Status != nodeapi.AZStatusFailedLate {
+		t.Fatalf("состояние после отказа повтора: %+v", got)
+	}
+
+	e = newAZ(t)
+	name := "backup-azpanel-2026-11-02-101500.tar.gz"
+	os.WriteFile(filepath.Join(e.backup, name), []byte("tgz"), 0o600)
+	e.u.Gate = busy
+	if _, err := e.u.Restore(context.Background(), name); !errors.As(err, &pre) || !pre.Busy {
+		t.Fatalf("восстановление при занятом замке: %v", err)
+	}
+	if e.u.Active() {
+		t.Fatal("состояние «идёт» при отказе")
 	}
 }

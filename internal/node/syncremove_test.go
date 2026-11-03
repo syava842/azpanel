@@ -225,7 +225,8 @@ func TestRunSyncApplyChmodOnlyDoesNotRestart(t *testing.T) {
 	if len(rec.calls) != 0 {
 		t.Fatalf("смена прав перезапустила службы: %v", rec.calls)
 	}
-	if fi, _ := os.Stat(ca); fi.Mode().Perm() != 0o644 {
+	// Права — из архива: buildTar пишет все записи с 0640.
+	if fi, _ := os.Stat(ca); fi.Mode().Perm() != 0o640 {
 		t.Fatalf("права не поправлены: %o", fi.Mode().Perm())
 	}
 }

@@ -186,7 +186,7 @@ func TestTasksListNewestFirstAndCapped(t *testing.T) {
 func TestTasksInterruptedWhenUnitGone(t *testing.T) {
 	root := t.TempDir()
 	state := filepath.Join(root, "tasks.json")
-	os.WriteFile(state, []byte(`[{"id":"aaaaaaaaaaaa","kind":"doall","started":"2026-11-02T10:00:00Z","log":"/x/a.log"}]`), 0o640)
+	os.WriteFile(state, []byte(`[{"id":"aaaaaaaaaaaa","kind":"doall","started":"`+recentStart+`","log":"/x/a.log"}]`), 0o640)
 	tk := &Tasks{
 		LogDir: root, StatePath: state,
 		Active: func(context.Context, string) (bool, error) { return false, nil },
@@ -212,7 +212,7 @@ func TestTasksInterruptedWhenUnitGone(t *testing.T) {
 func TestTasksOrphanWaitedWhileUnitActive(t *testing.T) {
 	root := t.TempDir()
 	state := filepath.Join(root, "tasks.json")
-	os.WriteFile(state, []byte(`[{"id":"bbbbbbbbbbbb","kind":"profiles","started":"2026-11-02T10:00:00Z","log":"/x/b.log"}]`), 0o640)
+	os.WriteFile(state, []byte(`[{"id":"bbbbbbbbbbbb","kind":"profiles","started":"`+recentStart+`","log":"/x/b.log"}]`), 0o640)
 	var mu sync.Mutex
 	active := true
 	tk := &Tasks{
@@ -541,7 +541,7 @@ func TestTasksOrphanExitCodeFromFile(t *testing.T) {
 func TestTasksLoadFinishedWhileAgentDown(t *testing.T) {
 	root := t.TempDir()
 	state := filepath.Join(root, "tasks.json")
-	os.WriteFile(state, []byte(`[{"id":"dddddddddddd","kind":"restart","started":"2026-11-02T10:00:00Z","log":"/x/d.log"}]`), 0o640)
+	os.WriteFile(state, []byte(`[{"id":"dddddddddddd","kind":"restart","started":"`+recentStart+`","log":"/x/d.log"}]`), 0o640)
 	os.WriteFile(filepath.Join(root, "d.log.exit"), []byte("2\n"), 0o640)
 	tk := &Tasks{LogDir: root, StatePath: state, Active: func(context.Context, string) (bool, error) { return false, nil }}
 	if err := tk.Load(); err != nil {
@@ -629,3 +629,7 @@ func TestTasksOrphanGivesUpAfterDeadline(t *testing.T) {
 		t.Fatal("очередь должна освободиться")
 	}
 }
+
+// recentStart — начало задачи минуту назад: с датой-константой тест ломается,
+// как только она уходит за пределы задачи.
+var recentStart = time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)

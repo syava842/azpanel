@@ -137,7 +137,7 @@ func TestTasksActiveErrorIsUnknownNotStopped(t *testing.T) {
 func TestTasksLoadUnknownStateWaits(t *testing.T) {
 	root := t.TempDir()
 	state := filepath.Join(root, "tasks.json")
-	os.WriteFile(state, []byte(`[{"id":"eeeeeeeeeeee","kind":"doall","started":"2026-11-02T10:00:00Z","log":"/x/e.log"}]`), 0o640)
+	os.WriteFile(state, []byte(`[{"id":"eeeeeeeeeeee","kind":"doall","started":"`+recentStart+`","log":"/x/e.log"}]`), 0o640)
 	u := &unitFake{err: errors.New("systemd занят")}
 	tk := &Tasks{LogDir: root, StatePath: state, Active: u.fn, PollEvery: 5 * time.Millisecond,
 		Result: func(context.Context, string) string { return "" }}

@@ -601,7 +601,7 @@ func (u *AZUpdater) Start(ctx context.Context, req nodeapi.AZUpdateRequest) (nod
 	}
 	release, ok := u.gate()
 	if !ok {
-		return nodeapi.AZUpdateState{}, &PreflightError{Busy: true, Reasons: []string{"идёт операция над клиентом — повторите, когда она закончится"}}
+		return nodeapi.AZUpdateState{}, clientOpBusy()
 	}
 	defer release()
 	argv := u.setupArgv(azUpdateScript, "azupdate", rootCopy, keepCopy, setupSh, answers)
@@ -610,6 +610,12 @@ func (u *AZUpdater) Start(ctx context.Context, req nodeapi.AZUpdateRequest) (nod
 		u.logger().Info("обновление AntiZapret запущено", "commit", sha, "from", from, "task", out.TaskID, "backup", name)
 	}
 	return out, err
+}
+
+// clientOpBusy — замок операций над клиентами занят: client.sh пишет те же
+// PKI и конфиги WireGuard, что setup.sh и client.sh 9.
+func clientOpBusy() error {
+	return &PreflightError{Busy: true, Reasons: []string{"идёт операция над клиентом — повторите, когда она закончится"}}
 }
 
 // gate берёт замок операций над клиентами; без Gate замка нет.
@@ -717,6 +723,11 @@ func (u *AZUpdater) Retry(ctx context.Context) (nodeapi.AZUpdateState, error) {
 	st.Restorable = false
 	st.Retries = prev.Retries + 1
 	st.Notes = append(append([]string(nil), prev.Notes...), fmt.Sprintf("повтор установки №%d с бэкапом %s", st.Retries, prev.Backup))
+	release, ok := u.gate()
+	if !ok {
+		return nodeapi.AZUpdateState{}, clientOpBusy()
+	}
+	defer release()
 	argv := u.setupArgv(azRetryScript, "azretry", rootCopy, keepCopy, setupSh, answers)
 	out, err := u.begin(st, TaskAZUpdate, argv, StartOpts{Env: append([]string{"HOME=/root"}, prev.RetryEnv...)})
 	if err == nil {
@@ -826,6 +837,11 @@ func (u *AZUpdater) Restore(ctx context.Context, backup string) (nodeapi.AZUpdat
 		Action: nodeapi.AZActionRestore, Status: nodeapi.AZStatusRunning, Phase: nodeapi.AZPhasePrepare,
 		Started: u.now(), Backup: backup, Clients: clients, Commit: prevState.Commit, From: prevState.From,
 	}}
+	release, ok := u.gate()
+	if !ok {
+		return nodeapi.AZUpdateState{}, clientOpBusy()
+	}
+	defer release()
 	argv := []string{"/bin/sh", "-c", azRestoreScript, "azrestore", filepath.Join(u.BackupDir, backup), u.RootDir, u.Dir}
 	out, err := u.begin(st, TaskAZRestore, argv, StartOpts{})
 	if err == nil {

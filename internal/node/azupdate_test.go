@@ -70,6 +70,7 @@ type azExec struct {
 	mu     sync.Mutex
 	calls  [][]string
 	hold   chan struct{} // не nil: задача azupdate ждёт закрытия
+	held   int           // сколько вызовов azupdate/azretry дописали журнал после hold
 	codes  map[string]int
 	output map[string]string
 }
@@ -96,7 +97,35 @@ func (x *azExec) exec(_ context.Context, name string, args ...string) (int, []by
 			appendLog(p, x.output[kind])
 		}
 	}
+	if (kind == "azupdate" || kind == "azretry") && hold != nil {
+		x.mu.Lock()
+		x.held++
+		x.mu.Unlock()
+	}
 	return x.codes[kind], nil, nil
+}
+
+// release отпускает задержанную установку и ждёт, пока она допишет журнал:
+// иначе проверка после «перезагрузки» читала бы журнал раньше, чем его
+// дописал «старый» процесс (на одном ядре — регулярно). На настоящем сервере
+// журнал уже на диске к моменту перезагрузки.
+func (x *azExec) release(t *testing.T) {
+	t.Helper()
+	x.mu.Lock()
+	want := x.held + 1
+	close(x.hold)
+	x.mu.Unlock()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		x.mu.Lock()
+		n := x.held
+		x.mu.Unlock()
+		if n >= want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("задержанная установка не дописала журнал")
 }
 
 func (x *azExec) callsFor(kind string) [][]string {
@@ -304,6 +333,17 @@ func (e *azEnv) waitPhase(want string) {
 }
 
 // startAndReboot запускает обновление, ждёт «reboot» и поднимает новый агент.
+// rebootMidSetup — сервер перезагрузился, пока шла установка: ждём, что юнит
+// запущен, «перезагружаем» агента и отпускаем установку до конца её журнала.
+func (e *azEnv) rebootMidSetup() {
+	e.t.Helper()
+	if waitCalls(e, "azupdate") == nil {
+		e.t.Fatal("systemd-run не вызван")
+	}
+	e.reboot()
+	e.ex.release(e.t)
+}
+
 func (e *azEnv) startAndReboot() nodeapi.AZUpdateState {
 	e.t.Helper()
 	e.ex.hold = make(chan struct{})
@@ -312,8 +352,7 @@ func (e *azEnv) startAndReboot() nodeapi.AZUpdateState {
 		e.t.Fatal(err)
 	}
 	// Сервер ушёл в перезагрузку, пока юнит работал: итога задачи нет вовсе.
-	e.reboot()
-	close(e.ex.hold)
+	e.rebootMidSetup()
 	e.u.Resume()
 	return st
 }
@@ -537,8 +576,7 @@ func TestAZMissingClientIsFailure(t *testing.T) {
 	}
 	// «Во время установки» клиент bob пропал.
 	os.Remove(filepath.Join(e.pki, "issued", "bob.crt"))
-	e.reboot()
-	close(e.ex.hold)
+	e.rebootMidSetup()
 	e.u.Resume()
 	got := e.waitStatus(nodeapi.AZStatusFailed)
 	if !strings.Contains(strings.Join(got.Reasons, "|"), "пропали клиенты: bob") {
@@ -712,8 +750,7 @@ func TestAZResetKeysWarning(t *testing.T) {
 	m := azSetupMap()
 	m["RECONNECT_WARP"], m["TXQUEUELEN"], m["CLIENT_ISOLATION"] = "n", "10000", "n"
 	writeSetupMap(t, filepath.Join(e.dir, "setup"), m)
-	e.reboot()
-	close(e.ex.hold)
+	e.rebootMidSetup()
 	e.u.Resume()
 	got := e.waitStatus(nodeapi.AZStatusOK)
 	all := strings.Join(got.Warnings, "|")
