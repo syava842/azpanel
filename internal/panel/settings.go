@@ -517,6 +517,15 @@ func (s *Server) settingsApply(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Фрагмент nginx агент перепишет уже после записи настройки; отказ (пустой
+	// префикс в чужом server-блоке) узнаём заранее, пока ничего не тронуто.
+	if s.CheckNginx != nil && touchesNginx(dangerous) {
+		if err := s.CheckNginx(d.cfg.Panel.BasePath, d.cfg.Panel.Listen); err != nil {
+			s.restoreDraft(draftID, d)
+			s.renderSettings(w, r, http.StatusUnprocessableEntity, cur, map[string]any{"Error": "Фрагмент nginx не примет это значение, настройки не тронуты: " + err.Error()})
+			return
+		}
+	}
 	// Секреты первыми: они могут не примениться (агент не перезапустился),
 	// и тогда config.toml остаётся прежним.
 	var notes []string
@@ -552,12 +561,9 @@ func (s *Server) settingsApply(w http.ResponseWriter, r *http.Request) {
 	}
 	// Префикс и адрес панели живут и во фрагменте nginx: обновляем его в
 	// рамках того же таймера возврата (откат вернёт и фрагмент).
-	for _, c := range dangerous {
-		if c.Field.Path == "panel.listen" || c.Field.Path == "panel.base_path" {
-			if note := s.syncNginx(d.cfg); note != "" {
-				notes = append(notes, note)
-			}
-			break
+	if touchesNginx(dangerous) {
+		if note := s.syncNginx(d.cfg); note != "" {
+			notes = append(notes, note)
 		}
 	}
 	if needNode {
@@ -588,6 +594,17 @@ func (s *Server) settingsApply(w http.ResponseWriter, r *http.Request) {
 // Пустая строка — делать нечего (фрагмента нет) или обновлено без замечаний;
 // иначе — пояснение для страницы. Сбой не отменяет изменение: ручная правка
 // фрагмента в пределах таймера возврата остаётся рабочим путём.
+// touchesNginx — среди изменений есть префикс или адрес панели: оба живут и во
+// фрагменте nginx.
+func touchesNginx(changes []config.Change) bool {
+	for _, c := range changes {
+		if c.Field.Path == "panel.listen" || c.Field.Path == "panel.base_path" {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) syncNginx(cfg config.Config) string {
 	if s.SyncNginx == nil {
 		return ""

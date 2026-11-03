@@ -127,7 +127,8 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		RestartNode: func(ctx context.Context) error {
 			return restartNodeHTTP(ctx, cfg.Panel.NodeURL, token, sec[NodeFingerprintKey])
 		},
-		SyncNginx: nginxSyncVia(node),
+		SyncNginx:  nginxSyncVia(node),
+		CheckNginx: nginxCheckVia(node),
 	}
 	proxies, err := config.ParseTrustedProxies(cfg.Panel.TrustedProxies)
 	if err != nil {
@@ -302,5 +303,21 @@ func purgeSessionsLoop(ctx context.Context, st *store.Store, every time.Duration
 			return
 		case <-t.C:
 		}
+	}
+}
+
+// nginxCheckVia — Server.CheckNginx через агента: запрос с check=true ничего не
+// запускает. Отказ — только явный 400 агента; недоступный агент проверку
+// пропускает, чтобы не запирать настройки.
+func nginxCheckVia(n nginxSnippetUpdater) func(basePath, listen string) error {
+	return func(basePath, listen string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_, err := n.UpdateNginxSnippet(ctx, nodeapi.NginxSnippetRequest{BasePath: basePath, Upstream: listen, Check: true})
+		var ne *nodeapi.Error
+		if errors.As(err, &ne) && ne.Status == http.StatusBadRequest {
+			return errors.New(ne.Message)
+		}
+		return nil
 	}
 }

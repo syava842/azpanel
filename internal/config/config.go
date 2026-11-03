@@ -385,7 +385,8 @@ func trustedErr(list []string) error {
 func ParseTrustedProxies(list []string) ([]netip.Prefix, error) { return ParseAllowIPs(list) }
 
 // basePathErr проверяет panel.base_path: пусто либо «/x/», «/a/b/»: начинается
-// и кончается косой чертой, сегменты из латиницы, цифр и «._~-».
+// и кончается косой чертой, сегменты из латиницы, цифр и «._-» (как во
+// фрагменте nginx, см. install.ValidateSnippetArgs).
 func basePathErr(v string) error {
 	if v == "" {
 		return nil
@@ -398,9 +399,9 @@ func basePathErr(v string) error {
 			return fmt.Errorf("%q: пустой или недопустимый сегмент пути", v)
 		}
 		for _, r := range seg {
-			ok := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("._~-", r)
+			ok := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("._-", r)
 			if !ok {
-				return fmt.Errorf("%q: допустимы латиница, цифры и . _ ~ -", v)
+				return fmt.Errorf("%q: допустимы латиница, цифры и . _ -", v)
 			}
 		}
 	}

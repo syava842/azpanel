@@ -697,9 +697,32 @@ func (n *Nginx) UpdateSnippet(basePath, upstream string) (done bool, err error) 
 	if string(cur) == want {
 		return true, nil
 	}
+	if err := n.CheckSnippetBase(basePath); err != nil {
+		return true, err
+	}
 	return true, n.Apply([]string{SnippetPath}, func() error {
 		return n.WriteFile(SnippetPath, []byte(want), 0o644)
 	})
+}
+
+// CheckSnippetBase отказывает в пустом префиксе, если фрагмент панели
+// подключён в чужой server-блок: location ^~ / отдал бы панели весь сайт, а
+// при своём location / у сайта nginx -t не прошёл бы. В отдельном server
+// панели (EnableOwnPort) пустой префикс допустим.
+func (n *Nginx) CheckSnippetBase(basePath string) error {
+	if normalizeBase(basePath) != "/" {
+		return nil
+	}
+	own := map[string]bool{
+		filepath.ToSlash(path.Join(n.dir(), ownPortFile)): true,
+		filepath.ToSlash(path.Join(n.dir(), ownPortLink)): true,
+	}
+	for _, f := range n.IncludeFiles() {
+		if !own[filepath.ToSlash(f)] {
+			return fmt.Errorf("фрагмент панели подключён в server-блок %s: с пустым префиксом панель заняла бы весь сайт — нужен префикс вида /azpanel/", f)
+		}
+	}
+	return nil
 }
 
 // Disable — обратное Enable/EnableOwnPort: строки include (во всех

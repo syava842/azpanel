@@ -135,6 +135,10 @@ type Server struct {
 	// panel.listen. done=false — фрагмента нет, nginx не тронут. nil — панель
 	// nginx не правит.
 	SyncNginx func(basePath, listen string) (done bool, err error)
+	// CheckNginx спрашивает агента, примет ли он такой фрагмент (например,
+	// пустой префикс в чужом server-блоке — нет), до записи настройки. nil или
+	// агент недоступен — проверки нет, решает SyncNginx.
+	CheckNginx func(basePath, listen string) error
 	// Telegram — настройки бота (backup_chats для страницы «Telegram-бот»);
 	// заполняется при запуске бота.
 	Telegram config.Telegram

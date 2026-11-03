@@ -846,3 +846,37 @@ func TestAllowGateCleansPath(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+// Агент отказал во фрагменте (пустой префикс в чужом server-блоке): настройка
+// не записана, nginx не тронут, введённое не потеряно.
+func TestSettingsNginxCheckRefusalKeepsConfig(t *testing.T) {
+	e := newSetEnv(t)
+	synced := false
+	e.srv.SyncNginx = func(string, string) (bool, error) { synced = true; return true, nil }
+	e.srv.CheckNginx = func(base, listen string) error {
+		if base == "" {
+			return errors.New("панель заняла бы весь сайт")
+		}
+		return nil
+	}
+	_, draft := e.save(t, map[string]string{"panel.base_path": "/azpanel/"})
+	if rec := e.apply(t, draft); rec.Code != 200 {
+		t.Fatalf("непустой префикс: %d", rec.Code)
+	}
+	e.wasExit()
+	if err := e.srv.Pending.Confirm(context.Background(), pendingSettings); err != nil {
+		t.Fatal(err)
+	}
+	synced = false
+	_, draft = e.save(t, map[string]string{"panel.base_path": ""})
+	rec := e.apply(t, draft)
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "весь сайт") {
+		t.Fatalf("%d\n%s", rec.Code, rec.Body)
+	}
+	if e.cfg(t).Panel.BasePath != "/azpanel/" || synced {
+		t.Fatalf("настройка тронута: %q, nginx: %v", e.cfg(t).Panel.BasePath, synced)
+	}
+	if rec := e.apply(t, draft); rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("черновик потерян: %d", rec.Code)
+	}
+}

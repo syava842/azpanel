@@ -494,3 +494,32 @@ func TestFindServersConfDBeforeSitesEnabled(t *testing.T) {
 		t.Fatalf("план взял не первый блок nginx: %+v", plan)
 	}
 }
+
+// Пустой префикс в чужом server-блоке — location ^~ / на весь сайт: отказ.
+// В отдельном server панели и с непустым префиксом — можно.
+func TestCheckSnippetBase(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "sites-enabled"), 0o755)
+	site := filepath.Join(dir, "sites-enabled", "site")
+	own := filepath.Join(dir, "sites-enabled", "azpanel")
+	n := &Nginx{Dir: dir, ReadFile: os.ReadFile}
+
+	os.WriteFile(own, []byte("server {\n    listen 8443 ssl;\n    "+includeLine(SnippetPath)+"\n}\n"), 0o644)
+	os.WriteFile(site, []byte("server {\n    server_name example.org;\n    root /var/www;\n}\n"), 0o644)
+	for _, base := range []string{"", "/", "/azpanel/"} {
+		if err := n.CheckSnippetBase(base); err != nil {
+			t.Fatalf("свой server, %q: %v", base, err)
+		}
+	}
+
+	os.Remove(own)
+	os.WriteFile(site, []byte("server {\n    server_name example.org;\n    root /var/www;\n    "+includeLine(SnippetPath)+"\n}\n"), 0o644)
+	for _, base := range []string{"", "/"} {
+		if err := n.CheckSnippetBase(base); err == nil || !strings.Contains(err.Error(), "весь сайт") {
+			t.Fatalf("чужой server, %q: %v", base, err)
+		}
+	}
+	if err := n.CheckSnippetBase("/azpanel/"); err != nil {
+		t.Fatalf("чужой server, /azpanel/: %v", err)
+	}
+}

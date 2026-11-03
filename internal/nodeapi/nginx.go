@@ -10,6 +10,9 @@ import (
 type NginxSnippetRequest struct {
 	BasePath string `json:"base_path"`
 	Upstream string `json:"upstream"`
+	// Check — только проверить параметры (в том числе пустой префикс в чужом
+	// server-блоке), ничего не запуская: панель спрашивает до записи настройки.
+	Check bool `json:"check,omitempty"`
 }
 
 // NginxSnippetResult — ответ на смену фрагмента. Done=false: фрагмента панели

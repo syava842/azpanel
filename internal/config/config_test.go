@@ -275,7 +275,7 @@ func TestTelegramSaveLoadRoundTrip(t *testing.T) {
 
 func TestBasePathValidation(t *testing.T) {
 	for v, ok := range map[string]bool{
-		"": true, "/azpanel/": true, "/a/b/": true, "/x-1._~/": true,
+		"": true, "/azpanel/": true, "/a/b/": true, "/x-1._/": true, "/x~/": false,
 		"/": false, "azpanel/": false, "/azpanel": false, "//": false, "/a//b/": false,
 		"/a b/": false, "/a?b/": false, "/../": false, "/путь/": false,
 	} {

@@ -21,6 +21,16 @@ type NginxService struct {
 	ParamsDir string // каталог файлов параметров задач (0700)
 	// Present — стоит ли фрагмент панели; nil — проверка файла SnippetPath.
 	Present func() bool
+	// CheckBase — допустим ли префикс при нынешнем подключении фрагмента; nil —
+	// install.Nginx.CheckSnippetBase.
+	CheckBase func(basePath string) error
+}
+
+func (s *NginxService) checkBase(basePath string) error {
+	if s.CheckBase != nil {
+		return s.CheckBase(basePath)
+	}
+	return install.NewNginx().CheckSnippetBase(basePath)
 }
 
 func (s *NginxService) present() bool {
@@ -52,7 +62,14 @@ func (a *API) nginxSnippet(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if !a.Nginx.present() {
+	present := a.Nginx.present()
+	if present {
+		if err := a.Nginx.checkBase(req.BasePath); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	if !present || req.Check {
 		writeJSON(w, http.StatusOK, nodeapi.NginxSnippetResult{Done: false})
 		return
 	}

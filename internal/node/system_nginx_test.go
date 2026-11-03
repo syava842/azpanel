@@ -3,6 +3,8 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -80,5 +82,33 @@ func TestNginxSnippetBusyIs409(t *testing.T) {
 	_, err := e.client.UpdateNginxSnippet(context.Background(), nodeapi.NginxSnippetRequest{BasePath: "/a/", Upstream: "[::1]:8080"})
 	if status(err) != 409 {
 		t.Fatalf("%v", err)
+	}
+}
+
+// Отказ в префиксе (пустой в чужом server-блоке) — 400 до задачи; check=true
+// только проверяет и ничего не запускает.
+func TestNginxSnippetCheckBase(t *testing.T) {
+	e, f, _, _ := nginxEnv(t, true)
+	e.api.Nginx.CheckBase = func(base string) error {
+		if base == "" {
+			return errors.New("весь сайт")
+		}
+		return nil
+	}
+	ctx := context.Background()
+	_, err := e.client.UpdateNginxSnippet(ctx, nodeapi.NginxSnippetRequest{BasePath: "", Upstream: "127.0.0.1:8080"})
+	var ne *nodeapi.Error
+	if !errors.As(err, &ne) || ne.Status != http.StatusBadRequest || !strings.Contains(ne.Message, "весь сайт") {
+		t.Fatalf("пустой префикс: %v", err)
+	}
+	if _, err := e.client.UpdateNginxSnippet(ctx, nodeapi.NginxSnippetRequest{BasePath: "", Upstream: "127.0.0.1:8080", Check: true}); err == nil {
+		t.Fatal("проверка пропустила пустой префикс")
+	}
+	res, err := e.client.UpdateNginxSnippet(ctx, nodeapi.NginxSnippetRequest{BasePath: "/x/", Upstream: "127.0.0.1:8080", Check: true})
+	if err != nil || res.Done || res.Task != nil {
+		t.Fatalf("проверка: %+v %v", res, err)
+	}
+	if len(f.calls) != 0 {
+		t.Fatalf("проверка запустила задачу: %v", f.calls)
 	}
 }
