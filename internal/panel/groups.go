@@ -847,8 +847,10 @@ func rewriteOvpn(data []byte, remotes []string) []byte {
 }
 
 // groupRemotes — список remote группы узла.
+// Группы — отложенная возможность: без panel.experimental оставшаяся в базе
+// группа профили не переписывает (как и копирование на реплики).
 func (s *Server) groupRemotes(ctx context.Context, nodeID int64) []string {
-	if s.Store == nil || nodeID == 0 {
+	if s.Store == nil || nodeID == 0 || !s.Experimental {
 		return nil
 	}
 	rec, ok, err := s.nodeRec(ctx, nodeID)

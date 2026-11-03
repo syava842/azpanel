@@ -440,8 +440,9 @@ func groupKey(id int64) string { return fmt.Sprintf("g%d", id) }
 
 // syncAfterChange: изменение на выбранном узле, если он основной группы с
 // репликами, уходит на реплики в фоне; ошибка помечает группу и шлёт sync_mismatch.
+// Без panel.experimental не идёт: группы скрыты вместе со страницами.
 func (s *Server) syncAfterChange(c *conn, who string) {
-	if c == nil || c.rec.Role != store.RolePrimary || c.rec.GroupID == 0 || s.Store == nil {
+	if c == nil || c.rec.Role != store.RolePrimary || c.rec.GroupID == 0 || s.Store == nil || !s.Experimental {
 		return
 	}
 	gid := c.rec.GroupID
