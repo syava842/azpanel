@@ -516,7 +516,9 @@ func TestTasksExitFileOverridesSystemdRunCode(t *testing.T) {
 func TestTasksOrphanExitCodeFromFile(t *testing.T) {
 	root := t.TempDir()
 	state := filepath.Join(root, "tasks.json")
-	os.WriteFile(state, []byte(`[{"id":"cccccccccccc","kind":"doall","started":"2026-11-02T10:00:00Z","log":"/x/c.log"}]`), 0o640)
+	// Начало — недавнее: старше предела вида плюс orphanGrace задача считается прерванной.
+	started := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
+	os.WriteFile(state, []byte(`[{"id":"cccccccccccc","kind":"doall","started":"`+started+`","log":"/x/c.log"}]`), 0o640)
 	var mu sync.Mutex
 	active := true
 	tk := &Tasks{

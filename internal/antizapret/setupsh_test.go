@@ -278,3 +278,26 @@ func workingBash(t *testing.T) string {
 	}
 	return path
 }
+
+// Свежий setup.sh пишет вопросы-заглушки пустыми (DISCORD_INCLUDE= и т. п.):
+// пустое значение переносится, а не отвергается.
+func TestPlanSetupShEmptyPassthrough(t *testing.T) {
+	m := fullSetup()
+	for _, k := range shPassthrough {
+		m[k] = ""
+	}
+	p := PlanSetupSh(m, nil)
+	if len(p.Problems) != 0 {
+		t.Fatalf("пустые ключи отвергнуты: %v", p.Problems)
+	}
+	env := envMap(p.Env)
+	for _, k := range shPassthrough {
+		if v, ok := env[k]; !ok || v != "" {
+			t.Errorf("%s: в окружении %q, %v", k, v, ok)
+		}
+	}
+	m["DISCORD_INCLUDE"] = "$(id)"
+	if p := PlanSetupSh(m, nil); len(p.Problems) == 0 {
+		t.Fatal("значение с подстановкой оболочки должно отвергаться")
+	}
+}

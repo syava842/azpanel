@@ -186,7 +186,7 @@ type AZUpdater struct {
 
 	// Подменяются в тестах; nil — настоящие.
 	Free     func(path string) (uint64, error)
-	Procs    func() ([]string, error)                                               // имена процессов (/proc/*/comm)
+	Procs    func() ([]string, error)                                               // имена процессов (comm, обрезанное — по cmdline)
 	Exists   func(path string) bool                                                 // существует ли путь
 	Download func(ctx context.Context, sha, dest string) error                      // кладёт setup.sh коммита в dest
 	BootTime func() (time.Time, error)                                              // время загрузки системы
@@ -356,16 +356,35 @@ func (u *AZUpdater) pruneBackups() {
 
 // --- проверки ---
 
-var aptProcs = []string{"apt", "apt-get", "dpkg"}
+// aptProcs — процессы, при которых setup.sh не запустить. unattended-upgrade —
+// само обновление пакетов; постоянный unattended-upgrade-shutdown
+// (--wait-for-signal) им не считается.
+var aptProcs = []string{"apt", "apt-get", "dpkg", "unattended-upgrade"}
 
-// isAptProc: имя из /proc/*/comm обрезано до 15 знаков («unattended-upgr»).
-func isAptProc(comm string) bool {
+func isAptProc(name string) bool {
 	for _, p := range aptProcs {
-		if comm == p {
+		if name == p {
 			return true
 		}
 	}
-	return strings.HasPrefix(comm, "unattended-upgr")
+	return false
+}
+
+// commLimit — длина имени в /proc/*/comm: длиннее ядро обрезает.
+const commLimit = 15
+
+// procName — имя процесса. Обрезанное comm («unattended-upgr») уточняется по
+// cmdline: у скрипта на Python имя — первый аргумент с тем же началом.
+func procName(comm string, cmdline []byte) string {
+	if len(comm) < commLimit {
+		return comm
+	}
+	for _, arg := range strings.Split(string(cmdline), "\x00") {
+		if base := filepath.Base(arg); strings.HasPrefix(base, comm) {
+			return base
+		}
+	}
+	return comm
 }
 
 func listProcNames() ([]string, error) {
@@ -382,7 +401,12 @@ func listProcNames() ([]string, error) {
 		if err != nil {
 			continue // процесс уже завершился
 		}
-		out = append(out, strings.TrimSpace(string(b)))
+		comm := strings.TrimSpace(string(b))
+		var cmdline []byte
+		if len(comm) >= commLimit {
+			cmdline, _ = os.ReadFile("/proc/" + e.Name() + "/cmdline")
+		}
+		out = append(out, procName(comm, cmdline))
 	}
 	return out, nil
 }

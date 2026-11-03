@@ -233,6 +233,11 @@ func PlanSetupSh(setup, overrides map[string]string) SetupShPlan {
 		if !ok {
 			continue
 		}
+		// Пустое — как пишет сам setup.sh, когда переменной нет («KEY=$KEY»).
+		if v == "" {
+			env[k] = ""
+			continue
+		}
 		// Значение попадает в файл setup и подключается через «source»: любой
 		// символ оболочки — исполнение кода от root. Только вид из таблицы.
 		if err := checkEnvKind(k, v); err != nil {

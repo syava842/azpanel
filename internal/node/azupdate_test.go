@@ -343,7 +343,9 @@ func TestAZPreflightEachReason(t *testing.T) {
 		"apt":                {func(e *azEnv) { e.u.Procs = func() ([]string, error) { return []string{"apt"}, nil } }, "работает apt"},
 		"apt-get":            {func(e *azEnv) { e.u.Procs = func() ([]string, error) { return []string{"apt-get"}, nil } }, "работает apt-get"},
 		"dpkg":               {func(e *azEnv) { e.u.Procs = func() ([]string, error) { return []string{"dpkg"}, nil } }, "работает dpkg"},
-		"unattended-upgrade": {func(e *azEnv) { e.u.Procs = func() ([]string, error) { return []string{"unattended-upgr"}, nil } }, "работает unattended-upgr"},
+		"unattended-upgrade": {func(e *azEnv) {
+			e.u.Procs = func() ([]string, error) { return []string{"unattended-upgrade-shutdown", "unattended-upgrade"}, nil }
+		}, "работает unattended-upgrade —"},
 		"чужой бэкап": {func(e *azEnv) {
 			os.WriteFile(filepath.Join(e.rootDir, "backup-old.tar.gz"), []byte("x"), 0o600)
 		}, "чужие backup*.tar.gz (backup-old.tar.gz)"},
@@ -921,5 +923,29 @@ func (u *AZUpdater) cloneConfig() *AZUpdater {
 		ArchiveBase: u.ArchiveBase, HTTP: u.HTTP, WarperVersion: u.WarperVersion, WarperBin: u.WarperBin,
 		TelemtBin: u.TelemtBin, TelemtConfig: u.TelemtConfig,
 		RebootGrace: u.RebootGrace, VerifyWait: u.VerifyWait, VerifyEvery: u.VerifyEvery, PollEvery: u.PollEvery,
+	}
+}
+
+// Постоянный unattended-upgrade-shutdown --wait-for-signal не мешает запуску.
+func TestAZPreflightIgnoresUnattendedShutdown(t *testing.T) {
+	e := newAZ(t)
+	e.u.Procs = func() ([]string, error) { return []string{"unattended-upgrade-shutdown", "python3"}, nil }
+	if p := e.u.Preflight(); !p.OK {
+		t.Fatalf("отказ из-за unattended-upgrade-shutdown: %+v", p)
+	}
+}
+
+func TestProcNameResolvesTruncatedComm(t *testing.T) {
+	for _, c := range []struct {
+		comm, cmdline, want string
+	}{
+		{"unattended-upgr", "/usr/bin/python3\x00/usr/share/unattended-upgrades/unattended-upgrade-shutdown\x00--wait-for-signal\x00", "unattended-upgrade-shutdown"},
+		{"unattended-upgr", "/usr/bin/python3\x00/usr/bin/unattended-upgrade\x00", "unattended-upgrade"},
+		{"unattended-upgr", "", "unattended-upgr"},
+		{"dpkg", "/usr/bin/dpkg-other\x00", "dpkg"},
+	} {
+		if got := procName(c.comm, []byte(c.cmdline)); got != c.want {
+			t.Errorf("procName(%q, %q) = %q, ожидалось %q", c.comm, c.cmdline, got, c.want)
+		}
 	}
 }
