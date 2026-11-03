@@ -192,24 +192,24 @@ func TestExitCodeErrorThroughReport(t *testing.T) {
 	}
 }
 
-// I5: на время замены сигналы игнорируются и возвращаются потом.
+// unignoreSignals снимает флаг signal.Ignored, оставшийся от других тестов:
+// signal.Reset его не сбрасывает (рантайм чистит флаг только в Notify), и
+// без этого проверка «игнорируется» проходила бы и без защиты.
+func unignoreSignals(sigs ...os.Signal) {
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, sigs...)
+	signal.Stop(c)
+	signal.Reset(sigs...)
+}
+
+// I5: с начала замены сигналы игнорируются (до конца процесса).
 func TestProtectFromSignals(t *testing.T) {
 	sigs := []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP}
-	before := map[os.Signal]bool{}
-	for _, s := range sigs {
-		before[s] = signal.Ignored(s)
-	}
-	restore := protectFromSignals()
+	unignoreSignals(sigs...)
+	protectFromSignals()
 	for _, s := range sigs {
 		if !signal.Ignored(s) {
-			restore()
 			t.Fatalf("%v не игнорируется", s)
-		}
-	}
-	restore()
-	for _, s := range sigs {
-		if signal.Ignored(s) != before[s] {
-			t.Fatalf("%v: состояние не вернулось", s)
 		}
 	}
 }
@@ -221,6 +221,7 @@ func TestUpdateApplyRunsProtectedFromSignals(t *testing.T) {
 	srv := releaseServer(t, "0.9.1", priv)
 	defer srv.Close()
 	env, _ := fakeEnv(t, pub, nil)
+	unignoreSignals(os.Interrupt, syscall.SIGHUP)
 	protected := false
 	env.Systemctl = func(context.Context, ...string) error {
 		protected = signal.Ignored(syscall.SIGHUP) && signal.Ignored(os.Interrupt)

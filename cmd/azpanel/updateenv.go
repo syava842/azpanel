@@ -211,5 +211,5 @@ func connDropped(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "connection reset") || strings.Contains(msg, "connection was aborted") || strings.Contains(msg, "aborted by the software") ||
-		strings.Contains(msg, "connection aborted")
+		strings.Contains(msg, "connection aborted") || strings.Contains(msg, "forcibly closed")
 }
