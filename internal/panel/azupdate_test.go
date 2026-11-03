@@ -30,6 +30,9 @@ func azBehindNode(n *svcNode) {
 	n.SetupFn = func(context.Context) ([]nodeapi.SetupEntry, error) {
 		return []nodeapi.SetupEntry{
 			{Key: "MTU", Title: "MTU", Value: "1400", Kind: "int", Apply: []string{nodeapi.ApplyReinstall}},
+			// setup.sh их не берёт — в форме установки их нет.
+			{Key: "SETUP_DATE", Value: "2026-10-27T05:23:29+00:00", Apply: []string{nodeapi.ApplyReinstall}},
+			{Key: "ANTIZAPRET_WARP_ENDPOINT", Value: "", Apply: []string{nodeapi.ApplyReinstall}},
 			{Key: "ROUTE_ALL", Value: "n", Kind: "yn", Apply: []string{nodeapi.ApplyDoall}, Editable: true},
 		}, nil
 	}
@@ -46,6 +49,11 @@ func TestAZPageShowsVersionPreflightAndEscapes(t *testing.T) {
 	for _, want := range []string{"1111111", "2222222", "Новая &lt;b&gt;версия&lt;/b&gt;", "2026-11-01 10:00 UTC", "мало места в /root", "name=\"v_MTU\"", "перезагрузит"} {
 		if !strings.Contains(b, want) {
 			t.Errorf("нет %q в странице", want)
+		}
+	}
+	for _, bad := range []string{`name="v_SETUP_DATE"`, `name="v_ANTIZAPRET_WARP_ENDPOINT"`} {
+		if strings.Contains(b, bad) {
+			t.Errorf("в форме установки ключ, которого setup.sh не берёт: %s", bad)
 		}
 	}
 	if strings.Contains(b, "<b>версия</b>") {

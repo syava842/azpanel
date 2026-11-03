@@ -165,13 +165,6 @@ func PlanSetupSh(setup, overrides map[string]string) SetupShPlan {
 	for k, v := range setup {
 		values[k] = v
 	}
-	known := map[string]bool{shKeyMTU: true, shKeyOpenVPNHost: true, shKeyWireGuardHost: true}
-	for _, q := range shPrompts {
-		known[q.key] = true
-	}
-	for _, k := range shPassthrough {
-		known[k] = true
-	}
 	okeys := make([]string, 0, len(overrides))
 	for k := range overrides {
 		okeys = append(okeys, k)
@@ -179,7 +172,7 @@ func PlanSetupSh(setup, overrides map[string]string) SetupShPlan {
 	sort.Strings(okeys)
 	for _, k := range okeys {
 		switch {
-		case k == SetupShSkipKey || IsSecretSetupKey(k) || !known[k]:
+		case k == SetupShSkipKey || IsSecretSetupKey(k) || !SetupShTakes(k):
 			p.Problems = append(p.Problems, fmt.Sprintf("%s: setup.sh этот ключ не спрашивает — установкой он не меняется", k))
 		default:
 			values[k] = overrides[k]
@@ -282,6 +275,27 @@ func (q shPrompt) describe() string {
 		return fmt.Sprintf("цифра %c..%c", q.lo, q.hi)
 	}
 	return "целое 1280..1420"
+}
+
+// SetupShTakes — берёт ли setup.sh значение ключа при установке (вопрос,
+// стандартный ввод или перенос из окружения). Остальное — дата установки,
+// данные аккаунтов WARP — он пишет сам.
+func SetupShTakes(key string) bool {
+	switch key {
+	case shKeyMTU, shKeyOpenVPNHost, shKeyWireGuardHost:
+		return true
+	}
+	for _, q := range shPrompts {
+		if q.key == key {
+			return true
+		}
+	}
+	for _, k := range shPassthrough {
+		if k == key {
+			return true
+		}
+	}
+	return false
 }
 
 // SetupShPromptKeys — ключи, на которые setup.sh получает ответ окружением.

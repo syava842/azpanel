@@ -7,8 +7,15 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/syava842/azpanel/internal/antizapret"
 	"github.com/syava842/azpanel/internal/nodeapi"
 )
+
+// azReinstallKey — ключ, который можно задать при установке: только меняемый
+// переустановкой И принимаемый setup.sh (дату и аккаунт WARP он пишет сам).
+func azReinstallKey(e nodeapi.SetupEntry) bool {
+	return contains(e.Apply, nodeapi.ApplyReinstall) && antizapret.SetupShTakes(e.Key)
+}
 
 var reCommit = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
@@ -128,7 +135,7 @@ type azSetupRow struct {
 func azReinstallRows(entries []nodeapi.SetupEntry, typed map[string]string) []azSetupRow {
 	var out []azSetupRow
 	for _, e := range entries {
-		if !contains(e.Apply, nodeapi.ApplyReinstall) {
+		if !azReinstallKey(e) {
 			continue
 		}
 		val := e.Value
@@ -240,7 +247,7 @@ func (s *Server) azStart(w http.ResponseWriter, r *http.Request) {
 	var keys []string
 	if entries, err := s.nodeFor(r).Setup(ctx); err == nil {
 		for _, e := range entries {
-			if !contains(e.Apply, nodeapi.ApplyReinstall) {
+			if !azReinstallKey(e) {
 				continue
 			}
 			v, present := r.PostForm[formName(e.Key)]
