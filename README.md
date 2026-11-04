@@ -98,3 +98,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/syava842/azpanel/main/sc
 `user add` и `user reset` показывают пароль один раз; при первом входе панель
 попросит его сменить. В панели то же — **Пользователи → Новый пользователь**,
 свой пароль — **Аккаунт → Пароль**.
+
+## Лицензия
+
+[MIT](LICENSE).
