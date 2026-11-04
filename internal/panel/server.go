@@ -431,6 +431,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, page
 		}
 		if !sess.MFAPending { // до ввода кода меню и «Выйти» не показываются
 			d["User"] = sess.User
+			d["Nav"] = s.nav(r.URL.Path, sess.IsAdmin())
 		}
 	}
 	d["Version"] = s.Version
