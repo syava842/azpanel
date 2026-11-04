@@ -6,10 +6,11 @@ import (
 )
 
 // releasePublicKeyHex - открытый ключ ed25519 релизов, hex (64 символа): его
-// печатает `azpanel-sign keygen` и `azpanel-sign pub <ключ>`. Пока пуст:
-// заменяется при создании ключа релиза. scripts/release.sh сверяет его с
-// закрытым ключом и отказывается публиковать релиз с пустым или чужим.
-const releasePublicKeyHex = ""
+// печатает `azpanel-sign keygen` и `azpanel-sign pub <ключ>`. Тот же ключ в
+// PEM вшит в scripts/setup.sh (сверяет TestSetupScriptKeyMatches).
+// scripts/release.sh сверяет его с закрытым ключом и отказывается
+// публиковать релиз с пустым или чужим.
+const releasePublicKeyHex = "29522d70f007945945061c4df0b2aea46fa54500f4c321a7f2c795bda32961d9"
 
 // ReleasePublicKey - открытый ключ релизов, вшитый в бинарник. С пустым или
 // неверной длины ключом Verify всегда отказывает.

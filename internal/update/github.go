@@ -12,9 +12,10 @@ import (
 )
 
 const (
-	// Repo — приватный репозиторий с релизами.
+	// Repo — репозиторий с релизами.
 	Repo = "syava842/azpanel"
-	// TokenKey — ключ токена GitHub (fine-grained, Contents: Read) в secrets.env.
+	// TokenKey — ключ необязательного токена GitHub (fine-grained, Contents:
+	// Read) в secrets.env: снимает лимит анонимных запросов.
 	TokenKey = "GITHUB_TOKEN"
 	// SumsName и SigName — файлы релиза: суммы архивов и подпись сумм.
 	SumsName = "SHA256SUMS"
@@ -98,14 +99,14 @@ func (c *Client) fail(err error) error {
 }
 
 func (c *Client) get(ctx context.Context, path, accept string, limit int64) ([]byte, error) {
-	if c.Token == "" {
-		return nil, errors.New("токен GitHub не задан")
-	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base()+path, nil)
 	if err != nil {
 		return nil, c.fail(err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.Token)
+	// Репозиторий публичный: без токена запрос анонимный (60 в час с адреса).
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
 	req.Header.Set("Accept", accept)
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	resp, err := c.httpc().Do(req)
@@ -117,7 +118,7 @@ func (c *Client) get(ctx context.Context, path, accept string, limit int64) ([]b
 	case resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusForbidden:
 		return nil, fmt.Errorf("GitHub отказал (%d): токен неверен, просрочен или без права Contents: Read", resp.StatusCode)
 	case resp.StatusCode == http.StatusNotFound:
-		return nil, errors.New("GitHub: релиз или репозиторий не найден (проверьте токен)")
+		return nil, errors.New("GitHub: релиз или репозиторий не найден")
 	case resp.StatusCode != http.StatusOK:
 		return nil, fmt.Errorf("GitHub ответил %d", resp.StatusCode)
 	}

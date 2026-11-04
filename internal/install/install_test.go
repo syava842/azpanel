@@ -174,6 +174,43 @@ func TestUninstall(t *testing.T) {
 	}
 }
 
+// Команда azpanel в PATH: ссылка ставится установкой и снимается удалением,
+// чужой файл на её месте не трогается.
+func TestCommandLink(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("ссылки — на Linux")
+	}
+	o, _ := setup(t)
+	if err := InstallNode(o); err != nil {
+		t.Fatal(err)
+	}
+	if cur, err := os.Readlink(paths.CommandLink()); err != nil || cur != paths.Binary() {
+		t.Fatalf("ссылка: %q, %v", cur, err)
+	}
+	if err := Uninstall(o); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(paths.CommandLink()); !os.IsNotExist(err) {
+		t.Fatalf("ссылка осталась после удаления: %v", err)
+	}
+
+	os.WriteFile(paths.CommandLink(), []byte("чужой"), 0o755)
+	out := &bytes.Buffer{}
+	o.Out = out
+	if err := InstallNode(o); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(paths.CommandLink()); string(b) != "чужой" || !strings.Contains(out.String(), "чужим файлом") {
+		t.Fatalf("чужой файл: %q, вывод: %s", b, out)
+	}
+	if err := Uninstall(o); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(paths.CommandLink()); string(b) != "чужой" {
+		t.Fatal("удаление сняло чужой файл")
+	}
+}
+
 func TestPanelUnit(t *testing.T) {
 	u := PanelUnit("/x")
 	for _, s := range []string{"ExecStart=/x panel", "ProtectSystem=strict", "ProtectHome=true", "ReadWritePaths=/opt/azpanel\n", "InaccessiblePaths=-/opt/azpanel/backup/antizapret\n", "Restart=always\n", "After=network-online.target azpanel-node.service", "Description=azpanel: веб-панель", "PrivateTmp=true", "NoNewPrivileges=true",

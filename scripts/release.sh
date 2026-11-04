@@ -68,7 +68,9 @@ for arch in amd64 arm64; do
 	d="$stage/$arch"; mkdir -p "$d"
 	GOOS=linux GOARCH=$arch CGO_ENABLED=0 go build -trimpath \
 		-ldflags "-s -w -X main.version=$version" -o "$d/azpanel" ./cmd/azpanel
-	tar -C "$d" -czf "$out/azpanel_${version}_linux_${arch}.tar.gz" azpanel
+	# --mode: на Windows у файла нет бита исполнения, а распакованный
+	# бинарник запускают напрямую (setup.sh).
+	tar -C "$d" --mode=0755 --owner=0 --group=0 -czf "$out/azpanel_${version}_linux_${arch}.tar.gz" azpanel
 done
 
 (cd "$out" && for f in *.tar.gz; do sha256sum "$f"; done | sed -E 's/^([0-9a-f]+) [ *]/\1  /' > SHA256SUMS)

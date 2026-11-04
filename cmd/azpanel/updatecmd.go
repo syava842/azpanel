@@ -58,10 +58,7 @@ func runUpdate(args []string, in io.Reader, out io.Writer, d updateDeps) error {
 	if update.IsDev(version) {
 		return errors.New("сборка dev обновлений не предлагает и не ставит")
 	}
-	token := d.token()
-	if token == "" {
-		return fmt.Errorf("не задан %s в %s: проверка обновлений выключена", update.TokenKey, paths.SecretsFile())
-	}
+	token := d.token() // пусто — анонимный запрос к публичному репозиторию
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	cl := d.client(token)

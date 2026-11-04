@@ -181,6 +181,7 @@ func InstallNode(o Options) error {
 	if err := copyBinary(o.Self, paths.Binary()); err != nil {
 		return fmt.Errorf("копирование бинарника: %w", err)
 	}
+	linkCommand(o.Out)
 	if _, err := os.Stat(paths.ConfigFile()); errors.Is(err, fs.ErrNotExist) {
 		if err := config.Save(paths.ConfigFile(), config.Default()); err != nil {
 			return err
@@ -300,6 +301,9 @@ func Uninstall(o Options) error {
 	if err := o.Run("systemctl", "daemon-reload"); err != nil {
 		return err
 	}
+	if err := unlinkCommand(); err != nil {
+		return err
+	}
 	if o.Purge {
 		return os.RemoveAll(paths.Root())
 	}
@@ -378,6 +382,36 @@ func copyBinary(src, dst string) error {
 		return err
 	}
 	return fsutil.WriteFileAtomic(dst, data, 0o755)
+}
+
+// linkCommand ставит ссылку paths.CommandLink() на установленный бинарник.
+// Чужой файл на этом месте не трогает: команда тогда доступна только по
+// полному пути, и это не повод ронять установку.
+func linkCommand(out io.Writer) {
+	link, target := paths.CommandLink(), paths.Binary()
+	if cur, err := os.Readlink(link); err == nil && cur == target {
+		return
+	}
+	if _, err := os.Lstat(link); err == nil {
+		fmt.Fprintf(out, "%s уже занят чужим файлом: команда доступна как %s\n", link, target)
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err == nil {
+		err = os.Symlink(target, link)
+		if err == nil {
+			return
+		}
+	}
+	fmt.Fprintf(out, "ссылка %s не создана: команда доступна как %s\n", link, target)
+}
+
+// unlinkCommand убирает ссылку, только если она ведёт на наш бинарник.
+func unlinkCommand() error {
+	link := paths.CommandLink()
+	if cur, err := os.Readlink(link); err != nil || cur != paths.Binary() {
+		return nil
+	}
+	return os.Remove(link)
 }
 
 func confirm(in io.Reader, out io.Writer, prompt string) bool {

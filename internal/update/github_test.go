@@ -89,9 +89,18 @@ func TestTokenNotInErrors(t *testing.T) {
 	}
 }
 
+// Без токена запрос анонимный: заголовка Authorization нет вовсе.
 func TestClientNoToken(t *testing.T) {
-	if _, err := (&Client{}).Latest(context.Background()); err == nil {
-		t.Fatal("без токена запрос ушёл")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if h := r.Header.Get("Authorization"); h != "" {
+			t.Errorf("Authorization без токена: %q", h)
+		}
+		w.Write([]byte(`{"tag_name":"v1.2.3"}`))
+	}))
+	defer srv.Close()
+	rel, err := (&Client{BaseURL: srv.URL}).Latest(context.Background())
+	if err != nil || rel.Version() != "1.2.3" {
+		t.Fatalf("релиз %q, %v", rel.Version(), err)
 	}
 }
 

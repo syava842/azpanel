@@ -84,7 +84,7 @@ func TestUpdateCheck(t *testing.T) {
 	}
 }
 
-func TestUpdateRefusesDevAndNoToken(t *testing.T) {
+func TestUpdateRefusesDevAllowsNoToken(t *testing.T) {
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
 	srv := releaseServer(t, "0.9.1", priv)
 	defer srv.Close()
@@ -93,8 +93,8 @@ func TestUpdateRefusesDevAndNoToken(t *testing.T) {
 		t.Fatal("dev-сборка проверила обновления")
 	}
 	withVersion(t, "0.9.0")
-	if err := runUpdate([]string{"--check"}, strings.NewReader(""), io.Discard, testDeps(srv, "", nil)); err == nil {
-		t.Fatal("без токена проверка прошла")
+	if err := runUpdate([]string{"--check"}, strings.NewReader(""), io.Discard, testDeps(srv, "", nil)); err != nil {
+		t.Fatalf("без токена (публичный репозиторий) проверка отказала: %v", err)
 	}
 	if err := runUpdate([]string{"--что"}, strings.NewReader(""), io.Discard, testDeps(srv, cliToken, nil)); err == nil {
 		t.Fatal("неизвестный флаг принят")

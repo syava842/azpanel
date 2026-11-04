@@ -59,8 +59,14 @@ func RealHost(o Options) Host {
 		AdminExists: func(string) bool { return false },
 		LoadConfig:  func() (config.Config, error) { return config.Load(paths.ConfigFile()) },
 
-		MkLayout:        makeLayout,
-		CopyBinary:      func() error { return copyBinary(o.Self, paths.Binary()) },
+		MkLayout: makeLayout,
+		CopyBinary: func() error {
+			if err := copyBinary(o.Self, paths.Binary()); err != nil {
+				return err
+			}
+			linkCommand(o.Out)
+			return nil
+		},
 		WriteConfig:     func(c config.Config) error { return config.Save(paths.ConfigFile(), c) },
 		EnsureNodeToken: func() error { return ensureNodeToken(paths.SecretsFile()) },
 		WriteSecrets:    func(kv map[string]string) error { return secrets.SetMany(paths.SecretsFile(), kv) },
