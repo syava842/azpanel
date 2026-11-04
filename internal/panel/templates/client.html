@@ -1,26 +1,60 @@
 {{define "content"}}
-<h1>{{.Name}}</h1>
-<div class="card">
-  <p>Тип: {{if .Client.OpenVPN}}OpenVPN{{end}}{{if and .Client.OpenVPN .Client.WireGuard}} / {{end}}{{if .Client.WireGuard}}WireGuard{{end}}</p>
-  <p>Сертификат: {{if .CertSoon}}<span class="warn">{{.Cert}}</span>{{else}}{{.Cert}}{{end}}</p>
-  <p>Лимит: {{.Limit}}</p>
-  {{if .HasStore}}<p>Действует до: {{.EffUntil}}</p>{{end}}
-  <p>Состояние: {{if .Client.Blocked}}<span class="bad">заблокирован</span>{{else}}<span class="ok">активен</span>{{end}}</p>
+<div class="page-head">
+  <h1>{{.Name}}</h1>
+  {{if .Client.Blocked}}<span class="pill bad-pill">заблокирован</span>{{else}}<span class="pill ok-pill">активен</span>{{end}}
 </div>
+<dl class="stats">
+  <div><dt>Тип</dt><dd>{{if .Client.OpenVPN}}OpenVPN{{end}}{{if and .Client.OpenVPN .Client.WireGuard}} / {{end}}{{if .Client.WireGuard}}WireGuard{{end}}</dd></div>
+  <div><dt>Сертификат</dt><dd>{{if .CertSoon}}<span class="warn">{{.Cert}}</span>{{else}}{{.Cert}}{{end}}</dd></div>
+  <div><dt>Лимит</dt><dd>{{.Limit}}</dd></div>
+  {{if .HasStore}}<div><dt>Действует до</dt><dd>{{.EffUntil}}</dd></div>{{end}}
+</dl>
 
 {{if .AutoBlockText}}
 <div class="error">{{.AutoBlockText}}. Блокировка снимается сама, когда срок или лимит трафика продлены; можно и разблокировать вручную.</div>
 {{end}}
+
+<div class="cols">
+<div class="col">
 {{if .HasStore}}
 <h2>Трафик</h2>
 <p class="ranges">{{range .Ranges}}{{if .Current}}<b>{{.Name}}</b>{{else}}<a href="{{url .Href}}">{{.Name}}</a>{{end}} {{end}}</p>
 {{if .HistoryErr}}<div class="error">{{.HistoryErr}}</div>{{else}}
 <div class="card">
   {{.TrafficChart}}
-  <p>За период: ↓ {{.TrafficDown}}, ↑ {{.TrafficUp}}</p>
+  <p class="muted">За период: ↓ {{.TrafficDown}}, ↑ {{.TrafficUp}}</p>
 </div>
 {{end}}
+{{end}}
 
+<h2>Сессии</h2>
+{{if .SessionsErr}}<div class="error">{{.SessionsErr}}</div>{{end}}
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Тип</th><th>Экземпляр</th><th>Адрес</th><th>↓</th><th>↑</th><th>Время</th></tr></thead>
+  <tbody>
+  {{range .Sessions}}
+  <tr><td>{{.Kind}}</td><td>{{.Instance}}</td><td>{{.Addr}}</td><td>{{.Down}}</td><td>{{.Up}}</td><td>{{.Time}}</td></tr>
+  {{else}}
+  <tr><td colspan="6" class="muted">Сейчас не подключён.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+
+<h2>Профили</h2>
+{{if .ProfilesErr}}<div class="error">{{.ProfilesErr}}</div>{{end}}
+<ul class="list card">
+  {{range .Profiles}}
+  <li><span class="muted">{{.Kind}} / {{.Variant}}</span> <a href="{{url .Href}}">{{.File}}</a>{{if .QRHref}} · <a href="{{url .QRHref}}">QR</a>{{end}}</li>
+  {{else}}
+  <li class="muted">Профилей нет.</li>
+  {{end}}
+</ul>
+</div>
+
+<div class="col">
+{{if .HasStore}}
 <h2>Карточка</h2>
 {{if not .CanManage}}
 <div class="card">
@@ -37,22 +71,23 @@
     <label>Доступ до (ГГГГ-ММ-ДД, конец дня по UTC; пусто — без срока)
       <input type="text" name="until" placeholder="2026-12-31" value="{{.CardForm.Until}}">
     </label>
-    <label>Лимит трафика, ГБ (0 — без лимита)
-      <input type="text" name="limit_gb" inputmode="decimal" value="{{.CardForm.LimitGB}}">
-    </label>
-    <label>Период лимита
-      <select name="period">
-        <option value="day"{{if eq .CardForm.Period "day"}} selected{{end}}>сутки</option>
-        <option value="week"{{if eq .CardForm.Period "week"}} selected{{end}}>неделя</option>
-        <option value="month"{{if eq .CardForm.Period "month"}} selected{{end}}>месяц</option>
-      </select>
-    </label>
+    <div class="row">
+      <label>Лимит трафика, ГБ (0 — без лимита)
+        <input type="text" name="limit_gb" inputmode="decimal" value="{{.CardForm.LimitGB}}">
+      </label>
+      <label>Период лимита
+        <select name="period">
+          <option value="day"{{if eq .CardForm.Period "day"}} selected{{end}}>сутки</option>
+          <option value="week"{{if eq .CardForm.Period "week"}} selected{{end}}>неделя</option>
+          <option value="month"{{if eq .CardForm.Period "month"}} selected{{end}}>месяц</option>
+        </select>
+      </label>
+    </div>
     <button type="submit">Сохранить карточку</button>
   </form>
 </div>
 {{end}}
-{{end}}
-{{if .HasStore}}
+
 <h2>Продлить кодом</h2>
 <div class="card">
   <form method="post" action="{{url .Href "/redeem"}}">
@@ -88,7 +123,7 @@
       <input type="text" name="pin" inputmode="numeric" autocomplete="off" maxlength="8">
     </label>
     <button type="submit">Создать ссылку</button>
-    <p class="muted">Ссылка живёт 24 часа или до первого скачивания; показывается один раз. Пять неверных PIN закрывают её навсегда.</p>
+    <p class="muted hint">Ссылка живёт 24 часа или до первого скачивания; показывается один раз. Пять неверных PIN закрывают её навсегда.</p>
   </form>
   {{else}}<p class="muted">Профилей нет.</p>{{end}}
 </div>
@@ -121,31 +156,6 @@
 </div>
 {{end}}
 
-<h2>Сессии</h2>
-{{if .SessionsErr}}<div class="error">{{.SessionsErr}}</div>{{end}}
-<div class="table-wrap">
-<table>
-  <thead><tr><th>Тип</th><th>Экземпляр</th><th>Адрес</th><th>↓</th><th>↑</th><th>Время</th></tr></thead>
-  <tbody>
-  {{range .Sessions}}
-  <tr><td>{{.Kind}}</td><td>{{.Instance}}</td><td>{{.Addr}}</td><td>{{.Down}}</td><td>{{.Up}}</td><td>{{.Time}}</td></tr>
-  {{else}}
-  <tr><td colspan="6" class="muted">Сейчас не подключён.</td></tr>
-  {{end}}
-  </tbody>
-</table>
-</div>
-
-<h2>Профили</h2>
-{{if .ProfilesErr}}<div class="error">{{.ProfilesErr}}</div>{{end}}
-<ul>
-  {{range .Profiles}}
-  <li>{{.Kind}} / {{.Variant}}: <a href="{{url .Href}}">{{.File}}</a>{{if .QRHref}} · <a href="{{url .QRHref}}">QR</a>{{end}}</li>
-  {{else}}
-  <li class="muted">Профилей нет.</li>
-  {{end}}
-</ul>
-
 {{if and .CanManage (not .Replica)}}
 <h2>Действия</h2>
 <div class="card actions">
@@ -170,9 +180,13 @@
   <form method="post" action="{{url .Href "/block"}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <input type="hidden" name="blocked" value="{{if .Client.Blocked}}0{{else}}1{{end}}">
-    <button type="submit">{{if .Client.Blocked}}Разблокировать{{else}}Заблокировать{{end}}</button>
+    <button type="submit" class="secondary">{{if .Client.Blocked}}Разблокировать{{else}}Заблокировать{{end}}</button>
   </form>
+</div>
 
+{{if or .Client.OpenVPN .Client.WireGuard}}
+<h2>Удаление</h2>
+<div class="card actions danger-zone">
   {{if .Client.OpenVPN}}
   <form method="post" action="{{url .Href "/delete"}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
@@ -195,4 +209,7 @@
   {{end}}
 </div>
 {{end}}
+{{end}}
+</div>
+</div>
 {{end}}

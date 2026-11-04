@@ -238,6 +238,7 @@ td form.inline + form.inline { margin-left: .35rem; }
 .actions form { padding: .85rem 0; border-bottom: 1px solid var(--line); }
 .actions form:first-child { padding-top: 0; }
 .actions form:last-child { border-bottom: 0; padding-bottom: 0; }
+.actions form.inline { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }
 .actions input[type=number], .actions input[type=text] { max-width: 18rem; }
 
 .ranges { display: flex; gap: .25rem; flex-wrap: wrap; margin: .25rem 0 1rem; }
@@ -245,6 +246,36 @@ td form.inline + form.inline { margin-left: .35rem; }
 .ranges b { background: var(--accent-soft); color: var(--accent); }
 .ranges a:hover { background: var(--hover); text-decoration: none; }
 .pager { display: flex; gap: 1rem; margin-top: .5rem; }
+
+/* Заголовок с меткой, сводка, две колонки (страница клиента и подобные). */
+.page-head { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; margin-bottom: 1.25rem; }
+.page-head h1 { margin: 0; }
+.pill { display: inline-flex; align-items: center; gap: .35rem; padding: .1rem .65rem; border-radius: 999px; font-size: .82rem; font-weight: 600; border: 1px solid; }
+.pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.ok-pill { color: var(--ok); background: var(--ok-bg); border-color: var(--ok-line); }
+.bad-pill { color: var(--danger); background: var(--bad-bg); border-color: var(--bad-line); }
+.stats {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  margin: 0 0 1.5rem; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+}
+.stats > div { padding: .8rem 1rem; border-right: 1px solid var(--line); }
+.stats > div:last-child { border-right: 0; }
+.stats dt { color: var(--muted); font-size: .78rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.stats dd { margin: .2rem 0 0; font-weight: 550; }
+.cols { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 0 1.5rem; align-items: start; }
+.col > h2:first-child { margin-top: 0; }
+.col .table-wrap td { white-space: nowrap; }
+ul.list { list-style: none; padding: 0; }
+ul.list.card { padding: .9rem 1.25rem; }
+ul.list li { padding: .55rem 0; border-bottom: 1px solid var(--line); }
+ul.list li:first-child { padding-top: 0; }
+ul.list li:last-child { border-bottom: 0; padding-bottom: 0; }
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 0 .75rem; align-items: end; }
+.hint { font-size: .85rem; margin: .6rem 0 0; }
+.danger-zone { border-color: var(--bad-line); }
+@media (max-width: 1100px) {
+  .cols { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* ------------------------------------------------------------ формы */
 
@@ -283,6 +314,8 @@ button, .button {
 button:hover, .button:hover { filter: brightness(1.08); text-decoration: none; }
 button:disabled { opacity: .55; cursor: not-allowed; filter: none; }
 button.danger, .button.danger { background: var(--danger); color: #fff; }
+button.secondary, .button.secondary { background: var(--surface); color: var(--fg); border-color: var(--line-strong); }
+button.secondary:hover, .button.secondary:hover { background: var(--hover); filter: none; }
 td button, td .button { padding: .3rem .7rem; font-size: .85rem; }
 button.link {
   background: none; color: var(--accent); padding: 0; border: 0; font-weight: 400;
@@ -291,6 +324,9 @@ button.link:hover { text-decoration: underline; filter: none; }
 button.icon-btn { color: var(--muted); }
 button.icon-btn:hover { filter: none; }
 form.inline { display: inline; margin: 0; }
+/* Фильтр над таблицей: поля в ряд. */
+main > form.inline { display: flex; gap: .75rem; align-items: end; flex-wrap: wrap; margin-bottom: 1rem; }
+main > form.inline label { margin: 0; min-width: 12rem; }
 
 /* ------------------------------------------------------------ графики и журналы */
 
@@ -302,7 +338,7 @@ svg.chart { width: 100%; height: auto; display: block; }
 .chart { --c1: var(--accent); --c2: var(--ok); --c3: var(--warn); }
 .chart .grid { stroke: var(--line); stroke-width: 1; }
 .chart .axis, .chart .empty { fill: var(--muted); font-size: 16px; }
-.chart .empty { font-size: 20px; }
+.chart .empty { font-size: 18px; }
 .chart .line { fill: none; stroke-width: 1.5; stroke-linejoin: round; }
 .chart .line.s1 { stroke: var(--c1); }
 .chart .line.s2 { stroke: var(--c2); }

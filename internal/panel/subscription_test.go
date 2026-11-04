@@ -453,7 +453,7 @@ func TestCardShowsEffectiveUntilAndRedeemForm(t *testing.T) {
 	e.srv.Store.SetOwner(ctx, store.LocalNode, "bob", &alice.ID)
 	e.srv.Store.SetUserAccessUntil(ctx, alice.ID, ptr(time.Date(2026, 12, 1, 8, 30, 0, 0, time.UTC).Unix()))
 	body := get(e, c, "/clients/bob").Body.String()
-	if !strings.Contains(body, "Действует до: 2026-12-01 08:30 UTC") || !strings.Contains(body, `action="/clients/bob/redeem"`) {
+	if !strings.Contains(body, "<dt>Действует до</dt><dd>2026-12-01 08:30 UTC</dd>") || !strings.Contains(body, `action="/clients/bob/redeem"`) {
 		t.Errorf("карточка: нет действующего срока или формы кода")
 	}
 }
