@@ -85,6 +85,37 @@ func TestUserReset(t *testing.T) {
 	}
 }
 
+func TestUserAdd(t *testing.T) {
+	st, _ := userEnv(t)
+	ctx := context.Background()
+	out := &bytes.Buffer{}
+	if err := cmdUser([]string{"add", "Carol"}, out); err != nil {
+		t.Fatal(err)
+	}
+	u, err := st.UserByLogin(ctx, "carol")
+	if err != nil || u.Role != store.RoleUser || !u.MustChange {
+		t.Fatalf("пользователь: %+v %v", u, err)
+	}
+	pw := strings.TrimSpace(strings.SplitN(strings.SplitN(out.String(), "Пароль: ", 2)[1], "\n", 2)[0])
+	if bcrypt.CompareHashAndPassword([]byte(u.Hash), []byte(pw)) != nil {
+		t.Fatalf("показанный пароль не подходит: %q", out.String())
+	}
+	if err := cmdUser([]string{"add", "dave", "--admin"}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if d, err := st.UserByLogin(ctx, "dave"); err != nil || d.Role != store.RoleAdmin {
+		t.Fatalf("администратор: %+v %v", d, err)
+	}
+	if err := cmdUser([]string{"add", "carol"}, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "занят") {
+		t.Fatalf("занятый логин: %v", err)
+	}
+	for _, args := range [][]string{{"add", "ab"}, {"add", "Иван"}, {"add"}, {"add", "eve", "--root"}} {
+		if err := cmdUser(args, &bytes.Buffer{}); err == nil {
+			t.Errorf("%v принят", args)
+		}
+	}
+}
+
 func TestUserResetUnknown(t *testing.T) {
 	userEnv(t)
 	err := cmdUser([]string{"reset", "ghost"}, &bytes.Buffer{})

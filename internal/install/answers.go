@@ -353,6 +353,10 @@ func (a Answers) Problem() error {
 
 // ValidatePassword — правила пароля администратора (как в панели, этап 6):
 // от 10 символов, не длиннее 72 байт, буквы и цифры, не равен логину.
+// ValidLogin — логин пользователя панели: 3-32 знака, строчные латинские
+// буквы, цифры и _ . - (как в форме «Новый пользователь»).
+func ValidLogin(login string) bool { return loginRe.MatchString(login) }
+
 func ValidatePassword(login, pw string) error {
 	if utf8.RuneCountInString(pw) < 10 {
 		return errors.New("пароль короче 10 символов")

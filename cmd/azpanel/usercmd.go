@@ -13,6 +13,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/syava842/azpanel/internal/install"
 	"github.com/syava842/azpanel/internal/panel"
 	"github.com/syava842/azpanel/internal/paths"
 	"github.com/syava842/azpanel/internal/store"
@@ -28,12 +29,32 @@ const (
 	resetDigits  = "23456789"
 )
 
-// cmdUser — «azpanel user reset <логин>» и «azpanel user list».
+// cmdUser — «azpanel user list», «azpanel user add <логин> [--admin]» и
+// «azpanel user reset <логин>».
 func cmdUser(args []string, out io.Writer) error {
 	if len(args) == 0 {
 		return errUsage
 	}
 	switch args[0] {
+	case "add":
+		role := store.RoleUser
+		if len(args) == 3 && args[2] == "--admin" {
+			role = store.RoleAdmin
+		} else if len(args) != 2 {
+			return errUsage
+		}
+		st, err := openPanelStore()
+		if err != nil {
+			return err
+		}
+		defer st.Close()
+		login, pw, err := userAdd(context.Background(), st, args[1], role, time.Now())
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Пользователь %s (%s) создан. Пароль: %s\n", login, roleName(role), pw)
+		fmt.Fprintln(out, "Пароль показан один раз; при первом входе панель потребует сменить его.")
+		return nil
 	case "list":
 		if len(args) != 1 {
 			return errUsage
@@ -116,6 +137,41 @@ func newResetPassword() (string, error) {
 		return newResetPassword()
 	}
 	return s, nil
+}
+
+// userAdd создаёт пользователя со случайным паролем и обязательной сменой при
+// первом входе; запись в журнале от «root (консоль)».
+func userAdd(ctx context.Context, st *store.Store, login, role string, now time.Time) (string, string, error) {
+	login = strings.ToLower(strings.TrimSpace(login))
+	if !install.ValidLogin(login) {
+		return "", "", errors.New("логин: 3-32 знака, строчные латинские буквы, цифры и _ . -")
+	}
+	pw, err := newResetPassword()
+	if err != nil {
+		return "", "", err
+	}
+	hash, err := panel.HashPassword(pw)
+	if err != nil {
+		return "", "", err
+	}
+	_, err = st.CreateUser(ctx, store.User{Login: login, Hash: hash, Role: role, MustChange: true, Created: now.Unix()})
+	if errors.Is(err, store.ErrLoginTaken) {
+		return "", "", fmt.Errorf("логин %q уже занят", login)
+	}
+	if err != nil {
+		return "", "", err
+	}
+	if err := st.Audit(ctx, store.AuditEntry{TS: now.Unix(), User: consoleUser, Action: "user_create", Target: login, After: roleName(role)}); err != nil {
+		return "", "", err
+	}
+	return login, pw, nil
+}
+
+func roleName(role string) string {
+	if role == store.RoleAdmin {
+		return "администратор"
+	}
+	return "пользователь"
 }
 
 // userReset: новый пароль (pw пуст — случайный, он и возвращается),

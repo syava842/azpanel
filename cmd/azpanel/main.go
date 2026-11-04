@@ -174,6 +174,7 @@ func usage() {
   azpanel proxy                        агент прокси для VPS с proxy.sh (запускает systemd)
   azpanel panel passwd [--user ИМЯ]    задать пароль администратора панели
   azpanel user list                    пользователи панели
+  azpanel user add <логин> [--admin]   новый пользователь (по умолчанию роль «пользователь»), пароль — случайный
   azpanel user reset <логин>           новый пароль, 2FA выключить, сессии завершить
   azpanel limit set <клиент> <число>   лимит одновременных подключений OpenVPN
   azpanel limit unset <клиент>         снять лимит
