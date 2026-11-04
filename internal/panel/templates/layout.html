@@ -13,6 +13,7 @@
 </head>
 {{if .User}}
 <body class="app">
+<a class="skip" href="#main">К содержимому</a>
 {{template "icons"}}
 <aside class="sidebar" id="sidebar">
   <a class="brand" href="{{url "/"}}">
@@ -45,9 +46,9 @@
     {{if .NodeSwitch}}<div class="nodes" role="group" aria-label="Узел">{{range .NodeSwitch}}{{if .Current}}<span class="chip on">{{.Name}}</span>{{else}}<a class="chip" href="{{url .Path}}?node={{.ID}}">{{.Name}}</a>{{end}}{{end}}</div>{{end}}
     <div class="spacer"></div>
     {{if and .Experimental .UpdateAvail}}<a href="{{url "/update"}}" class="badge warn-badge">есть обновление {{.UpdateAvail}}</a>{{end}}
-    <button type="button" class="icon-btn" data-toggle-theme title="Тема" aria-label="Сменить тему"><svg class="i only-light" aria-hidden="true"><use href="#i-moon"/></svg><svg class="i only-dark" aria-hidden="true"><use href="#i-sun"/></svg></button>
+    <button type="button" class="icon-btn" data-toggle-theme title="Тёмная тема" aria-label="Тёмная тема" aria-pressed="false"><svg class="i only-light" aria-hidden="true"><use href="#i-moon"/></svg><svg class="i only-dark" aria-hidden="true"><use href="#i-sun"/></svg></button>
   </header>
-  <main>
+  <main id="main" tabindex="-1">
     {{if .Replica}}<div class="flash">Узел — реплика группы «{{.ReplicaGroup}}»: клиенты, списки и настройки AntiZapret меняются на основном, здесь они только читаются.</div>{{end}}
     {{if .Msg}}<div class="flash">{{.Msg}}</div>{{end}}
     {{if .Error}}<div class="error">{{.Error}}</div>{{end}}

@@ -23,7 +23,8 @@ func fakeGitHub(t *testing.T, tag string, calls *atomic.Int32) *httptest.Server 
 		if calls != nil {
 			calls.Add(1)
 		}
-		if r.Header.Get("Authorization") != "Bearer "+testToken {
+		// Как у публичного репозитория: без токена можно, с чужим — 401.
+		if h := r.Header.Get("Authorization"); h != "" && h != "Bearer "+testToken {
 			http.Error(w, "no", http.StatusUnauthorized)
 			return
 		}
@@ -86,6 +87,18 @@ func TestTokenNotInErrors(t *testing.T) {
 	}
 	if got := Redact("x "+testToken+" y", testToken); strings.Contains(got, testToken) {
 		t.Fatal("Redact не убрал токен")
+	}
+}
+
+// Анонимный 403 — исчерпан предел запросов, а не «неверный токен».
+func TestClientAnonymousRateLimit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "rate limit", http.StatusForbidden)
+	}))
+	defer srv.Close()
+	_, err := (&Client{BaseURL: srv.URL}).Latest(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "предел анонимных запросов") {
+		t.Fatalf("ошибка: %v", err)
 	}
 }
 
@@ -156,7 +169,8 @@ func TestCheckerSameVersionNotAvailable(t *testing.T) {
 	}
 }
 
-func TestCheckerDevAndNoTokenDoNotAsk(t *testing.T) {
+// Dev-сборка в сеть не ходит; без токена проверка идёт анонимно.
+func TestCheckerDevDoesNotAskNoTokenDoes(t *testing.T) {
 	var calls atomic.Int32
 	srv := fakeGitHub(t, "v0.9.1", &calls)
 	defer srv.Close()
@@ -164,14 +178,14 @@ func TestCheckerDevAndNoTokenDoNotAsk(t *testing.T) {
 		return &Checker{Current: version, Token: func() string { return token },
 			Client: func(tok string) *Client { return &Client{BaseURL: srv.URL, Token: tok} }}
 	}
-	for _, c := range []*Checker{mk("dev", testToken), mk("0.9.0", "")} {
-		info, err := c.Check(context.Background())
-		if !errors.Is(err, ErrDisabled) || info.Available {
-			t.Fatalf("%+v %v", info, err)
-		}
+	if info, err := mk("dev", testToken).Check(context.Background()); !errors.Is(err, ErrDisabled) || info.Available {
+		t.Fatalf("dev: %+v %v", info, err)
 	}
 	if calls.Load() != 0 {
-		t.Fatal("выключенная проверка сходила в сеть")
+		t.Fatal("dev-сборка сходила в сеть")
+	}
+	if info, err := mk("0.9.0", "").Check(context.Background()); err != nil || !info.Available {
+		t.Fatalf("без токена: %+v %v", info, err)
 	}
 }
 

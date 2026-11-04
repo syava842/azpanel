@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Удаление azpanel:
-#   bash -c "$(curl -sL https://raw.githubusercontent.com/syava842/azpanel/main/scripts/uninstall.sh)"
+#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/syava842/azpanel/main/scripts/uninstall.sh)"
 # Обёртка над `azpanel uninstall`: перед удалением бэкап AntiZapret; AntiZapret
 # и его клиенты остаются. Аргументы как есть: --yes, --purge (и /opt/azpanel),
 # --skip-backup.

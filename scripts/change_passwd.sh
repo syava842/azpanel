@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Новый пароль администратора панели:
-#   bash -c "$(curl -sL https://raw.githubusercontent.com/syava842/azpanel/main/scripts/change_passwd.sh)" -- [логин]
+#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/syava842/azpanel/main/scripts/change_passwd.sh)" -- [логин]
 # Без логина — первый администратор. Сессии и 2FA пользователя сбрасываются.
 set -euo pipefail
 bin=/opt/azpanel/bin/azpanel

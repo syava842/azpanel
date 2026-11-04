@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Обновление azpanel до последнего релиза:
-#   bash -c "$(curl -sL https://raw.githubusercontent.com/syava842/azpanel/main/scripts/update.sh)"
+#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/syava842/azpanel/main/scripts/update.sh)"
 # Обёртка над `azpanel update`: подпись, бэкап, миграция конфига и откат — там.
 # Аргументы передаются как есть (--check, --yes).
 set -euo pipefail

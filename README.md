@@ -9,11 +9,14 @@ telemt, AZ-WARP, прокси. Работает поверх родных скр
 
 - Ubuntu 24.04+ или Debian 13+, amd64 или arm64, root.
 - Установленный AntiZapret-VPN. Если его нет, установщик предложит поставить.
+  AntiZapret-VPN ставится его собственным установщиком из
+  `GubernievS/AntiZapret-VPN` (ветка `main`) так же, как в его README: этот
+  шаг подписью azpanel не проверяется.
 
 ## Установка
 
 ```bash
-bash -c "$(curl -sL https://raw.githubusercontent.com/syava842/azpanel/main/scripts/setup.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/syava842/azpanel/main/scripts/setup.sh)"
 ```
 
 Скрипт скачивает последний релиз, проверяет подпись ed25519 и сумму, затем
@@ -26,7 +29,7 @@ bash -c "$(curl -sL https://raw.githubusercontent.com/syava842/azpanel/main/scri
 ```bash
 AZPANEL_MODE=panel+node AZPANEL_ACCESS=path AZPANEL_DOMAIN=vpn.example.com \
 AZPANEL_ADMIN=admin AZPANEL_ADMIN_PASSWORD='пароль' \
-  bash -c "$(curl -sL https://raw.githubusercontent.com/syava842/azpanel/main/scripts/setup.sh)" -- --non-interactive
+  bash -c "$(curl -fsSL https://raw.githubusercontent.com/syava842/azpanel/main/scripts/setup.sh)" -- --non-interactive
 ```
 
 `AZPANEL_MODE`: `panel+node`, `node`, `panel`, `proxy`. `AZPANEL_ACCESS`:
@@ -38,7 +41,7 @@ AZPANEL_ADMIN=admin AZPANEL_ADMIN_PASSWORD='пароль' \
 ## Обновление
 
 ```bash
-bash -c "$(curl -sL https://raw.githubusercontent.com/syava842/azpanel/main/scripts/update.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/syava842/azpanel/main/scripts/update.sh)"
 ```
 
 С бэкапом и откатом при сбое; `--check` — только проверить.
@@ -46,7 +49,7 @@ bash -c "$(curl -sL https://raw.githubusercontent.com/syava842/azpanel/main/scri
 ## Пароль администратора
 
 ```bash
-bash -c "$(curl -sL https://raw.githubusercontent.com/syava842/azpanel/main/scripts/change_passwd.sh)" -- логин
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/syava842/azpanel/main/scripts/change_passwd.sh)" -- логин
 ```
 
 Или на сервере: `azpanel panel passwd --user логин`, список — `azpanel user list`.
@@ -54,7 +57,7 @@ bash -c "$(curl -sL https://raw.githubusercontent.com/syava842/azpanel/main/scri
 ## Удаление
 
 ```bash
-bash -c "$(curl -sL https://raw.githubusercontent.com/syava842/azpanel/main/scripts/uninstall.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/syava842/azpanel/main/scripts/uninstall.sh)"
 ```
 
 Перед удалением делается бэкап AntiZapret; AntiZapret и клиенты остаются.

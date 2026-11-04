@@ -73,8 +73,6 @@ func (s *Server) updateDisabledReason() string {
 	switch {
 	case update.IsDev(s.Version):
 		return "сборка dev: обновления не предлагаются и не ставятся"
-	case s.updateToken() == "":
-		return "не задан токен GitHub (" + update.TokenKey + " в секретах): проверка обновлений выключена"
 	}
 	return ""
 }
@@ -85,11 +83,8 @@ func (s *Server) fetchRelease(ctx context.Context) (update.Fetched, error) {
 	if s.FetchUpdate != nil {
 		return s.FetchUpdate(ctx)
 	}
-	tok := s.updateToken()
-	if tok == "" {
-		return update.Fetched{}, errors.New("не задан токен GitHub")
-	}
-	cl := &update.Client{Token: tok}
+	// Токен необязателен: без него запрос анонимный.
+	cl := &update.Client{Token: s.updateToken()}
 	rel, err := cl.Latest(ctx)
 	if err != nil {
 		return update.Fetched{}, err

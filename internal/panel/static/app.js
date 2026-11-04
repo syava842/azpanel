@@ -24,9 +24,20 @@
 		var body = document.body;
 		var toggle = document.querySelector("[data-toggle-nav]");
 
+		var themeBtn = document.querySelector("[data-toggle-theme]");
+		function syncTheme() {
+			if (themeBtn) themeBtn.setAttribute("aria-pressed", current() === "dark" ? "true" : "false");
+		}
+		syncTheme();
+
 		function setNav(open) {
 			body.classList.toggle("nav-open", open);
 			if (toggle) toggle.setAttribute("aria-expanded", open ? "true" : "false");
+			if (open) {
+				var first = document.querySelector("#sidebar nav a");
+				// Меню становится видимым после смены класса: фокус — следующим кадром.
+				if (first) window.requestAnimationFrame(function () { first.focus(); });
+			}
 		}
 
 		document.addEventListener("click", function (ev) {
@@ -35,6 +46,7 @@
 			if (el.hasAttribute("data-toggle-theme")) {
 				var next = current() === "dark" ? "light" : "dark";
 				apply(next);
+				syncTheme();
 				try { localStorage.setItem(key, next); } catch (e) { /* без хранилища — только до перезагрузки */ }
 			} else if (el.hasAttribute("data-toggle-nav")) {
 				setNav(!body.classList.contains("nav-open"));

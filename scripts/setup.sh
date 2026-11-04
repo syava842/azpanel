@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Установка azpanel одной командой:
-#   bash -c "$(curl -sL https://raw.githubusercontent.com/syava842/azpanel/main/scripts/setup.sh)"
+#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/syava842/azpanel/main/scripts/setup.sh)"
 # Скачивает последний релиз под архитектуру сервера, проверяет подпись
 # SHA256SUMS ключом релизов и сумму архива, затем запускает мастер
 # `azpanel install`. Аргументы передаются мастеру как есть, например:
-#   bash -c "$(curl -sL .../setup.sh)" -- --non-interactive --mode node
+#   bash -c "$(curl -fsSL .../setup.sh)" -- --non-interactive --mode node
 # Версия: AZPANEL_VERSION=1.2.3 (по умолчанию последняя).
 set -euo pipefail
 
@@ -26,7 +26,7 @@ esac
 
 if [ -x /opt/azpanel/bin/azpanel ]; then
 	echo "azpanel уже установлен. Обновить:"
-	echo "  bash -c \"\$(curl -sL https://raw.githubusercontent.com/$REPO/main/scripts/update.sh)\""
+	echo "  bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/$REPO/main/scripts/update.sh)\""
 	echo "Переустановить с другими ответами: /opt/azpanel/bin/azpanel install"
 	exit 0
 fi

@@ -115,6 +115,8 @@ func (c *Client) get(ctx context.Context, path, accept string, limit int64) ([]b
 	}
 	defer resp.Body.Close()
 	switch {
+	case resp.StatusCode == http.StatusForbidden && c.Token == "":
+		return nil, errors.New("GitHub отказал (403): исчерпан предел анонимных запросов (60 в час); повторите позже или задайте " + TokenKey)
 	case resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusForbidden:
 		return nil, fmt.Errorf("GitHub отказал (%d): токен неверен, просрочен или без права Contents: Read", resp.StatusCode)
 	case resp.StatusCode == http.StatusNotFound:

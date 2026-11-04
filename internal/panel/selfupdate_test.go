@@ -52,9 +52,10 @@ func TestUpdatePageDisabledReasons(t *testing.T) {
 	if err := secrets.Delete(e.srv.SecretsFile, update.TokenKey); err != nil {
 		t.Fatal(err)
 	}
+	// Без токена проверка не выключается: репозиторий публичный.
 	b = get(e, c, "/update").Body.String()
-	if !strings.Contains(b, "не задан токен GitHub") || !strings.Contains(b, "GITHUB_TOKEN") {
-		t.Fatalf("без токена: %s", b)
+	if strings.Contains(b, "проверка обновлений выключена") {
+		t.Fatalf("без токена страница выключена: %s", b)
 	}
 }
 

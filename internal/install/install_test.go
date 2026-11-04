@@ -194,7 +194,9 @@ func TestCommandLink(t *testing.T) {
 		t.Fatalf("ссылка осталась после удаления: %v", err)
 	}
 
-	os.WriteFile(paths.CommandLink(), []byte("чужой"), 0o755)
+	if err := os.WriteFile(paths.CommandLink(), []byte("чужой"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	out := &bytes.Buffer{}
 	o.Out = out
 	if err := InstallNode(o); err != nil {

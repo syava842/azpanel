@@ -14,6 +14,7 @@
   --accent-fg: #fff;
   --accent-soft: #eaf0fd;
   --danger: #c62828;
+  --danger-fg: #fff;
   --warn: #a15c00;
   --ok: #167a38;
   --ok-bg: #effaf3; --ok-line: #b9e5c7; --ok-fg: #14532d;
@@ -31,7 +32,7 @@
     --bg: #0c0d10; --surface: #15161b; --sidebar: #101115; --fg: #e6e6ea; --muted: #9a9aa6;
     --line: #26272e; --line-strong: #34353d; --hover: #1c1d23; --input: #101115;
     --accent: #5b8cf0; --accent-fg: #0c0d10; --accent-soft: rgba(91, 140, 240, .14);
-    --danger: #f07070; --warn: #f0b44c; --ok: #5bd48a;
+    --danger: #f07070; --danger-fg: #1a0b0b; --warn: #f0b44c; --ok: #5bd48a;
     --ok-bg: rgba(91, 212, 138, .1); --ok-line: rgba(91, 212, 138, .3); --ok-fg: #a3ecbf;
     --bad-bg: rgba(240, 112, 112, .1); --bad-line: rgba(240, 112, 112, .32); --bad-fg: #f6b3b3;
     --warn-bg: rgba(240, 180, 76, .1); --warn-line: rgba(240, 180, 76, .35);
@@ -43,7 +44,7 @@
   --bg: #0c0d10; --surface: #15161b; --sidebar: #101115; --fg: #e6e6ea; --muted: #9a9aa6;
   --line: #26272e; --line-strong: #34353d; --hover: #1c1d23; --input: #101115;
   --accent: #5b8cf0; --accent-fg: #0c0d10; --accent-soft: rgba(91, 140, 240, .14);
-  --danger: #f07070; --warn: #f0b44c; --ok: #5bd48a;
+  --danger: #f07070; --danger-fg: #1a0b0b; --warn: #f0b44c; --ok: #5bd48a;
   --ok-bg: rgba(91, 212, 138, .1); --ok-line: rgba(91, 212, 138, .3); --ok-fg: #a3ecbf;
   --bad-bg: rgba(240, 112, 112, .1); --bad-line: rgba(240, 112, 112, .32); --bad-fg: #f6b3b3;
   --warn-bg: rgba(240, 180, 76, .1); --warn-line: rgba(240, 180, 76, .35);
@@ -62,7 +63,10 @@ body {
 }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
-:focus-visible { outline: none; box-shadow: var(--ring); border-radius: 4px; }
+/* Фокус — сплошная обводка 3:1 и в режиме высокой контрастности (тень там не рисуется). */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.skip { position: absolute; left: -999px; top: .5rem; z-index: 50; padding: .5rem 1rem; border-radius: 7px; background: var(--surface); border: 1px solid var(--line-strong); color: var(--fg); }
+.skip:focus { left: 1rem; }
 
 .sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
 svg.i {
@@ -289,7 +293,7 @@ input[type=email], input[type=url], input[type=date], input[type=datetime-local]
   font: inherit; font-weight: 400;
   transition: border-color .12s, box-shadow .12s;
 }
-input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
+input:focus, select:focus, textarea:focus { outline: 2px solid transparent; outline-offset: 0; border-color: var(--accent); box-shadow: var(--ring); }
 textarea { font: 13px/1.45 ui-monospace, Consolas, monospace; }
 input[type=checkbox], input[type=radio] { accent-color: var(--accent); width: 1rem; height: 1rem; vertical-align: -2px; margin-right: .35rem; }
 ::placeholder { color: var(--muted); opacity: .8; }
@@ -313,7 +317,7 @@ button, .button {
 }
 button:hover, .button:hover { filter: brightness(1.08); text-decoration: none; }
 button:disabled { opacity: .55; cursor: not-allowed; filter: none; }
-button.danger, .button.danger { background: var(--danger); color: #fff; }
+button.danger, .button.danger { background: var(--danger); color: var(--danger-fg); }
 button.secondary, .button.secondary { background: var(--surface); color: var(--fg); border-color: var(--line-strong); }
 button.secondary:hover, .button.secondary:hover { background: var(--hover); filter: none; }
 td button, td .button { padding: .3rem .7rem; font-size: .85rem; }
@@ -359,8 +363,9 @@ pre.notes { white-space: pre-wrap; word-break: break-word; margin: 0; font: inhe
 /* ------------------------------------------------------------ узкие экраны */
 
 @media (max-width: 900px) {
-  .sidebar { transform: translateX(-100%); transition: transform .18s ease; box-shadow: none; }
-  body.nav-open .sidebar { transform: none; box-shadow: 0 0 40px rgba(0, 0, 0, .25); }
+  /* Закрытое меню вне порядка Tab и не читается экранным диктором. */
+  .sidebar { transform: translateX(-100%); visibility: hidden; transition: transform .18s ease, visibility 0s linear .18s; box-shadow: none; }
+  body.nav-open .sidebar { transform: none; visibility: visible; transition: transform .18s ease; box-shadow: 0 0 40px rgba(0, 0, 0, .25); }
   body.nav-open .scrim { display: block; position: fixed; inset: 0; z-index: 25; background: rgba(0, 0, 0, .35); }
   .shell { margin-left: 0; }
   .icon-btn.menu-btn { display: inline-grid; }

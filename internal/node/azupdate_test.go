@@ -425,7 +425,12 @@ func TestAZPreflightEachReason(t *testing.T) {
 func TestAZStartBuildsTaskWithEnvAndStdin(t *testing.T) {
 	e := newAZ(t)
 	e.ex.hold = make(chan struct{})
-	defer close(e.ex.hold)
+	// Отпустить установку и дождаться, пока фоновый watch допишет состояние:
+	// иначе он пишет в data уже во время удаления TempDir (редкий сбой).
+	defer func() {
+		e.ex.release(t)
+		e.waitPhase(nodeapi.AZPhaseReboot)
+	}()
 	st, err := e.u.Start(context.Background(), nodeapi.AZUpdateRequest{Values: map[string]string{"OPENVPN_PATCH": "3"}})
 	if err != nil {
 		t.Fatal(err)

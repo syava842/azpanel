@@ -12,8 +12,8 @@ import (
 // CheckInterval — как часто Checker спрашивает GitHub.
 const CheckInterval = 6 * time.Hour
 
-// ErrDisabled — проверка выключена: сборка dev или не задан токен GitHub.
-var ErrDisabled = errors.New("проверка обновлений выключена: сборка dev или не задан GITHUB_TOKEN")
+// ErrDisabled — проверка выключена: сборка dev.
+var ErrDisabled = errors.New("проверка обновлений выключена: сборка dev")
 
 // IsDev — сборка без версии: обновлений не предлагает и не ставит.
 func IsDev(version string) bool {
@@ -84,7 +84,7 @@ func (c *Checker) Check(ctx context.Context) (Info, error) {
 	if c.Token != nil {
 		token = c.Token()
 	}
-	if IsDev(c.Current) || token == "" {
+	if IsDev(c.Current) { // без токена — анонимный запрос к публичному репозиторию
 		c.store(info)
 		return info, ErrDisabled
 	}
