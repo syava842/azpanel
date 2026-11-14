@@ -158,12 +158,13 @@ func panelAddress() string {
 	if err != nil {
 		return ""
 	}
-	if cfg.Panel.PublicURL != "" {
-		return cfg.Panel.PublicURL
-	}
 	base := cfg.Panel.BasePath
 	if base == "" {
 		base = "/"
+	}
+	// public_url — только адрес сайта; префикс панель добавляет к нему сама.
+	if cfg.Panel.PublicURL != "" {
+		return strings.TrimRight(cfg.Panel.PublicURL, "/") + base
 	}
 	if data, err := os.ReadFile(filepath.Join(paths.Etc(), "install.env")); err == nil {
 		if env, err := install.ParseEnvFile(data); err == nil {

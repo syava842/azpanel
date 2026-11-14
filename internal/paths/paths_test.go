@@ -3,6 +3,7 @@ package paths
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -35,30 +36,36 @@ func TestMigrateBackupLayout(t *testing.T) {
 	write("antizapret/uninstall-20261103-064018.tar.gz", "un", 48*time.Hour)
 	write("antizapret/include-hosts.txt.20261102T065913.781Z", "list", 48*time.Hour)
 	write("antizapret/setup.20261102T065924.306Z", "setup", 48*time.Hour)
-	write("lists/setup.20261102T065924.306Z", "уже здесь", 48*time.Hour)
+	write("antizapret/lists/setup.20261102T065924.306Z", "уже здесь", 48*time.Hour)
 	for i := 0; i < 2; i++ { // повтор ничего не меняет
 		if err := MigrateBackupLayout(); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for rel, want := range map[string]string{
-		"azpanel/update-0.1.0-old.tar.gz":                    "old",
-		"update-0.1.1-now.tar.gz":                            "now",
-		"antizapret/backup-azpanel-2026-11-03-063100.tar.gz": "az",
-		"manual.tar.gz":                                      "mine",
-		"antizapret/uninstall-20261103-064018.tar.gz":        "un",
-		"lists/include-hosts.txt.20261102T065913.781Z":       "list",
-		"lists/setup.20261102T065924.306Z":                   "уже здесь",
-		"antizapret/setup.20261102T065924.306Z":              "setup",
+		"azpanel/update-0.1.0-old.tar.gz":                             "old",
+		"update-0.1.1-now.tar.gz":                                     "now",
+		"antizapret/archives/backup-azpanel-2026-11-03-063100.tar.gz": "az",
+		"manual.tar.gz":                                               "mine",
+		"antizapret/archives/uninstall-20261103-064018.tar.gz":        "un",
+		"antizapret/lists/include-hosts.txt.20261102T065913.781Z":     "list",
+		"antizapret/lists/setup.20261102T065924.306Z":                 "уже здесь",
+		"antizapret/setup.20261102T065924.306Z":                       "setup",
 	} {
 		b, err := os.ReadFile(filepath.Join(root, "backup", filepath.FromSlash(rel)))
 		if err != nil || string(b) != want {
 			t.Errorf("%s: %q, %v; ждали %q", rel, b, err, want)
 		}
 	}
-	for _, rel := range []string{"update-0.1.0-old.tar.gz", "backup-azpanel-2026-11-03-063100.tar.gz", "antizapret/include-hosts.txt.20261102T065913.781Z"} {
+	for _, rel := range []string{"update-0.1.0-old.tar.gz", "backup-azpanel-2026-11-03-063100.tar.gz", "antizapret/include-hosts.txt.20261102T065913.781Z", "antizapret/uninstall-20261103-064018.tar.gz"} {
 		if _, err := os.Stat(filepath.Join(root, "backup", filepath.FromSlash(rel))); err == nil {
 			t.Errorf("%s остался на старом месте", rel)
+		}
+	}
+	// Всё, что связано с AntiZapret, остаётся под каталогом, закрытым панели.
+	for _, d := range []string{BackupAntiZapret(), BackupLists()} {
+		if rel, err := filepath.Rel(filepath.Join(root, "backup", "antizapret"), d); err != nil || strings.HasPrefix(rel, "..") {
+			t.Errorf("%s вне backup/antizapret", d)
 		}
 	}
 }

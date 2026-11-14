@@ -170,7 +170,8 @@ func TestPanelAddress(t *testing.T) {
 	if got := panelAddress(); !strings.HasPrefix(got, "http://127.0.0.1:") || !strings.Contains(got, "SSH-туннель") {
 		t.Errorf("локально: %s", got)
 	}
-	save(func(c *config.Config) { c.Panel.PublicURL = "https://panel.example.org/x/" })
+	// public_url — адрес сайта без префикса: префикс берётся из base_path.
+	save(func(c *config.Config) { c.Panel.PublicURL, c.Panel.BasePath = "https://panel.example.org", "/x/" })
 	if got := panelAddress(); got != "https://panel.example.org/x/" {
 		t.Errorf("public_url: %s", got)
 	}

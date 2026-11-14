@@ -137,8 +137,8 @@ AntiZapret и снимает только своё: службы, хук OpenVPN
 | `/opt/azpanel/data/` | база панели, лимиты, история |
 | `/opt/azpanel/log/` | `node.log`, `panel.log` |
 | `/opt/azpanel/backup/azpanel/` | бэкапы перед обновлением панели |
-| `/opt/azpanel/backup/antizapret/` | полные архивы AntiZapret: перед его обновлением и перед удалением панели |
-| `/opt/azpanel/backup/lists/` | прежние версии списков маршрутизации и настроек AntiZapret |
+| `/opt/azpanel/backup/antizapret/archives/` | полные архивы AntiZapret: перед его обновлением и перед удалением панели |
+| `/opt/azpanel/backup/antizapret/lists/` | прежние версии списков маршрутизации и настроек AntiZapret |
 | `/opt/azpanel/backup/nginx/` | прежние версии конфигов nginx |
 | `azpanel-node`, `azpanel-panel` | службы systemd |
 

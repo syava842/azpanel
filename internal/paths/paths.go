@@ -22,23 +22,31 @@ func Log() string    { return filepath.Join(Root(), "log") }
 func Data() string   { return filepath.Join(Root(), "data") }
 func Backup() string { return filepath.Join(Root(), "backup") }
 
-// Подкаталоги backup/: каждый вид бэкапа лежит отдельно.
+// Подкаталоги backup/: каждый вид бэкапа лежит отдельно. Всё, что связано с
+// AntiZapret (в копиях setup — ключи WARP), остаётся внутри
+// backup/antizapret: этот каталог закрыт службе панели (InaccessiblePaths),
+// и файл службы на уже установленных серверах при обновлении не меняется.
 const (
-	BackupSelfDir       = "azpanel"    // перед обновлением самой панели: update-*.tar.gz
-	BackupAntiZapretDir = "antizapret" // полные архивы AntiZapret: перед его обновлением и перед удалением панели
-	BackupListsDir      = "lists"      // прежние версии списков маршрутизации и setup
-	BackupNginxDir      = "nginx"      // прежние версии конфигов nginx
+	BackupSelfDir = "azpanel" // перед обновлением самой панели: update-*.tar.gz
+	backupAZDir   = "antizapret"
 )
 
-func BackupSelf() string       { return filepath.Join(Backup(), BackupSelfDir) }
-func BackupAntiZapret() string { return filepath.Join(Backup(), BackupAntiZapretDir) }
-func BackupLists() string      { return filepath.Join(Backup(), BackupListsDir) }
-func BackupNginx() string      { return filepath.Join(Backup(), BackupNginxDir) }
+func BackupSelf() string { return filepath.Join(Backup(), BackupSelfDir) }
+
+// BackupAntiZapret — полные архивы AntiZapret: перед его обновлением и перед
+// удалением панели.
+func BackupAntiZapret() string { return filepath.Join(Backup(), backupAZDir, "archives") }
+
+// BackupLists — прежние версии списков маршрутизации и setup.
+func BackupLists() string { return filepath.Join(Backup(), backupAZDir, "lists") }
+
+// BackupNginx — прежние версии конфигов nginx.
+func BackupNginx() string { return filepath.Join(Backup(), "nginx") }
 
 // MigrateBackupLayout раскладывает бэкапы версий до 0.1.2 по подкаталогам:
 // раньше update-*.tar.gz и backup-azpanel-*.tar.gz лежали прямо в backup/, а
-// копии списков — вместе с архивами в backup/antizapret. Файл, который уже
-// есть на новом месте, не затирается. Повторный вызов ничего не делает.
+// копии списков — вперемешку с архивами в backup/antizapret. Файл, который
+// уже есть на новом месте, не затирается. Повторный вызов ничего не делает.
 //
 // update-*.tar.gz моложе часа не трогается: это бэкап идущего обновления, и
 // прежняя версия, которая его написала, при сбое проверки откатится по
@@ -74,18 +82,23 @@ func MigrateBackupLayout() error {
 		}
 		return nil
 	}
-	archive := func(prefix string) func(string) bool {
-		return func(n string) bool { return strings.HasPrefix(n, prefix) && strings.HasSuffix(n, ".tar.gz") }
+	isArchive := func(n string) bool { return strings.HasSuffix(n, ".tar.gz") }
+	prefixed := func(prefix string) func(string) bool {
+		return func(n string) bool { return strings.HasPrefix(n, prefix) && isArchive(n) }
 	}
-	isUpdate := archive("update-")
+	isUpdate := prefixed("update-")
 	if err := move(root, BackupSelf(), func(n string) bool { return isUpdate(n) && settled(root, n) }); err != nil {
 		return err
 	}
-	if err := move(root, BackupAntiZapret(), archive("backup-azpanel-")); err != nil {
+	if err := move(root, BackupAntiZapret(), prefixed("backup-azpanel-")); err != nil {
 		return err
 	}
-	// В backup/antizapret остаются только архивы; всё прочее — копии списков.
-	return move(BackupAntiZapret(), BackupLists(), func(n string) bool { return !strings.HasSuffix(n, ".tar.gz") })
+	// Файлы прямо в backup/antizapret: архивы — в archives, копии списков — в lists.
+	az := filepath.Join(root, backupAZDir)
+	if err := move(az, BackupAntiZapret(), isArchive); err != nil {
+		return err
+	}
+	return move(az, BackupLists(), func(n string) bool { return !isArchive(n) })
 }
 
 func Binary() string      { return filepath.Join(Bin(), "azpanel") }

@@ -8,7 +8,8 @@
   перезапуск служб.
 - `azpanel user passwd <логин> [--generate]`, `azpanel user add … --password`:
   пароль свой или сгенерированный.
-- Бэкапы по подкаталогам: `backup/azpanel`, `antizapret`, `lists`, `nginx`;
+- Бэкапы по подкаталогам: `backup/azpanel`, `antizapret/archives`,
+  `antizapret/lists`, `nginx`;
   прежние файлы переезжают сами при запуске агента.
 - Форма входа: поля `username` и `password` с `id` — браузер предлагает
   сохранить логин и пароль; в форме смены пароля — скрытый логин.
