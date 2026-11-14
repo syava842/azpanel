@@ -38,6 +38,8 @@ type Host struct {
 	PortBusy    func(port int) bool
 	Port80Owner func() string // "" — свободен, "nginx" или имя процесса
 	Fetch       func(url string) (string, error)
+	// Resolve — адреса домена (nil — не проверять, куда он указывает).
+	Resolve     func(host string) ([]string, error)
 	AdminExists func(login string) bool
 	LoadConfig  func() (config.Config, error)
 
@@ -502,14 +504,8 @@ func (w *Wizard) askAccess(a *Answers, servers []NginxServer) error {
 			}
 		}
 		a.NginxFile = cands[pick].File
-		if a.Domain == "" {
-			for _, n := range cands[pick].ServerName {
-				if n != "_" && domainRe.MatchString(n) {
-					a.Domain = strings.ToLower(n)
-					break
-				}
-			}
-		}
+		// Домен из server_name не подставляется: не задан — панель и её
+		// ссылки работают по внешнему IP.
 	case AccessPort:
 		return w.askKey(a, KeyPort, "Порт HTTPS", strconv.Itoa(a.Port))
 	}
@@ -724,6 +720,36 @@ func (p *plan) finish(a *Answers) error { return p.finishFn(a, p) }
 
 func hostPort(host string, port int) string { return net.JoinHostPort(host, strconv.Itoa(port)) }
 
+// publicURL — внешний адрес панели без пути: порт 443 не пишется, адрес
+// IPv6 берётся в скобки.
+func publicURL(host string, port int) string {
+	if port != 443 {
+		return "https://" + hostPort(host, port)
+	}
+	if strings.Contains(host, ":") {
+		return "https://[" + host + "]"
+	}
+	return "https://" + host
+}
+
+// domainElsewhere — домен указывает не на этот сервер: возвращает адреса,
+// на которые он ведёт. Пусто — совпал, не разрешился или проверить нечем.
+func (w *Wizard) domainElsewhere(a *Answers) []string {
+	if a.Domain == "" || a.Address == "" || w.Host.Resolve == nil {
+		return nil
+	}
+	ips, err := w.Host.Resolve(a.Domain)
+	if err != nil || len(ips) == 0 {
+		return nil
+	}
+	for _, ip := range ips {
+		if ip == a.Address {
+			return nil
+		}
+	}
+	return ips
+}
+
 // plan проверяет ответы и собирает шаги применения. Изменяющих вызовов не
 // делает: только чтение системы.
 func (w *Wizard) plan(a *Answers, servers []NginxServer) (*plan, error) {
@@ -757,6 +783,9 @@ func (w *Wizard) plan(a *Answers, servers []NginxServer) (*plan, error) {
 			cands = one
 		}
 		if len(cands) == 0 {
+			if a.Domain == "" {
+				return nil, fmt.Errorf("в nginx (%s) нет server-блока с ssl: выберите отдельный порт или 127.0.0.1", w.Nginx.dir())
+			}
 			return nil, fmt.Errorf("в nginx (%s) нет server-блока с ssl для домена %q: выберите отдельный порт или 127.0.0.1", w.Nginx.dir(), a.Domain)
 		}
 		// Предпочитаем 443.
@@ -773,8 +802,13 @@ func (w *Wizard) plan(a *Answers, servers []NginxServer) (*plan, error) {
 		}
 		a.CertPath = p.server.SSLCertificate
 		cfg.Panel.BasePath = DefaultBasePath
-		cfg.Panel.PublicURL = "https://" + a.Domain
-		p.url = "https://" + a.Domain + DefaultBasePath
+		// Домен задан — он, иначе внешний IP; порт — если блок не на 443.
+		port := 443
+		if ports := p.server.Ports(); !p.server.ListensOn(443) && len(ports) > 0 {
+			port = ports[0]
+		}
+		cfg.Panel.PublicURL = publicURL(host, port)
+		p.url = cfg.Panel.PublicURL + DefaultBasePath
 		p.lines = append(p.lines,
 			fmt.Sprintf("nginx: в %s (блок %s) одна строка include; фрагмент %s; копия файла в %s; после nginx -t — reload",
 				p.server.File, strings.Join(p.server.ServerName, " "), SnippetPath, w.Nginx.backupDir()))
@@ -802,6 +836,11 @@ func (w *Wizard) plan(a *Answers, servers []NginxServer) (*plan, error) {
 	}
 
 	if a.Access == AccessPath || a.Access == AccessPort {
+		if ips := w.domainElsewhere(a); len(ips) > 0 {
+			p.lines = append(p.lines, fmt.Sprintf(
+				"ВНИМАНИЕ: домен %s указывает на %s, а не на этот сервер (%s): панель и ссылки портала по нему сюда не попадут. Оставьте домен пустым — будет использован IP",
+				a.Domain, strings.Join(ips, ", "), a.Address))
+		}
 		p.bakFiles = w.Nginx.OldBackups()
 		if len(p.bakFiles) > 0 {
 			w.printf("Внимание: в %s лежат копии конфигов, которые nginx читает как рабочие (дубли server-блоков):\n", path.Join(w.Nginx.dir(), "sites-enabled"))

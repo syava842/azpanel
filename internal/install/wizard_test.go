@@ -205,8 +205,9 @@ func TestWizardNonInteractiveMissingList(t *testing.T) {
 	}
 	e = newWizEnv(t, "", false, map[string]string{"AZPANEL_MODE": "panel+node", "AZPANEL_ACCESS": "path"})
 	err = e.w.Run()
-	if err == nil || !strings.Contains(err.Error(), "AZPANEL_DOMAIN") || strings.Contains(err.Error(), "AZPANEL_MODE") {
-		t.Fatalf("список для path: %v", err)
+	// Домен не обязателен: без него отказ уже по делу — в nginx нет блока с ssl.
+	if err == nil || strings.Contains(err.Error(), "AZPANEL_DOMAIN") || !strings.Contains(err.Error(), "нет server-блока с ssl") {
+		t.Fatalf("path без домена: %v", err)
 	}
 	e = newWizEnv(t, "", false, map[string]string{"AZPANEL_MODE": "panel+node", "AZPANEL_ACCESS": "port",
 		"AZPANEL_DOMAIN": "vpn.example.org", "AZPANEL_TLS": "letsencrypt"})
@@ -672,5 +673,62 @@ func TestWizardNoTelegramWhileExperimentalOff(t *testing.T) {
 	}
 	if strings.Contains(string(e.envFile), "TELEGRAM") || strings.Contains(e.out.String(), "9. Telegram") {
 		t.Fatalf("Telegram виден: %s\n%s", e.envFile, e.out)
+	}
+}
+
+// Домен задан — внешний адрес панели по нему; не задан — по внешнему IP
+// сервера. Имя сайта из nginx само не подставляется.
+func TestWizardPublicURLDomainOrIP(t *testing.T) {
+	e := newWizEnv(t, "", false, map[string]string{
+		"AZPANEL_MODE": "panel+node", "AZPANEL_ACCESS": "path", "AZPANEL_ADMIN": "boss",
+		"AZPANEL_NGINX_FILE": filepath.Join("testdata", "nginx", "sites-enabled", "vpn.test"),
+	})
+	e.useRealNginx()
+	if err := e.w.Run(); err != nil {
+		t.Fatalf("%v\n%s", err, e.out)
+	}
+	if e.written.Panel.PublicURL != "https://203.0.113.7" || e.written.Panel.BasePath != "/azpanel/" {
+		t.Fatalf("без домена: %+v", e.written.Panel)
+	}
+	if !strings.Contains(e.out.String(), "https://203.0.113.7/azpanel/") {
+		t.Fatalf("адрес панели в выводе:\n%s", e.out)
+	}
+	for host, want := range map[string]string{"vpn.test": "https://vpn.test", "2001:db8::1": "https://[2001:db8::1]"} {
+		if got := publicURL(host, 443); got != want {
+			t.Errorf("publicURL(%s, 443) = %s", host, got)
+		}
+	}
+	if got := publicURL("203.0.113.7", 8443); got != "https://203.0.113.7:8443" {
+		t.Errorf("publicURL с портом = %s", got)
+	}
+}
+
+// Домен указывает на другой сервер: предупреждение в итоге до подтверждения.
+func TestWizardWarnsDomainElsewhere(t *testing.T) {
+	run := func(ips []string) string {
+		e := newWizEnv(t, "", false, map[string]string{
+			"AZPANEL_MODE": "panel+node", "AZPANEL_ACCESS": "path", "AZPANEL_DOMAIN": "vpn.test",
+			"AZPANEL_TLS": "existing", "AZPANEL_ADMIN": "boss",
+		})
+		e.useRealNginx()
+		e.w.Host.Resolve = func(host string) ([]string, error) {
+			if host != "vpn.test" {
+				t.Errorf("проверен %q", host)
+			}
+			return ips, nil
+		}
+		if err := e.w.Run(); err != nil {
+			t.Fatalf("%v\n%s", err, e.out)
+		}
+		if e.written.Panel.PublicURL != "https://vpn.test" {
+			t.Fatalf("домен задан, а адрес %s", e.written.Panel.PublicURL)
+		}
+		return e.out.String()
+	}
+	if out := run([]string{"198.51.100.9"}); !strings.Contains(out, "домен vpn.test указывает на 198.51.100.9, а не на этот сервер (203.0.113.7)") {
+		t.Fatalf("нет предупреждения:\n%s", out)
+	}
+	if out := run([]string{"198.51.100.9", "203.0.113.7"}); strings.Contains(out, "указывает на") {
+		t.Fatalf("лишнее предупреждение:\n%s", out)
 	}
 }

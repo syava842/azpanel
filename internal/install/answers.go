@@ -322,7 +322,7 @@ func (a Answers) Missing(set []string) []string {
 	if a.Access != AccessPath && a.Access != AccessPort {
 		return miss
 	}
-	need(KeyDomain, "домен сервера")
+	// Домен не обязателен: без него панель открывается по внешнему IP.
 	if a.Access == AccessPath {
 		return miss // сертификат у server-блока nginx свой
 	}
@@ -345,8 +345,8 @@ func (a Answers) Problem() error {
 	if a.Telegram && a.TelegramChat == 0 {
 		return errors.New("Telegram включён, но нет ID чата (" + EnvName(KeyTgChat) + ")")
 	}
-	if a.Access == AccessPath && a.Domain == "" {
-		return errors.New("для пути в nginx нужен домен")
+	if (a.Access == AccessPath || a.Access == AccessPort) && a.Domain == "" && a.Address == "" {
+		return errors.New("не задан ни домен, ни внешний IP сервера (" + EnvName(KeyDomain) + " или " + EnvName(KeyAddress) + ")")
 	}
 	return nil
 }

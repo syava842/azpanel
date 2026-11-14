@@ -56,6 +56,7 @@ func RealHost(o Options) Host {
 		},
 		Port80Owner: port80Owner,
 		Fetch:       httpsGet,
+		Resolve:     net.LookupHost,
 		AdminExists: func(string) bool { return false },
 		LoadConfig:  func() (config.Config, error) { return config.Load(paths.ConfigFile()) },
 
