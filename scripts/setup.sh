@@ -24,10 +24,15 @@ aarch64 | arm64) arch=arm64 ;;
 *) die "архитектура $(uname -m) не поддерживается" ;;
 esac
 
-if [ -x /opt/azpanel/bin/azpanel ]; then
+installed=""
+for b in /root/azpanel/bin/azpanel /opt/azpanel/bin/azpanel; do
+	if [ -x "$b" ]; then installed=$b; break; fi
+done
+if [ -n "$installed" ]; then
 	echo "azpanel уже установлен. Обновить:"
 	echo "  bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/$REPO/main/scripts/update.sh)\""
-	echo "Переустановить с другими ответами: /opt/azpanel/bin/azpanel install"
+	echo "Переустановить с другими ответами: $installed install"
+	echo "Пароли, администраторы, состояние — меню: $installed"
 	exit 0
 fi
 
@@ -110,6 +115,6 @@ tar -C "$tmp" -xzf "$tmp/$archive" azpanel
 chmod 755 "$tmp/azpanel"
 echo "Подпись и сумма проверены."
 
-# Мастер копирует себя в /opt/azpanel/bin и ставит ссылку /usr/local/bin/azpanel.
+# Мастер копирует себя в /root/azpanel/bin и ставит ссылку /usr/local/bin/azpanel.
 # Вопросы читаются с терминала, даже если скрипт пришёл через трубу.
 with_tty "$tmp/azpanel" install "$@"

@@ -26,7 +26,7 @@ func init() {
 // вшитым в бинарник; панели в этом он не верит. Разбор запроса и проверки —
 // в updateapi, общем с агентом прокси.
 type UpdateService struct {
-	Root      string            // корень установки (/opt/azpanel)
+	Root      string            // корень установки (/root/azpanel)
 	Pub       ed25519.PublicKey // ключ релизов; в тестах — тестовый
 	Self      string            // путь к бинарнику azpanel, которым запускается задача
 	ParamsDir string            // каталог файлов параметров задач (0700)

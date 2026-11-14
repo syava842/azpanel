@@ -6,7 +6,7 @@ import (
 )
 
 func TestProxyUnit(t *testing.T) {
-	u := ProxyUnit("/x")
+	u := proxyUnit("/x", "/opt/azpanel")
 	for _, s := range []string{
 		"ExecStart=/x proxy\n", "Description=azpanel: прокси-агент", "ProtectSystem=strict", "ProtectHome=true",
 		"ReadWritePaths=/opt/azpanel -/etc/iptables\n", "NoNewPrivileges=true", "PrivateTmp=true",

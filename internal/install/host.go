@@ -65,7 +65,7 @@ func RealHost(o Options) Host {
 				return err
 			}
 			linkCommand(o.Out)
-			return nil
+			return SyncHookBinary()
 		},
 		WriteConfig:     func(c config.Config) error { return config.Save(paths.ConfigFile(), c) },
 		EnsureNodeToken: func() error { return ensureNodeToken(paths.SecretsFile()) },
@@ -77,7 +77,7 @@ func RealHost(o Options) Host {
 			return fsutil.WriteFileAtomic(filepath.Join(o.UnitDir, name), []byte(content), 0o644)
 		},
 		InstallHook: func() error {
-			_, err := (antizapret.HookFiles{ScriptsDir: o.ScriptsDir, Binary: paths.Binary()}).Ensure()
+			_, err := (antizapret.HookFiles{ScriptsDir: o.ScriptsDir, Binary: paths.HookBinary()}).Ensure()
 			return err
 		},
 		Systemctl: func(args ...string) error { return o.Run("systemctl", args...) },

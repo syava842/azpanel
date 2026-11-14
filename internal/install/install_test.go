@@ -77,7 +77,7 @@ func TestInstallNode(t *testing.T) {
 	if err != nil || len(sec[secrets.NodeToken]) != 64 {
 		t.Fatalf("токен узла: %v", err)
 	}
-	for _, line := range []string{"ProtectSystem=strict", "ReadWritePaths=/opt/azpanel -/etc/openvpn -/etc/wireguard -/root/antizapret", "PrivateTmp=true", "NoNewPrivileges=true"} {
+	for _, line := range []string{"ProtectSystem=strict", "ReadWritePaths=" + filepath.ToSlash(paths.Root()) + " -/etc/openvpn -/etc/wireguard -/root/antizapret\n", "PrivateTmp=true", "NoNewPrivileges=true"} {
 		if !strings.Contains(string(unit), line) {
 			t.Fatalf("в юните нет %q:\n%s", line, unit)
 		}
@@ -214,8 +214,8 @@ func TestCommandLink(t *testing.T) {
 }
 
 func TestPanelUnit(t *testing.T) {
-	u := PanelUnit("/x")
-	for _, s := range []string{"ExecStart=/x panel", "ProtectSystem=strict", "ProtectHome=true", "ReadWritePaths=/opt/azpanel\n", "InaccessiblePaths=-/opt/azpanel/backup/antizapret\n", "Restart=always\n", "After=network-online.target azpanel-node.service", "Description=azpanel: веб-панель", "PrivateTmp=true", "NoNewPrivileges=true",
+	u := panelUnit("/x", "/root/azpanel")
+	for _, s := range []string{"ExecStart=/x panel", "ProtectSystem=strict", "\nProtectHome=tmpfs\nBindPaths=/root/azpanel\n", "ReadWritePaths=/root/azpanel\n", "InaccessiblePaths=-/root/azpanel/backup/antizapret\n", "Restart=always\n", "After=network-online.target azpanel-node.service", "Description=azpanel: веб-панель", "PrivateTmp=true", "NoNewPrivileges=true",
 		"\nCapabilityBoundingSet=\n", "\nAmbientCapabilities=\n", "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX",
 		"ProtectKernelTunables=true", "ProtectKernelModules=true", "ProtectControlGroups=true", "RestrictNamespaces=true",
 		"LockPersonality=true", "RestrictSUIDSGID=true", "PrivateDevices=true", "SystemCallArchitectures=native"} {
@@ -308,10 +308,34 @@ func TestUnitsRestartAlways(t *testing.T) {
 
 // Копии setup с ключами WARP панели не видны; агент их по-прежнему пишет.
 func TestPanelUnitHidesAntiZapretBackups(t *testing.T) {
-	if !strings.Contains(PanelUnit("/x"), "\nInaccessiblePaths=-/opt/azpanel/backup/antizapret\n") {
-		t.Error("нет InaccessiblePaths для backup/antizapret")
+	for _, root := range []string{"/root/azpanel", "/opt/azpanel"} {
+		if !strings.Contains(panelUnit("/x", root), "\nInaccessiblePaths=-"+root+"/backup/antizapret\n") {
+			t.Errorf("%s: нет InaccessiblePaths для backup/antizapret", root)
+		}
 	}
 	if strings.Contains(NodeUnit("/x"), "InaccessiblePaths") {
 		t.Error("агенту копии закрывать нельзя")
+	}
+}
+
+// Установка в /root: панели и прокси-агенту из /root виден только каталог
+// azpanel, агенту разрешена запись в копию программы для хука. Прежняя
+// установка в /opt — как раньше.
+func TestUnitsHomeAccess(t *testing.T) {
+	for name, u := range map[string]string{"панель": panelUnit("/x", "/root/azpanel"), "прокси": proxyUnit("/x", "/root/azpanel")} {
+		if !strings.Contains(u, "\nProtectHome=tmpfs\nBindPaths=/root/azpanel\n") || strings.Contains(u, "ProtectHome=true") {
+			t.Errorf("юнит %s в /root:\n%s", name, u)
+		}
+	}
+	for name, u := range map[string]string{"панель": panelUnit("/x", "/opt/azpanel"), "прокси": proxyUnit("/x", "/opt/azpanel")} {
+		if !strings.Contains(u, "\nProtectHome=true\n") || strings.Contains(u, "BindPaths") || !strings.Contains(u, "ReadWritePaths=/opt/azpanel") {
+			t.Errorf("юнит %s в /opt:\n%s", name, u)
+		}
+	}
+	if u := nodeUnit("/x", "/root/azpanel", "/usr/local/lib/azpanel"); !strings.Contains(u, "\nReadWritePaths=/root/azpanel -/etc/openvpn -/etc/wireguard -/root/antizapret -/usr/local/lib/azpanel\n") || strings.Contains(u, "ProtectHome") {
+		t.Errorf("юнит агента в /root:\n%s", u)
+	}
+	if u := nodeUnit("/x", "/opt/azpanel", ""); !strings.Contains(u, "\nReadWritePaths=/opt/azpanel -/etc/openvpn -/etc/wireguard -/root/antizapret\n") {
+		t.Errorf("юнит агента в /opt:\n%s", u)
 	}
 }

@@ -8,12 +8,61 @@ import (
 	"time"
 )
 
+const (
+	// DefaultRoot — каталог установки: рядом с /root/antizapret, как у
+	// остальных сервисов вокруг AntiZapret.
+	DefaultRoot = "/root/azpanel"
+	// LegacyRoot — каталог версий до 0.1.2. Пока сервер не перенесён
+	// (azpanel relocate), программа работает из него.
+	LegacyRoot = "/opt/azpanel"
+	// hookDir — копия программы для хука OpenVPN: он работает от nobody, а
+	// /root закрыт всем, кроме root.
+	hookDir = "/usr/local/lib/azpanel"
+	// DefaultHookBinary — та самая копия при установке в DefaultRoot.
+	DefaultHookBinary = hookDir + "/azpanel"
+)
+
+// isDir подменяется в тестах.
+var isDir = func(p string) bool {
+	info, err := os.Stat(p)
+	return err == nil && info.IsDir()
+}
+
 // Root — корень установки. AZPANEL_ROOT переопределяет его (для тестов).
+// Без него: /root/azpanel; если его нет, а старый /opt/azpanel есть — старый.
 func Root() string {
 	if r := os.Getenv("AZPANEL_ROOT"); r != "" {
 		return r
 	}
-	return "/opt/azpanel"
+	if !isDir(filepath.Join(DefaultRoot, "etc")) && isDir(filepath.Join(LegacyRoot, "etc")) {
+		return LegacyRoot
+	}
+	return DefaultRoot
+}
+
+// Legacy — установка ещё в прежнем каталоге /opt/azpanel.
+func Legacy() bool { return os.Getenv("AZPANEL_ROOT") == "" && Root() == LegacyRoot }
+
+// underRootHome — каталог внутри /root: туда не попасть никому, кроме root.
+func underRootHome(p string) bool { return p == "/root" || strings.HasPrefix(p, "/root/") }
+
+// HookBinary — программа, которую вызывает хук OpenVPN. При установке в
+// /root это отдельная копия в /usr/local/lib/azpanel (её обновляет агент при
+// запуске); иначе — сам бинарник.
+func HookBinary() string {
+	// Под AZPANEL_ROOT (тесты) системный каталог не трогаем никогда.
+	if os.Getenv("AZPANEL_ROOT") == "" && underRootHome(filepath.ToSlash(Root())) {
+		return DefaultHookBinary
+	}
+	return Binary()
+}
+
+// HookDir — каталог копии для хука; пусто — копия не нужна.
+func HookDir() string {
+	if HookBinary() == Binary() {
+		return ""
+	}
+	return hookDir
 }
 
 func Bin() string    { return filepath.Join(Root(), "bin") }

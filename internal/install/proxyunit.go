@@ -5,9 +5,11 @@ const proxyUnitName = "azpanel-proxy.service"
 // ProxyUnit — юнит прокси-агента (azpanel proxy) для VPS с proxy.sh. Агент
 // работает от root: iptables-save, iptables-restore и netfilter-persistent
 // без прав root не запустить, поэтому набор возможностей не сужен. Пишет он
-// только в /opt/azpanel (журнал) и /etc/iptables (rules.v4 после
+// только в каталог установки (журнал) и /etc/iptables (rules.v4 после
 // `netfilter-persistent save`); остальная файловая система закрыта.
-func ProxyUnit(bin string) string {
+func ProxyUnit(bin string) string { return proxyUnit(bin, unitRoot()) }
+
+func proxyUnit(bin, root string) string {
 	return `[Unit]
 Description=azpanel: прокси-агент
 After=network-online.target netfilter-persistent.service
@@ -18,8 +20,8 @@ ExecStart=` + bin + ` proxy
 Restart=always
 RestartSec=3
 ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/opt/azpanel -/etc/iptables
+` + homeAccess(root) + `
+ReadWritePaths=` + root + ` -/etc/iptables
 PrivateTmp=true
 NoNewPrivileges=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK

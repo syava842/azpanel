@@ -75,7 +75,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/syava842/azpanel/main/sc
 ```
 
 Перед удалением делается бэкап AntiZapret; AntiZapret и клиенты остаются.
-Настройки остаются в `/opt/azpanel`, `-- --purge` удаляет и их.
+Настройки остаются в `/root/azpanel`, `-- --purge` удаляет и их.
 
 ## Пароль и пользователи
 

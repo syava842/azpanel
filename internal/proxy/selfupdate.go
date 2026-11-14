@@ -34,7 +34,7 @@ func execRun(ctx context.Context, name string, args ...string) (int, []byte, err
 
 // SelfUpdateLauncher запускает `azpanel internal selfupdate` отдельным юнитом
 // systemd-run, вне песочницы агента: обновление перезапускает саму службу
-// прокси и пишет в /opt/azpanel/bin. Итог — data/update/result.json
+// прокси и пишет в /root/azpanel/bin. Итог — data/update/result.json
 // (GET /v1/update/result), журнал — logPath. Подходит как Launch для
 // updateapi.Service.
 func SelfUpdateLauncher(run SystemdRun, logPath string, log *slog.Logger, now func() time.Time) func(w http.ResponseWriter, argv []string, params string) (any, bool) {

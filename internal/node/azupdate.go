@@ -29,7 +29,7 @@ import (
 
 const (
 	azMinFree      = 2 << 30 // свободного места в «/» и «/root» — как требует setup.sh
-	azKeepBackups  = 5       // сколько бэкапов обновлений хранится в /opt/azpanel/backup
+	azKeepBackups  = 5       // сколько бэкапов обновлений хранится в /root/azpanel/backup
 	azBackupPrefix = "backup-azpanel-"
 	azStateName    = "azupdate.json"
 
@@ -86,13 +86,13 @@ exit "$rc"`
 
 // azUpdateScript — задача обновления. Идёт вне песочницы агента (запись в /root
 // агенту недоступна). Всё передаётся позиционно:
-// $1 каталог AntiZapret, $2 копия в /root, $3 копия в /opt/azpanel/backup,
+// $1 каталог AntiZapret, $2 копия в /root, $3 копия в /root/azpanel/backup,
 // $4 setup.sh из архива коммита, $5 файл ответов setup.sh (MTU, адреса
 // серверов), $6 и $7 — сторож ввода (azRunSetup). Окружение юнита — остальные
 // ответы.
 //
 // Свои старые /root/backup-azpanel-*.tar.gz (от неудавшегося обновления)
-// убираются: их копии лежат в /opt/azpanel/backup, а setup.sh распаковывает
+// убираются: их копии лежат в /root/azpanel/backup, а setup.sh распаковывает
 // только один /root/backup*.tar.gz и удаляет все.
 const azUpdateScript = `set -e
 dir=$1; rootcopy=$2; keepcopy=$3; setup=$4
@@ -110,7 +110,7 @@ chmod 600 "$rootcopy"
 ` + azRunSetup
 
 // azRetryScript — повтор прерванной установки: бэкап уже есть в
-// /opt/azpanel/backup ($3), новый client.sh 8 делать нельзя — он снял бы копию
+// /root/azpanel/backup ($3), новый client.sh 8 делать нельзя — он снял бы копию
 // с полуразрушенного состояния. Бэкап снова кладётся в /root (setup.sh
 // подхватывает его сам), дальше тот же ход, что у обновления.
 const azRetryScript = `set -e
@@ -123,7 +123,7 @@ cp -f "$keepcopy" "$rootcopy"
 chmod 600 "$rootcopy"
 ` + azRunSetup
 
-// azRestoreScript: $1 бэкап в /opt/azpanel/backup, $2 каталог /root, $3 каталог
+// azRestoreScript: $1 бэкап в /root/azpanel/backup, $2 каталог /root, $3 каталог
 // AntiZapret. client.sh 9 сам распаковывает /root/backup*.tar.gz, удаляет его
 // и перезагружает сервер.
 const azRestoreScript = `set -e
@@ -174,8 +174,8 @@ type AZUpdater struct {
 	Record    antizapret.InstalledFile
 	Dir       string // /root/antizapret
 	RootDir   string // /root
-	DataDir   string // /opt/azpanel/data
-	BackupDir string // /opt/azpanel/backup
+	DataDir   string // /root/azpanel/data
+	BackupDir string // /root/azpanel/backup
 	Inventory antizapret.Inventory
 	// EnsureHook ставит хук лимита в скрипты OpenVPN (setup.sh стирает /etc/openvpn/server).
 	EnsureHook func() (bool, error)

@@ -72,8 +72,31 @@ func TestMigrateBackupLayout(t *testing.T) {
 
 func TestRootDefault(t *testing.T) {
 	t.Setenv("AZPANEL_ROOT", "")
-	if got := Root(); got != "/opt/azpanel" {
-		t.Fatalf("Root() = %q", got)
+	old := isDir
+	t.Cleanup(func() { isDir = old })
+	exists := map[string]bool{}
+	isDir = func(p string) bool { return exists[filepath.ToSlash(p)] }
+
+	// Чистый сервер и сервер после переноса — /root/azpanel, копия для хука отдельно.
+	for _, have := range [][]string{nil, {"/root/azpanel/etc"}, {"/root/azpanel/etc", "/opt/azpanel/etc"}} {
+		exists = map[string]bool{}
+		for _, d := range have {
+			exists[d] = true
+		}
+		if got := filepath.ToSlash(Root()); got != "/root/azpanel" || Legacy() {
+			t.Fatalf("%v: Root() = %q, Legacy() = %v", have, got, Legacy())
+		}
+		if got := HookBinary(); got != "/usr/local/lib/azpanel/azpanel" || HookDir() != "/usr/local/lib/azpanel" {
+			t.Fatalf("%v: HookBinary() = %q, HookDir() = %q", have, got, HookDir())
+		}
+	}
+	// Прежняя установка, ещё не перенесённая: работаем из /opt/azpanel, хук зовёт сам бинарник.
+	exists = map[string]bool{"/opt/azpanel/etc": true}
+	if got := filepath.ToSlash(Root()); got != "/opt/azpanel" || !Legacy() {
+		t.Fatalf("Root() = %q, Legacy() = %v", got, Legacy())
+	}
+	if HookBinary() != Binary() || HookDir() != "" {
+		t.Fatalf("HookBinary() = %q, HookDir() = %q", HookBinary(), HookDir())
 	}
 	if got := NodeSocket(); got != "/run/azpanel/node.sock" {
 		t.Fatalf("NodeSocket() = %q", got)
@@ -88,5 +111,9 @@ func TestRootOverride(t *testing.T) {
 	}
 	if got, want := NodeSocket(), filepath.Join(root, "run", "node.sock"); got != want {
 		t.Fatalf("NodeSocket() = %q, want %q", got, want)
+	}
+	// Под AZPANEL_ROOT (тесты) отдельной копии для хука нет.
+	if Legacy() || HookBinary() != Binary() || HookDir() != "" {
+		t.Fatalf("Legacy() = %v, HookBinary() = %q", Legacy(), HookBinary())
 	}
 }

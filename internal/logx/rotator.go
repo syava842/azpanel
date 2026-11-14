@@ -1,4 +1,4 @@
-// Package logx — журналы azpanel в /opt/azpanel/log с ротацией по размеру.
+// Package logx — журналы azpanel в /root/azpanel/log с ротацией по размеру.
 package logx
 
 import (

@@ -1,4 +1,4 @@
-// Package limits — лимиты одновременных подключений, /opt/azpanel/data/limits.json.
+// Package limits — лимиты одновременных подключений, /root/azpanel/data/limits.json.
 package limits
 
 import (

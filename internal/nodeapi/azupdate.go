@@ -45,7 +45,7 @@ type AZUpdateState struct {
 	From     string     `json:"from,omitempty"`   // с какого (пусто — был неизвестен)
 	Started  time.Time  `json:"started"`
 	Finished *time.Time `json:"finished,omitempty"`
-	// Backup — имя бэкапа в /opt/azpanel/backup; такая же копия лежит в /root
+	// Backup — имя бэкапа в /root/azpanel/backup; такая же копия лежит в /root
 	// под тем же именем, пока setup.sh её не заберёт.
 	Backup  string   `json:"backup,omitempty"`
 	Clients []string `json:"clients,omitempty"` // клиенты до обновления

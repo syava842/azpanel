@@ -3,6 +3,7 @@ package install
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -69,11 +70,32 @@ func Defaults() Options {
 	}
 }
 
-// NodeUnit — юнит агента. Сам агент пишет только в /opt/azpanel; остальные
-// пути на запись нужны client.sh (PKI EasyRSA, профили, конфиги WireGuard)
-// и установке хука (скрипты OpenVPN). «-» — каталога может не быть.
-// Restart=always: агент завершает себя по POST /v1/system/restart.
-func NodeUnit(bin string) string {
+// unitRoot — каталог установки в записи юнита (всегда через «/»).
+func unitRoot() string { return filepath.ToSlash(paths.Root()) }
+
+// homeAccess — строки юнита про домашние каталоги для службы, которой /root
+// не нужен. Установка в /root: ProtectHome=tmpfs прячет /root целиком, а
+// BindPaths возвращает в него один каталог azpanel — соседние
+// /root/antizapret с ключами остаются невидимыми. Иначе — ProtectHome=true.
+func homeAccess(root string) string {
+	if strings.HasPrefix(root, "/root/") || strings.HasPrefix(root, "/home/") {
+		return "ProtectHome=tmpfs\nBindPaths=" + root
+	}
+	return "ProtectHome=true"
+}
+
+// NodeUnit — юнит агента. Сам агент пишет только в каталог установки и в
+// копию программы для хука; остальные пути на запись нужны client.sh (PKI
+// EasyRSA, профили, конфиги WireGuard) и установке хука (скрипты OpenVPN).
+// «-» — каталога может не быть. Restart=always: агент завершает себя по
+// POST /v1/system/restart.
+func NodeUnit(bin string) string { return nodeUnit(bin, unitRoot(), paths.HookDir()) }
+
+func nodeUnit(bin, root, hookDir string) string {
+	rw := root + " -/etc/openvpn -/etc/wireguard -/root/antizapret"
+	if hookDir != "" {
+		rw += " -" + hookDir
+	}
 	return `[Unit]
 Description=azpanel: агент узла AntiZapret
 After=network-online.target
@@ -86,7 +108,7 @@ RestartSec=3
 RuntimeDirectory=azpanel
 RuntimeDirectoryMode=0755
 ProtectSystem=strict
-ReadWritePaths=/opt/azpanel -/etc/openvpn -/etc/wireguard -/root/antizapret
+ReadWritePaths=` + rw + `
 PrivateTmp=true
 NoNewPrivileges=true
 
@@ -95,13 +117,15 @@ WantedBy=multi-user.target
 `
 }
 
-// PanelUnit — юнит веб-панели. Панель пишет только в /opt/azpanel (журнал),
-// с агентом говорит по HTTP, поэтому остальные пути ей закрыты. Права сужены:
+// PanelUnit — юнит веб-панели. Панель пишет только в каталог установки, с
+// агентом говорит по HTTP, поэтому остальные пути ей закрыты. Права сужены:
 // secrets.env принадлежит root (600), читается и без CAP_DAC_OVERRIDE; порт
 // выше 1024. Копии setup с ключами WARP (backup/antizapret) панели закрыты
 // целиком. Restart=always: панель и агент завершают себя при перезапуске из
 // настроек, поднимает их systemd.
-func PanelUnit(bin string) string {
+func PanelUnit(bin string) string { return panelUnit(bin, unitRoot()) }
+
+func panelUnit(bin, root string) string {
 	return `[Unit]
 Description=azpanel: веб-панель
 After=network-online.target azpanel-node.service
@@ -112,9 +136,9 @@ ExecStart=` + bin + ` panel
 Restart=always
 RestartSec=3
 ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/opt/azpanel
-InaccessiblePaths=-/opt/azpanel/backup/antizapret
+` + homeAccess(root) + `
+ReadWritePaths=` + root + `
+InaccessiblePaths=-` + root + `/backup/antizapret
 PrivateTmp=true
 NoNewPrivileges=true
 CapabilityBoundingSet=
@@ -183,6 +207,9 @@ func InstallNode(o Options) error {
 		return fmt.Errorf("копирование бинарника: %w", err)
 	}
 	linkCommand(o.Out)
+	if err := SyncHookBinary(); err != nil {
+		return fmt.Errorf("копия программы для хука: %w", err)
+	}
 	if _, err := os.Stat(paths.ConfigFile()); errors.Is(err, fs.ErrNotExist) {
 		if err := config.Save(paths.ConfigFile(), config.Default()); err != nil {
 			return err
@@ -199,7 +226,7 @@ func InstallNode(o Options) error {
 			return err
 		}
 	}
-	if _, err := (antizapret.HookFiles{ScriptsDir: o.ScriptsDir, Binary: paths.Binary()}).Ensure(); err != nil {
+	if _, err := (antizapret.HookFiles{ScriptsDir: o.ScriptsDir, Binary: paths.HookBinary()}).Ensure(); err != nil {
 		return fmt.Errorf("хук: %w", err)
 	}
 	cmds := [][]string{{"daemon-reload"}, {"enable", "azpanel-node"}, {"restart", "azpanel-node"}}
@@ -290,7 +317,7 @@ func Uninstall(o Options) error {
 	if err := o.Run("systemctl", "disable", "--now", "azpanel-node"); err != nil {
 		fmt.Fprintln(o.Out, "служба не остановлена (возможно, её нет):", err)
 	}
-	if err := (antizapret.HookFiles{ScriptsDir: o.ScriptsDir, Binary: paths.Binary()}).Remove(); err != nil {
+	if err := (antizapret.HookFiles{ScriptsDir: o.ScriptsDir, Binary: paths.HookBinary()}).Remove(); err != nil {
 		return fmt.Errorf("хук: %w", err)
 	}
 	if err := os.Remove(unit); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -304,6 +331,11 @@ func Uninstall(o Options) error {
 	}
 	if err := unlinkCommand(); err != nil {
 		return err
+	}
+	if d := paths.HookDir(); d != "" {
+		if err := os.RemoveAll(d); err != nil {
+			return err
+		}
 	}
 	if o.Purge {
 		return os.RemoveAll(paths.Root())
@@ -404,6 +436,37 @@ func linkCommand(out io.Writer) {
 		}
 	}
 	fmt.Fprintf(out, "ссылка %s не создана: команда доступна как %s\n", link, target)
+}
+
+// SyncHookBinary обновляет копию программы, которую вызывает хук OpenVPN
+// (paths.HookBinary), из установленного бинарника. Нужна, когда установка
+// лежит в /root: хук работает от nobody и туда не попадёт. Совпадает с
+// бинарником — ничего не делает. Вызывается установкой, переносом и агентом
+// при каждом запуске — так копия обновляется вместе с программой.
+func SyncHookBinary() error {
+	src, dst := paths.Binary(), paths.HookBinary()
+	if src == dst {
+		return nil
+	}
+	return syncFile(src, dst)
+}
+
+func syncFile(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	if cur, err := os.ReadFile(dst); err == nil && bytes.Equal(cur, data) {
+		return nil
+	}
+	dir := filepath.Dir(dst)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	if err := os.Chmod(dir, 0o755); err != nil { // umask мог сузить: каталог должен пускать nobody
+		return err
+	}
+	return fsutil.WriteFileAtomic(dst, data, 0o755)
 }
 
 // unlinkCommand убирает ссылку, только если она ведёт на наш бинарник.

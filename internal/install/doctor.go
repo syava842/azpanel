@@ -1,6 +1,7 @@
 package install
 
 import (
+	"bytes"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -54,7 +55,17 @@ func RealDoctor(out io.Writer, o Options, cfg config.Config) *Doctor {
 		Stat: os.Stat, ReadFile: os.ReadFile, ReadDir: os.ReadDir,
 		IsActive: func(unit string) bool { return exec.Command("systemctl", "is-active", "--quiet", unit).Run() == nil },
 		HookInstalled: func() (bool, error) {
-			return (antizapret.HookFiles{ScriptsDir: cfg.Node.OpenVPNScriptsDir, Binary: paths.Binary()}).Installed()
+			// Хук зовёт копию программы вне /root: она должна совпадать с установленной.
+			if hb := paths.HookBinary(); hb != paths.Binary() {
+				want, err := os.ReadFile(paths.Binary())
+				if err != nil {
+					return false, err
+				}
+				if have, err := os.ReadFile(hb); err != nil || !bytes.Equal(have, want) {
+					return false, fmt.Errorf("копия программы для хука %s отсутствует или устарела: systemctl restart azpanel-node", hb)
+				}
+			}
+			return (antizapret.HookFiles{ScriptsDir: cfg.Node.OpenVPNScriptsDir, Binary: paths.HookBinary()}).Installed()
 		},
 		AgentList: func() error {
 			_, err := agentproto.Call(paths.NodeSocket(), agentproto.Request{Op: agentproto.OpList}, 2*time.Second)

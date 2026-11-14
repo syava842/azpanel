@@ -4,7 +4,8 @@
 #   bash -c "$(curl -fsSL https://raw.githubusercontent.com/syava842/azpanel/main/scripts/admin.sh)"
 # То же на сервере — команда azpanel без аргументов.
 set -euo pipefail
-bin=/opt/azpanel/bin/azpanel
+bin=/root/azpanel/bin/azpanel
+[ -x "$bin" ] || bin=/opt/azpanel/bin/azpanel
 [ "$(id -u)" = 0 ] || { echo "запустите от root" >&2; exit 1; }
 [ -x "$bin" ] || { echo "azpanel не установлен" >&2; exit 1; }
 rc=0

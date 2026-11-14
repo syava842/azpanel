@@ -93,7 +93,7 @@ AZPANEL_ADMIN=admin AZPANEL_ADMIN_PASSWORD='пароль' \
 | Команда | Флаги |
 | --- | --- |
 | `update.sh` или `azpanel update` | `--check` — только проверить; `--yes` — без вопроса |
-| `uninstall.sh` или `azpanel uninstall` | `--purge` — удалить и `/opt/azpanel`; `--yes` — без подтверждения; `--skip-backup` — без бэкапа AntiZapret |
+| `uninstall.sh` или `azpanel uninstall` | `--purge` — удалить и `/root/azpanel`; `--yes` — без подтверждения; `--skip-backup` — без бэкапа AntiZapret |
 
 Флаги скриптам передаются после `--`:
 `bash -c "$(curl -fsSL …/update.sh)" -- --check`.
@@ -130,17 +130,23 @@ AntiZapret и снимает только своё: службы, хук OpenVPN
 
 | Путь | Что |
 | --- | --- |
-| `/opt/azpanel/bin/azpanel` | программа; ссылка `/usr/local/bin/azpanel` |
-| `/opt/azpanel/etc/config.toml` | настройки (их же правит страница «Настройки») |
-| `/opt/azpanel/etc/secrets.env` | секреты, только root |
-| `/opt/azpanel/etc/install.env` | ответы мастера без секретов — подставляются при переустановке |
-| `/opt/azpanel/data/` | база панели, лимиты, история |
-| `/opt/azpanel/log/` | `node.log`, `panel.log` |
-| `/opt/azpanel/backup/azpanel/` | бэкапы перед обновлением панели |
-| `/opt/azpanel/backup/antizapret/archives/` | полные архивы AntiZapret: перед его обновлением и перед удалением панели |
-| `/opt/azpanel/backup/antizapret/lists/` | прежние версии списков маршрутизации и настроек AntiZapret |
-| `/opt/azpanel/backup/nginx/` | прежние версии конфигов nginx |
+| `/root/azpanel/bin/azpanel` | программа; ссылка `/usr/local/bin/azpanel` |
+| `/usr/local/lib/azpanel/azpanel` | копия программы для хука OpenVPN: он работает не от root, а `/root` ему закрыт; обновляется сама при запуске агента |
+| `/root/azpanel/etc/config.toml` | настройки (их же правит страница «Настройки») |
+| `/root/azpanel/etc/secrets.env` | секреты, только root |
+| `/root/azpanel/etc/install.env` | ответы мастера без секретов — подставляются при переустановке |
+| `/root/azpanel/data/` | база панели, лимиты, история |
+| `/root/azpanel/log/` | `node.log`, `panel.log` |
+| `/root/azpanel/backup/azpanel/` | бэкапы перед обновлением панели |
+| `/root/azpanel/backup/antizapret/archives/` | полные архивы AntiZapret: перед его обновлением и перед удалением панели |
+| `/root/azpanel/backup/antizapret/lists/` | прежние версии списков маршрутизации и настроек AntiZapret |
+| `/root/azpanel/backup/nginx/` | прежние версии конфигов nginx |
 | `azpanel-node`, `azpanel-panel` | службы systemd |
+
+Каталог — `/root/azpanel`, рядом с `/root/antizapret`, как у остальных
+сервисов вокруг AntiZapret. Версии до 0.1.2 ставились в `/opt/azpanel`:
+`update.sh` после обновления переносит такую установку сам, вручную —
+`azpanel relocate`. При сбое перенос возвращает всё на место.
 
 ## FAQ
 
@@ -190,7 +196,7 @@ nginx сертификат принадлежит сайту nginx — прод�
 <details>
   <summary>Где журналы?</summary>
 
-`/opt/azpanel/log/node.log` и `panel.log`, а также `journalctl -u azpanel-node`
+`/root/azpanel/log/node.log` и `panel.log`, а также `journalctl -u azpanel-node`
 и `journalctl -u azpanel-panel`. Действия пользователей — в панели, раздел
 **Журнал**.
 
@@ -200,15 +206,15 @@ nginx сертификат принадлежит сайту nginx — прод�
   <summary>Команда azpanel не найдена</summary>
 
 Ранние сборки (до 0.1.0) не ставили ссылку в PATH. Запускайте
-`/opt/azpanel/bin/azpanel` или создайте ссылку:
-`ln -s /opt/azpanel/bin/azpanel /usr/local/bin/azpanel`.
+`/root/azpanel/bin/azpanel` или создайте ссылку:
+`ln -s /root/azpanel/bin/azpanel /usr/local/bin/azpanel`.
 
 </details>
 
 <details>
   <summary>Что azpanel меняет в системе?</summary>
 
-Только своё: `/opt/azpanel`, две службы, хук OpenVPN для лимитов, фрагмент
+Только своё: `/root/azpanel`, две службы, хук OpenVPN для лимитов, фрагмент
 nginx (если выбран nginx) и сертификат (если выбран выпуск). Скрипты и
 настройки AntiZapret меняются только вашими действиями в панели — теми же
 скриптами AntiZapret.

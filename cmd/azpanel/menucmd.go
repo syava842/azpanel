@@ -260,8 +260,11 @@ func cmdMenu(c *console) error {
   4) Добавить администратора
   5) Обновить azpanel
   6) Перезапустить службы azpanel
-  0) Выход
 `)
+		if paths.Legacy() {
+			c.printf("  7) Перенести установку из %s в %s\n", paths.LegacyRoot, paths.DefaultRoot)
+		}
+		c.printf("  0) Выход\n")
 		v, err := c.ask("Выбор", "")
 		if errors.Is(err, io.EOF) {
 			return nil
@@ -287,6 +290,14 @@ func cmdMenu(c *console) error {
 		case "6":
 			if actErr = c.systemctl("restart", "azpanel-node", "azpanel-panel"); actErr == nil {
 				c.printf("Службы перезапущены.\n")
+			}
+		case "7":
+			if !paths.Legacy() {
+				c.printf("Нет пункта %q.\n", v)
+				break
+			}
+			if c.sub("relocate") == 0 {
+				return nil // каталог сменился: меню открывается заново командой azpanel
 			}
 		case "":
 			continue

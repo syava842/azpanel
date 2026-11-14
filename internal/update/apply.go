@@ -60,7 +60,7 @@ type Result struct {
 // Env — окружение обновления на этом хосте. Всё, что трогает систему (службы,
 // база, проверки), задаётся полями: тесты подставляют поддельные.
 type Env struct {
-	Root    string // корень установки (/opt/azpanel)
+	Root    string // корень установки (/root/azpanel)
 	Version string // текущая версия
 	Pub     ed25519.PublicKey
 	Arch    string   // пусто — runtime.GOARCH

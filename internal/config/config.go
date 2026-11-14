@@ -1,4 +1,4 @@
-// Package config — /opt/azpanel/etc/config.toml.
+// Package config — /root/azpanel/etc/config.toml.
 package config
 
 import (

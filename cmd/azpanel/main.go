@@ -14,6 +14,7 @@ import (
 	"github.com/syava842/azpanel/internal/antizapret"
 	"github.com/syava842/azpanel/internal/config"
 	"github.com/syava842/azpanel/internal/hook"
+	"github.com/syava842/azpanel/internal/install"
 	"github.com/syava842/azpanel/internal/limits"
 	"github.com/syava842/azpanel/internal/node"
 	"github.com/syava842/azpanel/internal/paths"
@@ -42,6 +43,8 @@ func run(args []string) int {
 	switch args[0] {
 	case "menu":
 		return report(cmdMenu(realConsole()))
+	case "relocate":
+		return report(cmdRelocate(args[1:], os.Stdin, os.Stdout))
 	case "version":
 		fmt.Println(version)
 		return 0
@@ -93,7 +96,7 @@ func report(err error) int {
 }
 
 func hookFiles(cfg config.Config) antizapret.HookFiles {
-	return antizapret.HookFiles{ScriptsDir: cfg.Node.OpenVPNScriptsDir, Binary: paths.Binary()}
+	return antizapret.HookFiles{ScriptsDir: cfg.Node.OpenVPNScriptsDir, Binary: paths.HookBinary()}
 }
 
 func runNode() int {
@@ -104,7 +107,15 @@ func runNode() int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := node.Run(ctx, cfg, version, hookFiles(cfg).Ensure); err != nil {
+	// Копия программы для хука обновляется при каждом запуске агента: после
+	// обновления azpanel агент перезапускается и приводит её к своей версии.
+	ensureHook := func() (bool, error) {
+		if err := install.SyncHookBinary(); err != nil {
+			return false, fmt.Errorf("копия программы для хука: %w", err)
+		}
+		return hookFiles(cfg).Ensure()
+	}
+	if err := node.Run(ctx, cfg, version, ensureHook); err != nil {
 		fmt.Fprintln(os.Stderr, "azpanel node:", err)
 		return 1
 	}
@@ -175,7 +186,8 @@ func usage() {
                                        пароль — только в AZPANEL_ADMIN_PASSWORD: флаг --admin-password виден в ps и истории shell
   azpanel install --yes [--panel]      по-старому: агент узла (--panel — и веб-панель на 127.0.0.1)
   azpanel uninstall [--yes] [--purge] [--skip-backup]
-                                       удалить (бэкап AntiZapret, юниты, хук, nginx; --purge — и /opt/azpanel)
+                                       удалить (бэкап AntiZapret, юниты, хук, nginx; --purge — и /root/azpanel)
+  azpanel relocate [--yes]             перенести установку из /opt/azpanel (версии до 0.1.2) в /root/azpanel
   azpanel doctor                       проверка установки (код выхода 1 при проблемах)
   azpanel node                         агент узла (запускает systemd)
   azpanel panel                        веб-панель (запускает systemd)

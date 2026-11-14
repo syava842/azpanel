@@ -1,4 +1,4 @@
-// Package secrets — /opt/azpanel/etc/secrets.env: строки KEY=VALUE, права 600.
+// Package secrets — /root/azpanel/etc/secrets.env: строки KEY=VALUE, права 600.
 // Значения не попадают ни в ошибки, ни в журналы.
 package secrets
 
