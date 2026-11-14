@@ -249,7 +249,12 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	host := s.remoteHost(r)
-	user, pw := r.PostForm.Get("user"), r.PostForm.Get("password")
+	// Поле зовётся username — так его узнаёт менеджер паролей браузера;
+	// прежнее имя user принимается от старых форм.
+	user, pw := r.PostForm.Get("username"), r.PostForm.Get("password")
+	if user == "" {
+		user = r.PostForm.Get("user")
+	}
 	// Попытка засчитывается до bcrypt и атомарно с проверкой лимита.
 	if !s.Limiter.Begin(host) {
 		if s.shouldLogBlocked(host) {

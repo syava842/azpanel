@@ -531,3 +531,24 @@ func readSecrets(t *testing.T, file string) map[string]string {
 	}
 	return m
 }
+
+// Форма входа шлёт username (так поле узнаёт менеджер паролей браузера);
+// прежнее имя user тоже принимается.
+func TestLoginFormFieldNames(t *testing.T) {
+	e := newEnv(t, adminHash(t))
+	body := e.do(httptest.NewRequest("GET", "/login", nil)).Body.String()
+	for _, want := range []string{
+		`id="username" name="username"`, `autocomplete="username"`,
+		`id="password" name="password" autocomplete="current-password"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("в форме входа нет %q", want)
+		}
+	}
+	for _, field := range []string{"username", "user"} {
+		rec := e.do(postForm("/login", url.Values{field: {"admin"}, "password": {testPassword}}))
+		if rec.Code != 303 || rec.Header().Get("Location") != "/" {
+			t.Errorf("вход с полем %s: %d %q", field, rec.Code, rec.Header().Get("Location"))
+		}
+	}
+}

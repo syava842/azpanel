@@ -1,9 +1,67 @@
 package paths
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
+
+// Бэкапы прежних версий раскладываются по подкаталогам; свежий бэкап идущего
+// обновления остаётся на месте, чужое и уже разложенное не трогается.
+func TestMigrateBackupLayout(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("AZPANEL_ROOT", root)
+	if err := MigrateBackupLayout(); err != nil { // установки нет — не ошибка
+		t.Fatal(err)
+	}
+	write := func(rel, body string, age time.Duration) {
+		p := filepath.Join(root, "backup", filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		ts := time.Now().Add(-age)
+		if err := os.Chtimes(p, ts, ts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("update-0.1.0-old.tar.gz", "old", 48*time.Hour)
+	write("update-0.1.1-now.tar.gz", "now", time.Minute)
+	write("backup-azpanel-2026-11-03-063100.tar.gz", "az", time.Minute)
+	write("manual.tar.gz", "mine", 48*time.Hour)
+	write("antizapret/uninstall-20261103-064018.tar.gz", "un", 48*time.Hour)
+	write("antizapret/include-hosts.txt.20261102T065913.781Z", "list", 48*time.Hour)
+	write("antizapret/setup.20261102T065924.306Z", "setup", 48*time.Hour)
+	write("lists/setup.20261102T065924.306Z", "уже здесь", 48*time.Hour)
+	for i := 0; i < 2; i++ { // повтор ничего не меняет
+		if err := MigrateBackupLayout(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for rel, want := range map[string]string{
+		"azpanel/update-0.1.0-old.tar.gz":                    "old",
+		"update-0.1.1-now.tar.gz":                            "now",
+		"antizapret/backup-azpanel-2026-11-03-063100.tar.gz": "az",
+		"manual.tar.gz":                                      "mine",
+		"antizapret/uninstall-20261103-064018.tar.gz":        "un",
+		"lists/include-hosts.txt.20261102T065913.781Z":       "list",
+		"lists/setup.20261102T065924.306Z":                   "уже здесь",
+		"antizapret/setup.20261102T065924.306Z":              "setup",
+	} {
+		b, err := os.ReadFile(filepath.Join(root, "backup", filepath.FromSlash(rel)))
+		if err != nil || string(b) != want {
+			t.Errorf("%s: %q, %v; ждали %q", rel, b, err, want)
+		}
+	}
+	for _, rel := range []string{"update-0.1.0-old.tar.gz", "backup-azpanel-2026-11-03-063100.tar.gz", "antizapret/include-hosts.txt.20261102T065913.781Z"} {
+		if _, err := os.Stat(filepath.Join(root, "backup", filepath.FromSlash(rel))); err == nil {
+			t.Errorf("%s остался на старом месте", rel)
+		}
+	}
+}
 
 func TestRootDefault(t *testing.T) {
 	t.Setenv("AZPANEL_ROOT", "")

@@ -68,6 +68,7 @@ a:hover { text-decoration: underline; }
 .skip { position: absolute; left: -999px; top: .5rem; z-index: 50; padding: .5rem 1rem; border-radius: 7px; background: var(--surface); border: 1px solid var(--line-strong); color: var(--fg); }
 .skip:focus { left: 1rem; }
 
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); border: 0; white-space: nowrap; }
 .sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
 svg.i {
   width: 18px; height: 18px; flex: none;
@@ -284,6 +285,9 @@ ul.list li:last-child { border-bottom: 0; padding-bottom: 0; }
 /* ------------------------------------------------------------ формы */
 
 label { display: block; margin-bottom: .9rem; font-weight: 550; font-size: .925rem; }
+/* Подпись отдельно от поля (форма входа): поле прижато к ней. */
+label[for] { margin-bottom: 0; }
+label[for] + input { margin-bottom: .9rem; }
 input[type=text], input[type=password], input[type=number], input[type=search],
 input[type=email], input[type=url], input[type=date], input[type=datetime-local], select, textarea {
   display: block; width: 100%;

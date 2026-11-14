@@ -211,7 +211,7 @@ func TestApplySuccess(t *testing.T) {
 	if err != nil || got == nil || !got.OK || got.To != "0.9.1" {
 		t.Fatalf("result.json: %+v %v", got, err)
 	}
-	if want := "backup/update-0.9.0-20261102-120000.tar.gz"; !f.exists(want) {
+	if want := "backup/azpanel/update-0.9.0-20261102-120000.tar.gz"; !f.exists(want) {
 		t.Fatalf("нет бэкапа %s", want)
 	}
 }
@@ -540,11 +540,11 @@ func TestBackupSkipsSyncAndPrunesOld(t *testing.T) {
 	f.write("data/sync/aa/archive.tar", "big")
 	old := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	for i, n := range []string{"update-0.8.0-a", "update-0.8.1-b", "update-0.8.2-c", "update-0.8.3-d"} {
-		f.write("backup/"+n+".tar.gz", "x")
+		f.write("backup/azpanel/"+n+".tar.gz", "x")
 		ts := old.Add(time.Duration(i) * time.Hour)
-		os.Chtimes(filepath.Join(f.root, "backup", n+".tar.gz"), ts, ts)
+		os.Chtimes(filepath.Join(f.root, "backup", "azpanel", n+".tar.gz"), ts, ts)
 	}
-	f.write("backup/manual.tar.gz", "mine")
+	f.write("backup/azpanel/manual.tar.gz", "mine")
 	res, err := f.env.Apply(context.Background(), f.release("0.9.1", "\x7fELF-new", f.priv))
 	if err != nil {
 		t.Fatal(err)
@@ -562,11 +562,11 @@ func TestBackupSkipsSyncAndPrunesOld(t *testing.T) {
 			t.Fatalf("в бэкапе %s", h.Name)
 		}
 	}
-	list, _ := filepath.Glob(filepath.Join(f.root, "backup", "update-*.tar.gz"))
+	list, _ := filepath.Glob(filepath.Join(f.root, "backup", "azpanel", "update-*.tar.gz"))
 	if len(list) != 3 {
 		t.Fatalf("бэкапов %d, ждали 3: %v", len(list), list)
 	}
-	if !f.exists("backup/manual.tar.gz") || f.exists("backup/update-0.8.0-a.tar.gz") || f.exists("backup/update-0.8.1-b.tar.gz") {
+	if !f.exists("backup/azpanel/manual.tar.gz") || f.exists("backup/azpanel/update-0.8.0-a.tar.gz") || f.exists("backup/azpanel/update-0.8.1-b.tar.gz") {
 		t.Fatal("прореживание удалило не то")
 	}
 }

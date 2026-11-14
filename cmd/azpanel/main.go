@@ -18,6 +18,7 @@ import (
 	"github.com/syava842/azpanel/internal/node"
 	"github.com/syava842/azpanel/internal/paths"
 	"github.com/syava842/azpanel/internal/proxy"
+	"golang.org/x/term"
 )
 
 var version = "dev"
@@ -31,10 +32,16 @@ func main() {
 
 func run(args []string) int {
 	if len(args) == 0 {
+		// В терминале — меню частых действий; из скрипта — справка.
+		if term.IsTerminal(int(os.Stdin.Fd())) {
+			return report(cmdMenu(realConsole()))
+		}
 		usage()
 		return 2
 	}
 	switch args[0] {
+	case "menu":
+		return report(cmdMenu(realConsole()))
 	case "version":
 		fmt.Println(version)
 		return 0
@@ -160,6 +167,7 @@ func runSessions() error {
 
 func usage() {
 	fmt.Fprint(os.Stderr, `Использование:
+  azpanel                              меню: состояние, пользователи, пароль, обновление (в терминале)
   azpanel version
   azpanel install                      мастер установки (вопросы 1-12, Enter — умолчание)
   azpanel install --non-interactive    без вопросов: ответы в AZPANEL_MODE, AZPANEL_ACCESS, AZPANEL_DOMAIN,
@@ -174,7 +182,11 @@ func usage() {
   azpanel proxy                        агент прокси для VPS с proxy.sh (запускает systemd)
   azpanel panel passwd [--user ИМЯ]    задать пароль администратора панели
   azpanel user list                    пользователи панели
-  azpanel user add <логин> [--admin]   новый пользователь (по умолчанию роль «пользователь»), пароль — случайный
+  azpanel user add <логин> [--admin] [--password]
+                                       новый пользователь (--admin — администратор); пароль случайный,
+                                       с --password — свой (спросит дважды)
+  azpanel user passwd <логин> [--generate]
+                                       сменить пароль: свой (спросит дважды) или случайный
   azpanel user reset <логин>           новый пароль, 2FA выключить, сессии завершить
   azpanel limit set <клиент> <число>   лимит одновременных подключений OpenVPN
   azpanel limit unset <клиент>         снять лимит

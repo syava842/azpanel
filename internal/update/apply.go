@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/syava842/azpanel/internal/fsutil"
+	"github.com/syava842/azpanel/internal/paths"
 )
 
 const (
@@ -399,13 +400,13 @@ func skipInBackup(rel string) bool {
 const defaultKeepBackups = 3
 
 // pruneBackups оставляет последние KeepBackups бэкапов обновления (свежий
-// keep остаётся всегда). Чужие файлы в backup/ не трогаются.
+// keep остаётся всегда). Чужие файлы в backup/azpanel не трогаются.
 func (e *Env) pruneBackups(keep string) {
 	n := e.KeepBackups
 	if n <= 0 {
 		n = defaultKeepBackups
 	}
-	list, err := filepath.Glob(e.p("backup", "update-*.tar.gz"))
+	list, err := filepath.Glob(e.p("backup", paths.BackupSelfDir, "update-*.tar.gz"))
 	if err != nil || len(list) <= n {
 		return
 	}
@@ -434,11 +435,11 @@ func (e *Env) pruneBackups(keep string) {
 	}
 }
 
-// backup пишет backup/update-<версия>-<дата>.tar.gz с etc/ и data/ потоком во
+// backup пишет backup/azpanel/update-<версия>-<дата>.tar.gz с etc/ и data/ потоком во
 // временный файл (в памяти архив не собирается: на маленьком VPS это риск OOM
 // посреди обновления). База — снимок VACUUM INTO, а не копия живого файла.
 func (e *Env) backup(ctx context.Context) (path string, err error) {
-	dir := e.p("backup")
+	dir := e.p("backup", paths.BackupSelfDir)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}

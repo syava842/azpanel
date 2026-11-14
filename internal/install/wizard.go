@@ -1058,4 +1058,5 @@ func (w *Wizard) report(a Answers, p *plan) {
 		w.printf("%s\n", l)
 	}
 	w.printf("Проверка установки: azpanel doctor\n")
+	w.printf("Пароли, администраторы, обновление — меню: azpanel\n")
 }

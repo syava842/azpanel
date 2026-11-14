@@ -46,6 +46,10 @@ func Run(ctx context.Context, cfg config.Config, version string, ensureHook func
 	}
 	defer hookW.Close()
 	log := logx.New(nodeW)
+	// До первого обращения к бэкапам: списки и архивы ищутся уже по-новому.
+	if err := paths.MigrateBackupLayout(); err != nil {
+		log.Warn("бэкапы не разложены по подкаталогам", "err", err)
+	}
 
 	checkHook := func() {
 		changed, err := ensureHook()
@@ -153,11 +157,11 @@ func startAPI(ctx context.Context, exit func(), cfg config.Config, version strin
 	go tasks.RunRotation(ctx)
 	routing := &antizapret.Routing{
 		ConfigDir: filepath.Join(n.AntiZapretDir, "config"),
-		Backups:   &antizapret.Backups{Dir: filepath.Join(paths.Backup(), "antizapret")},
+		Backups:   &antizapret.Backups{Dir: paths.BackupLists()},
 	}
 	az := &AZUpdater{
 		Tasks: tasks, Dir: n.AntiZapretDir, RootDir: filepath.Dir(n.AntiZapretDir),
-		DataDir: paths.Data(), BackupDir: paths.Backup(), Record: antizapret.InstalledFile{Path: filepath.Join(paths.Data(), "antizapret.json")},
+		DataDir: paths.Data(), BackupDir: paths.BackupAntiZapret(), Record: antizapret.InstalledFile{Path: filepath.Join(paths.Data(), "antizapret.json")},
 		Inventory:  antizapret.Inventory{PKI: n.EasyRSAPKI, WireGuardDir: n.WireGuardDir},
 		EnsureHook: ensureHook, Log: log, Now: time.Now,
 	}

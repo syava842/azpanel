@@ -522,7 +522,7 @@ func NewNginx() *Nginx {
 		Remove:    os.Remove,
 		Symlink:   os.Symlink,
 		Readlink:  os.Readlink,
-		BackupDir: path.Join(filepath.ToSlash(paths.Backup()), "nginx"),
+		BackupDir: filepath.ToSlash(paths.BackupNginx()),
 		Run:       runCombined,
 		Now:       time.Now,
 	}
@@ -530,7 +530,7 @@ func NewNginx() *Nginx {
 
 func (n *Nginx) backupDir() string {
 	if n.BackupDir == "" {
-		return path.Join(filepath.ToSlash(paths.Backup()), "nginx")
+		return filepath.ToSlash(paths.BackupNginx())
 	}
 	return n.BackupDir
 }

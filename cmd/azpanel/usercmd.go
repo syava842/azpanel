@@ -29,31 +29,88 @@ const (
 	resetDigits  = "23456789"
 )
 
-// cmdUser — «azpanel user list», «azpanel user add <логин> [--admin]» и
+// cmdUser — «azpanel user list», «azpanel user add <логин> [--admin]
+// [--password]», «azpanel user passwd <логин> [--generate]» и
 // «azpanel user reset <логин>».
 func cmdUser(args []string, out io.Writer) error {
+	c := realConsole()
+	c.out = out
+	return cmdUserWith(args, c)
+}
+
+func cmdUserWith(args []string, c *console) error {
+	out := c.out
 	if len(args) == 0 {
 		return errUsage
 	}
 	switch args[0] {
 	case "add":
-		role := store.RoleUser
-		if len(args) == 3 && args[2] == "--admin" {
-			role = store.RoleAdmin
-		} else if len(args) != 2 {
+		// --admin — роль администратора; --password — задать свой пароль
+		// (спросит дважды), иначе пароль случайный.
+		if len(args) < 2 {
 			return errUsage
+		}
+		role, own := store.RoleUser, false
+		for _, a := range args[2:] {
+			switch a {
+			case "--admin":
+				role = store.RoleAdmin
+			case "--password":
+				own = true
+			default:
+				return errUsage
+			}
+		}
+		login := strings.ToLower(strings.TrimSpace(args[1]))
+		if !install.ValidLogin(login) {
+			return errors.New("логин: 3-32 знака, строчные латинские буквы, цифры и _ . -")
+		}
+		pw := ""
+		if own {
+			var err error
+			if pw, err = c.ownPassword(login); err != nil {
+				return err
+			}
 		}
 		st, err := openPanelStore()
 		if err != nil {
 			return err
 		}
 		defer st.Close()
-		login, pw, err := userAdd(context.Background(), st, args[1], role, time.Now())
+		login, shown, err := userAdd(context.Background(), st, login, role, pw, time.Now())
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "Пользователь %s (%s) создан. Пароль: %s\n", login, roleName(role), pw)
-		fmt.Fprintln(out, "Пароль показан один раз; при первом входе панель потребует сменить его.")
+		what := "Пользователь " + login + " создан"
+		if role == store.RoleAdmin {
+			what = "Администратор " + login + " создан"
+		}
+		printPasswordResult(c, what, shown)
+		return nil
+	case "passwd":
+		// Свой пароль (спросит дважды) или --generate — случайный.
+		if len(args) < 2 || len(args) > 3 || (len(args) == 3 && args[2] != "--generate") {
+			return errUsage
+		}
+		login := strings.ToLower(strings.TrimSpace(args[1]))
+		pw := ""
+		if len(args) == 2 {
+			var err error
+			if pw, err = c.ownPassword(login); err != nil {
+				return err
+			}
+		}
+		st, err := openPanelStore()
+		if err != nil {
+			return err
+		}
+		defer st.Close()
+		shown, err := userSetPassword(context.Background(), st, login, pw, time.Now())
+		if err != nil {
+			return err
+		}
+		printPasswordResult(c, "Пароль пользователя "+login+" изменён", shown)
+		fmt.Fprintln(out, "Сессии пользователя завершены, двухфакторная проверка выключена.")
 		return nil
 	case "list":
 		if len(args) != 1 {
@@ -139,22 +196,30 @@ func newResetPassword() (string, error) {
 	return s, nil
 }
 
-// userAdd создаёт пользователя со случайным паролем и обязательной сменой при
-// первом входе; запись в журнале от «root (консоль)».
-func userAdd(ctx context.Context, st *store.Store, login, role string, now time.Time) (string, string, error) {
+// userAdd создаёт пользователя. pw пуст — пароль случайный, он возвращается
+// вторым значением, и при первом входе его придётся сменить; свой пароль
+// проверяется по правилам панели, не возвращается и смены не требует. Запись
+// в журнале от «root (консоль)».
+func userAdd(ctx context.Context, st *store.Store, login, role, pw string, now time.Time) (string, string, error) {
 	login = strings.ToLower(strings.TrimSpace(login))
 	if !install.ValidLogin(login) {
 		return "", "", errors.New("логин: 3-32 знака, строчные латинские буквы, цифры и _ . -")
 	}
-	pw, err := newResetPassword()
-	if err != nil {
+	generated := ""
+	if pw == "" {
+		var err error
+		if generated, err = newResetPassword(); err != nil {
+			return "", "", err
+		}
+		pw = generated
+	} else if err := install.ValidatePassword(login, pw); err != nil {
 		return "", "", err
 	}
 	hash, err := panel.HashPassword(pw)
 	if err != nil {
 		return "", "", err
 	}
-	_, err = st.CreateUser(ctx, store.User{Login: login, Hash: hash, Role: role, MustChange: true, Created: now.Unix()})
+	_, err = st.CreateUser(ctx, store.User{Login: login, Hash: hash, Role: role, MustChange: generated != "", Created: now.Unix()})
 	if errors.Is(err, store.ErrLoginTaken) {
 		return "", "", fmt.Errorf("логин %q уже занят", login)
 	}
@@ -164,7 +229,32 @@ func userAdd(ctx context.Context, st *store.Store, login, role string, now time.
 	if err := st.Audit(ctx, store.AuditEntry{TS: now.Unix(), User: consoleUser, Action: "user_create", Target: login, After: roleName(role)}); err != nil {
 		return "", "", err
 	}
-	return login, pw, nil
+	return login, generated, nil
+}
+
+// userSetPassword меняет пароль: pw пуст — случайный (возвращается, при
+// входе его придётся сменить), иначе свой (проверяется, не возвращается).
+// Сессии завершаются, 2FA выключается — как при любом сбросе из консоли.
+func userSetPassword(ctx context.Context, st *store.Store, login, pw string, now time.Time) (string, error) {
+	login = strings.ToLower(strings.TrimSpace(login))
+	if pw == "" {
+		return userReset(ctx, st, login, "", now)
+	}
+	if err := install.ValidatePassword(login, pw); err != nil {
+		return "", err
+	}
+	u, err := st.UserByLogin(ctx, login)
+	if errors.Is(err, store.ErrNotFound) {
+		return "", fmt.Errorf("пользователь %q не найден", login)
+	}
+	if err != nil {
+		return "", err
+	}
+	hash, err := panel.HashPassword(pw)
+	if err != nil {
+		return "", err
+	}
+	return "", resetUser(ctx, st, u, hash, false, now)
 }
 
 func roleName(role string) string {

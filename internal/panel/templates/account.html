@@ -8,6 +8,8 @@
 <h2>Пароль</h2>
 <form method="post" action="{{url "/account/password"}}" class="card narrow">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
+  {{/* Скрытый логин: по нему менеджер паролей браузера понимает, чей пароль обновить. */}}
+  <input type="text" name="username" value="{{.User}}" autocomplete="username" class="sr-only" tabindex="-1" aria-hidden="true" readonly>
   <label>Текущий пароль
     <input type="password" name="old" autocomplete="current-password" required>
   </label>

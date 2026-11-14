@@ -143,6 +143,7 @@ func layout() []dirMode {
 	return []dirMode{
 		{paths.Root(), 0o755}, {paths.Bin(), 0o755}, {paths.Etc(), 0o700},
 		{paths.Log(), 0o700}, {paths.Data(), 0o700}, {paths.Backup(), 0o700},
+		{paths.BackupSelf(), 0o700}, {paths.BackupAntiZapret(), 0o700}, {paths.BackupLists(), 0o700}, {paths.BackupNginx(), 0o700},
 	}
 }
 
@@ -261,7 +262,7 @@ func Uninstall(o Options) error {
 	}
 	doBackup := o.Backup != nil && !o.SkipBackup
 	if doBackup {
-		what = "сначала бэкап AntiZapret (client.sh 8) в " + filepath.Join(paths.Backup(), "antizapret") + "; затем " + what
+		what = "сначала бэкап AntiZapret (client.sh 8) в " + paths.BackupAntiZapret() + "; затем " + what
 	}
 	fmt.Fprintf(o.Out, "Будет удалено: %s\n", what)
 	if !o.Yes && !confirm(o.In, o.Out, "Продолжить? [y/N]: ") {
@@ -364,7 +365,7 @@ func AntiZapretBackup(azDir string) error {
 	if err != nil {
 		return err
 	}
-	dir := filepath.Join(paths.Backup(), "antizapret")
+	dir := paths.BackupAntiZapret()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
