@@ -1,0 +1,54 @@
+{{define "head"}}<meta http-equiv="refresh" content="15">{{end}}
+{{define "content"}}
+<h1>Главная</h1>
+
+{{if .SystemErr}}<div class="error">{{.SystemErr}}</div>{{else}}
+<div class="tiles">
+  {{range .Tiles}}
+  <div class="tile{{if .Bad}} tile-bad{{end}}">
+    <div class="tile-k">{{.Name}}</div>
+    <div class="tile-v">{{.Value}}</div>
+    {{if .Note}}<div class="tile-n">{{.Note}}</div>{{end}}
+  </div>
+  {{end}}
+</div>
+{{end}}
+
+{{if .VPNErr}}<div class="error">{{.VPNErr}}</div>{{else}}
+<div class="tiles">
+  {{range .VPN}}
+  <a class="tile tile-link" href="{{url .Href}}">
+    <div class="tile-k">{{.Title}}</div>
+    <div class="tile-v">{{if $.OnlineUnknown}}—{{else}}{{.Online}}{{end}} <span class="tile-of">онлайн из {{.Total}}</span></div>
+    <div class="tile-n">{{if .Blocked}}<span class="bad">заблокировано: {{.Blocked}}</span>{{else}}заблокированных нет{{end}}{{if .Expiring}} · <span class="warn">сертификат истекает: {{.Expiring}}</span>{{end}}</div>
+  </a>
+  {{end}}
+</div>
+{{end}}
+
+{{if .Services}}
+<details class="card fold">
+  <summary>Службы AntiZapret: {{if .ServicesBad}}<span class="bad">с ошибкой — {{.ServicesBad}}</span>{{else}}<span class="ok">все работают</span>{{end}} <span class="muted">· подробнее</span></summary>
+  <table>
+    <tbody>
+    {{range .Services}}
+    <tr><td>{{.Unit}}</td><td class="{{if .Bad}}bad{{else}}ok{{end}}">{{.State}}</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+</details>
+{{end}}
+
+{{if .Ranges}}
+<h2>История</h2>
+<p class="ranges">{{range .Ranges}}{{if .Current}}<b>{{.Name}}</b>{{else}}<a href="{{url .Href}}">{{.Name}}</a>{{end}} {{end}}</p>
+{{if .HistoryErr}}<div class="error">{{.HistoryErr}}</div>{{else}}
+<div class="charts">
+  <figure><figcaption>Процессор</figcaption>{{.Charts.CPU}}</figure>
+  <figure><figcaption>Память</figcaption>{{.Charts.Memory}}</figure>
+  <figure><figcaption>Сеть</figcaption>{{.Charts.Net}}</figure>
+  <figure><figcaption>Онлайн</figcaption>{{.Charts.Online}}</figure>
+</div>
+{{end}}
+{{end}}
+{{end}}

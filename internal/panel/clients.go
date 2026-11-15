@@ -96,13 +96,18 @@ func (s *Server) lookup(w http.ResponseWriter, r *http.Request) (nodeapi.Client,
 	return nodeapi.Client{}, false
 }
 
-func (s *Server) clientsList(w http.ResponseWriter, r *http.Request) {
+func (s *Server) clientsList(w http.ResponseWriter, r *http.Request) { s.clientsPage(w, r, nil) }
+
+// clientsPage — список клиентов; sec не nil — вкладка «Клиенты» раздела
+// OpenVPN или WireGuard: только клиенты с таким профилем.
+func (s *Server) clientsPage(w http.ResponseWriter, r *http.Request, sec *vpnSection) {
 	list, err := s.nodeFor(r).Clients(r.Context())
 	if err != nil {
 		st, tx := s.nodeErr(err)
 		s.errorPage(w, r, st, tx)
 		return
 	}
+	s.noteWG(r, list)
 	online := map[string]int{}
 	sessErr := ""
 	if ss, err := s.nodeFor(r).Sessions(r.Context()); err != nil {
@@ -145,6 +150,9 @@ func (s *Server) clientsList(w http.ResponseWriter, r *http.Request) {
 		if q != "" && !strings.Contains(strings.ToLower(c.Name), q) {
 			continue
 		}
+		if sec != nil && !hasKind(c, sec.Kind) {
+			continue
+		}
 		row := clientRow{Name: c.Name, Href: clientHref(c.Name), OpenVPN: c.OpenVPN, WG: c.WireGuard,
 			Online: online[c.Name], Limit: "—", Blocked: c.Blocked}
 		row.Cert, row.CertSoon = certText(c.CertExpires)
@@ -174,7 +182,10 @@ func (s *Server) clientsList(w http.ResponseWriter, r *http.Request) {
 	sortKey := r.URL.Query().Get("sort")
 	sortRows(rows, sortKey)
 	data := map[string]any{"Rows": rows, "Q": r.URL.Query().Get("q"), "NoOnline": sessErr != "",
-		"Sort": sortKey, "HasStore": s.Store != nil}
+		"Sort": sortKey, "HasStore": s.Store != nil, "Base": r.URL.Path}
+	if sec != nil {
+		data["VPN"], data["Base"] = *sec, sec.Base+"/clients"
+	}
 	if sessErr != "" {
 		data["Error"] = sessErr
 	}

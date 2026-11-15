@@ -51,7 +51,7 @@ func post(e *testEnv, c *http.Cookie, path string, f url.Values) *httptest.Respo
 
 func TestClientsList(t *testing.T) {
 	e, c, _ := clientsEnv(t)
-	rec := get(e, c, "/")
+	rec := get(e, c, "/clients")
 	if rec.Code != 200 {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
@@ -69,7 +69,7 @@ func TestClientsList(t *testing.T) {
 		t.Error("срок меньше 30 дней не выделен")
 	}
 
-	rec = get(e, c, "/?q=TeSt")
+	rec = get(e, c, "/clients?q=TeSt")
 	body = rec.Body.String()
 	if !strings.Contains(body, "azpanel-test-1") || strings.Contains(body, ">bob<") {
 		t.Errorf("фильтр: %s", body)
@@ -78,7 +78,7 @@ func TestClientsList(t *testing.T) {
 
 func TestClientsListEscapesName(t *testing.T) {
 	e, c, _ := clientsEnv(t)
-	body := get(e, c, "/").Body.String()
+	body := get(e, c, "/clients").Body.String()
 	if strings.Contains(body, "<script>") || !strings.Contains(body, "&lt;script&gt;") {
 		t.Fatalf("имя не экранировано: %s", body)
 	}
@@ -89,7 +89,7 @@ func TestClientsListAgentDown(t *testing.T) {
 	e.node.ClientsFn = func(context.Context) ([]nodeapi.Client, error) {
 		return nil, &nodeapi.Error{Status: 500, Message: "сбой агента"}
 	}
-	rec := get(e, c, "/")
+	rec := get(e, c, "/clients")
 	if rec.Code != 502 || !strings.Contains(rec.Body.String(), "сбой агента") {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}

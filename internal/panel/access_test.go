@@ -148,7 +148,7 @@ func TestPermissionsEveryRouteAsUser(t *testing.T) {
 			if code := get(e, user, pathAccountOnce).Code; code != http.StatusSeeOther {
 				t.Errorf("%s: код %d, ждали 303", pattern, code)
 			}
-		case strings.HasPrefix(pattern, "GET /account") || pattern == "GET /{$}":
+		case strings.HasPrefix(pattern, "GET /account") || pattern == "GET /{$}" || pattern == "GET /clients":
 			m, p := concrete(pattern, ownClient, bob.ID)
 			if code := send(e, user, csrf, m, p); code != http.StatusOK {
 				t.Errorf("%s: код %d, ждали 200", pattern, code)

@@ -89,18 +89,18 @@ func TestClientsListSortsByTraffic(t *testing.T) {
 	until := histNow.Add(48 * time.Hour).Unix()
 	e.srv.Store.SaveCard(ctx, store.Card{Node: store.LocalNode, Name: "wg-only", AccessUntil: &until})
 	pos := func(body, name string) int { return strings.Index(body, ">"+name+"</a>") }
-	body := get(e, c, "/?sort=traffic").Body.String()
+	body := get(e, c, "/clients?sort=traffic").Body.String()
 	if !(pos(body, "bob") < pos(body, "wg-only") && pos(body, "wg-only") < pos(body, "azpanel-test-1")) {
 		t.Fatalf("порядок по трафику: %s", body)
 	}
 	if !strings.Contains(body, "10.0 МБ") || !strings.Contains(body, "2026-11-06") {
 		t.Fatalf("нет трафика или срока: %s", body)
 	}
-	body = get(e, c, "/?sort=until").Body.String()
+	body = get(e, c, "/clients?sort=until").Body.String()
 	if pos(body, "wg-only") > pos(body, "azpanel-test-1") {
 		t.Fatalf("клиент со сроком должен быть первым: %s", body)
 	}
-	body = get(e, c, "/").Body.String()
+	body = get(e, c, "/clients").Body.String()
 	if !(pos(body, "azpanel-test-1") < pos(body, "bob")) {
 		t.Fatalf("порядок по имени: %s", body)
 	}
@@ -171,21 +171,22 @@ func TestMonitorDenialsAndFlapping(t *testing.T) {
 		return out, nil
 	}
 	e.srv.Collector = &Collector{flap: map[string]bool{"alice": true}}
-	body := get(e, c, "/monitor").Body.String()
+	body := get(e, c, "/openvpn").Body.String()
 	if !since.Equal(histNow.Add(-24 * time.Hour)) {
 		t.Errorf("since = %v", since)
 	}
 	if !strings.Contains(body, "превышен лимит подключений: 3 из 2") || !strings.Contains(body, ">d00<") || !strings.Contains(body, ">d49<") || strings.Contains(body, ">d50<") {
 		t.Errorf("отказы: %s", body)
 	}
-	if strings.Count(body, "адрес меняется часто — возможно") != 1 {
-		t.Errorf("пометка смены адреса: %s", body)
+	// Пометка смены адреса — у WireGuard: его сеансы в своём разделе.
+	if wg := get(e, c, "/wireguard").Body.String(); strings.Count(wg, "адрес меняется часто — возможно") != 1 {
+		t.Errorf("пометка смены адреса: %s", wg)
 	}
 	if strings.Contains(body, "Город") {
 		t.Error("Geo nil: столбцов быть не должно")
 	}
-	if !strings.Contains(body, "<svg") || !strings.Contains(body, "?range=7d") {
-		t.Error("нет графиков ресурсов")
+	if home := get(e, c, "/").Body.String(); !strings.Contains(home, "<svg") || !strings.Contains(home, "?range=7d") {
+		t.Error("нет графиков ресурсов на главной")
 	}
 }
 
@@ -196,7 +197,7 @@ func TestMonitorOldAgentWithoutDenials(t *testing.T) {
 	e.node.DenialsFn = func(context.Context, time.Time) ([]nodeapi.Denial, error) {
 		return nil, &nodeapi.Error{Status: 404, Message: "not found"}
 	}
-	rec := get(e, c, "/monitor")
+	rec := get(e, c, "/openvpn")
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "агент не поддерживает журнал отказов") {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
@@ -212,7 +213,7 @@ func TestMonitorChartsFromHistory(t *testing.T) {
 		e.srv.Store.AddResource(ctx, store.LocalNode, store.ResourcePoint{TS: histNow.Add(-time.Duration(3-i) * time.Minute).Unix(),
 			CPU: float64(10 * (i + 1)), MemUsed: 1, MemTotal: 2, NetRx: int64(1000 * i), NetTx: int64(500 * i), Online: i})
 	}
-	body := get(e, c, "/monitor?range=1d").Body.String()
+	body := get(e, c, "/?range=1d").Body.String()
 	if strings.Contains(body, "нет данных") || strings.Count(body, `class="line s1"`) != 4 {
 		t.Fatalf("графики: %s", body)
 	}

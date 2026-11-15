@@ -282,6 +282,23 @@ ul.list li:last-child { border-bottom: 0; padding-bottom: 0; }
   .cols { grid-template-columns: minmax(0, 1fr); }
 }
 
+/* Плитки главной, вкладки разделов, сворачиваемые блоки. */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: .75rem; margin-bottom: 1rem; }
+.tile { display: block; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: .85rem 1rem; color: var(--fg); }
+.tile-link:hover { border-color: var(--accent); text-decoration: none; }
+.tile-bad { border-color: var(--bad-line); }
+.tile-k { color: var(--muted); font-size: .78rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.tile-v { font-size: 1.45rem; font-weight: 650; margin-top: .15rem; }
+.tile-of { font-size: .9rem; font-weight: 450; color: var(--muted); }
+.tile-n { color: var(--muted); font-size: .85rem; margin-top: .15rem; }
+.tabs { display: flex; gap: .25rem; flex-wrap: wrap; border-bottom: 1px solid var(--line); margin: -.5rem 0 1.25rem; }
+.tabs a { padding: .5rem .9rem; margin-bottom: -1px; border-bottom: 2px solid transparent; color: var(--muted); font-weight: 550; }
+.tabs a:hover { color: var(--fg); text-decoration: none; }
+.tabs a.on { color: var(--accent); border-bottom-color: var(--accent); }
+details.fold > summary { cursor: pointer; font-weight: 550; list-style-position: inside; }
+details.fold[open] > summary { margin-bottom: .75rem; }
+tfoot th { text-transform: none; letter-spacing: 0; font-size: .925rem; color: var(--fg); }
+
 /* ------------------------------------------------------------ формы */
 
 label { display: block; margin-bottom: .9rem; font-weight: 550; font-size: .925rem; }

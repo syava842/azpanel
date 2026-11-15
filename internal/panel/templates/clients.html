@@ -1,7 +1,7 @@
 {{define "content"}}
-<h1>Клиенты</h1>
+{{if .VPN}}{{template "vpntabs" .VPN}}{{else}}<h1>Клиенты</h1>{{end}}
 <div class="toolbar">
-  <form method="get" action="{{url "/"}}" class="inline">
+  <form method="get" action="{{url .Base}}" class="inline">
     <input type="search" name="q" value="{{.Q}}" placeholder="Поиск по имени">
     <button type="submit">Найти</button>
   </form>
@@ -9,7 +9,7 @@
 </div>
 <div class="table-wrap">
 <table>
-  <thead><tr><th><a href="{{url "/"}}?sort=name&q={{.Q}}">Имя</a></th><th>Тип</th><th>Сертификат</th><th><a href="{{url "/"}}?sort=online&q={{.Q}}">Онлайн</a></th><th>Лимит</th>{{if .HasStore}}<th><a href="{{url "/"}}?sort=traffic&q={{.Q}}">Трафик 30 дн.</a></th><th><a href="{{url "/"}}?sort=until&q={{.Q}}">Доступ до</a></th>{{end}}<th>Состояние</th></tr></thead>
+  <thead><tr><th><a href="{{url .Base}}?sort=name&q={{.Q}}">Имя</a></th><th>Тип</th><th>Сертификат</th><th><a href="{{url .Base}}?sort=online&q={{.Q}}">Онлайн</a></th><th>Лимит</th>{{if .HasStore}}<th><a href="{{url .Base}}?sort=traffic&q={{.Q}}">Трафик 30 дн.</a></th><th><a href="{{url .Base}}?sort=until&q={{.Q}}">Доступ до</a></th>{{end}}<th>Состояние</th></tr></thead>
   <tbody>
   {{range .Rows}}
   <tr>

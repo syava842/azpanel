@@ -77,6 +77,8 @@ type Node interface {
 var _ Node = (*nodeapi.HTTPClient)(nil)
 
 type Server struct {
+	// wg — есть ли на узлах клиенты WireGuard (раздел в меню); создаётся в Handler.
+	wg      *wgFlags
 	Node    Node
 	Version string
 	// SessionTTL — срок жизни сессии; ноль — семь суток.
@@ -184,6 +186,9 @@ func (s *Server) Handler() http.Handler {
 	if s.Sleep == nil {
 		s.Sleep = time.Sleep
 	}
+	if s.wg == nil {
+		s.wg = &wgFlags{used: map[int64]bool{}}
+	}
 	if s.Now == nil {
 		s.Now = time.Now
 	}
@@ -269,7 +274,12 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /settings/import", s.settingsImport)
 
 	// Всё остальное — за входом; права каждого маршрута — в таблице routes.
-	s.route(mux, "GET /monitor", s.monitor)
+	s.route(mux, "GET /monitor", s.monitorRedirect)
+	for _, sec := range []vpnSection{sectionOpenVPN, sectionWireGuard} {
+		s.route(mux, "GET "+sec.Base, s.vpnSessions(sec))
+		s.route(mux, "GET "+sec.Base+"/clients", s.vpnClients(sec))
+		s.route(mux, "GET "+sec.Base+"/stats", s.vpnStats(sec))
+	}
 	s.route(mux, "GET /audit", s.auditPage)
 	s.route(mux, "GET /clients/new", s.newForm)
 	s.route(mux, "POST /clients", s.createClient)
@@ -368,7 +378,8 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /update", s.updateStart)
 	s.route(mux, "POST /update/check", s.updateCheck)
 
-	s.route(mux, "GET /{$}", s.clientsList)
+	s.route(mux, "GET /{$}", s.home)
+	s.route(mux, "GET /clients", s.clientsList)
 	s.route(mux, "/", func(w http.ResponseWriter, r *http.Request) {
 		s.errorPage(w, r, http.StatusNotFound, "страница не найдена")
 	})
@@ -431,7 +442,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, page
 		}
 		if !sess.MFAPending { // до ввода кода меню и «Выйти» не показываются
 			d["User"] = sess.User
-			d["Nav"] = s.nav(r.URL.Path, sess.IsAdmin())
+			d["Nav"] = s.nav(r.URL.Path, sess.IsAdmin(), s.wgShown(r))
 		}
 	}
 	d["Version"] = s.Version

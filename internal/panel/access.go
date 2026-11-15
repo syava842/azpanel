@@ -76,10 +76,16 @@ var routes = map[string]access{
 	"POST /codes/{id}/revoke":          accAdmin,
 	"POST /codes/batch/{batch}/revoke": accAdmin,
 
-	"GET /monitor":     accAdmin,
-	"GET /audit":       accAdmin,
-	"GET /clients/new": accAdmin,
-	"POST /clients":    accAdmin,
+	"GET /monitor":           accAdmin,
+	"GET /openvpn":           accAdmin,
+	"GET /openvpn/clients":   accAdmin,
+	"GET /openvpn/stats":     accAdmin,
+	"GET /wireguard":         accAdmin,
+	"GET /wireguard/clients": accAdmin,
+	"GET /wireguard/stats":   accAdmin,
+	"GET /audit":             accAdmin,
+	"GET /clients/new":       accAdmin,
+	"POST /clients":          accAdmin,
 
 	"GET /routing":                       accAdmin,
 	"GET /routing/files/{name}":          accAdmin,
@@ -142,8 +148,9 @@ var routes = map[string]access{
 	"POST /warp/update":  accAdmin,
 	"POST /warp/install": accAdmin,
 
-	"GET /{$}": accAny,
-	"/":        accAny,
+	"GET /{$}":     accAny,
+	"GET /clients": accAny,
+	"/":            accAny,
 
 	"GET /clients/{name}": accAny,
 	"GET /clients/{name}/profiles/{kind}/{variant}/{file}": accAny,

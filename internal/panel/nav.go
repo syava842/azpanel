@@ -17,20 +17,22 @@ type navGroup struct {
 }
 
 // nav собирает боковое меню для пути path (без base_path). Пользователь без
-// роли администратора видит только клиентов.
-func (s *Server) nav(path string, admin bool) []navGroup {
-	clients := navItem{Href: "/", Label: "Клиенты", Icon: "users", Match: []string{"/clients/"}}
+// роли администратора видит только клиентов. wg — показывать WireGuard (на
+// сервере есть его клиенты).
+func (s *Server) nav(path string, admin, wg bool) []navGroup {
 	if !admin {
+		clients := navItem{Href: "/", Label: "Клиенты", Icon: "users", Match: []string{"/clients/"}}
 		groups := []navGroup{{Items: []navItem{clients}}}
 		markActive(groups, path)
 		return groups
 	}
-	vpn := []navItem{
-		clients,
-		{Href: "/monitor", Label: "Сейчас", Icon: "activity"},
-		{Href: "/routing", Label: "Маршрутизация", Icon: "route"},
-		{Href: "/proxy", Label: "Прокси", Icon: "globe"},
+	vpn := []navItem{{Href: "/openvpn", Label: "OpenVPN", Icon: "network", Match: []string{"/clients/"}}}
+	if wg {
+		vpn = append(vpn, navItem{Href: "/wireguard", Label: "WireGuard", Icon: "zap"})
 	}
+	vpn = append(vpn,
+		navItem{Href: "/routing", Label: "Маршрутизация", Icon: "route"},
+		navItem{Href: "/proxy", Label: "Прокси", Icon: "globe"})
 	if s.Experimental {
 		vpn = append(vpn,
 			navItem{Href: "/nodes", Label: "Узлы", Icon: "server"},
@@ -53,7 +55,8 @@ func (s *Server) nav(path string, admin bool) []navGroup {
 	if s.Experimental {
 		system = append(system, navItem{Href: "/update", Label: "Обновление", Icon: "rotate"})
 	}
-	groups := []navGroup{{Title: "VPN", Items: vpn}, {Title: "Сервисы", Items: services}, {Title: "Система", Items: system}}
+	home := navGroup{Items: []navItem{{Href: "/", Label: "Главная", Icon: "home", Match: []string{"/monitor"}}}}
+	groups := []navGroup{home, {Title: "VPN", Items: vpn}, {Title: "Сервисы", Items: services}, {Title: "Система", Items: system}}
 	markActive(groups, path)
 	return groups
 }

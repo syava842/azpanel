@@ -1,0 +1,61 @@
+{{define "head"}}{{if eq .VPN.Tab "sessions"}}<meta http-equiv="refresh" content="15">{{end}}{{end}}
+{{define "content"}}
+{{template "vpntabs" .VPN}}
+
+{{if eq .VPN.Tab "sessions"}}
+{{if .SessionsErr}}<div class="error">{{.SessionsErr}}</div>{{else}}
+<p class="muted">Онлайн: {{len .Sessions}} · ↓ {{.SumDown}} · ↑ {{.SumUp}}</p>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Клиент</th><th>Экземпляр</th><th>Адрес</th>{{if .HasGeo}}<th>Город</th><th>Провайдер</th>{{end}}<th>↓</th><th>↑</th><th>{{if eq .VPN.Kind "wireguard"}}Рукопожатие{{else}}Подключён{{end}}</th></tr></thead>
+  <tbody>
+  {{range .Sessions}}
+  <tr><td><a href="{{url .Href}}">{{.Name}}</a></td><td>{{.Instance}}</td><td>{{.Addr}}{{if .Flapping}} <span class="warn" title="адрес меняется часто">⚠ адрес меняется часто — возможно, один ключ на двух устройствах</span>{{end}}</td>{{if $.HasGeo}}<td>{{.City}}</td><td>{{.ISP}}</td>{{end}}<td>{{.Down}}</td><td>{{.Up}}</td><td>{{.Time}}</td></tr>
+  {{else}}
+  <tr><td colspan="{{if $.HasGeo}}8{{else}}6{{end}}" class="muted">Сейчас никто не подключён.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{end}}
+
+{{if eq .VPN.Kind "openvpn"}}
+<h2>Отказы за сутки</h2>
+{{if .DenialsNote}}<p class="muted">{{.DenialsNote}}</p>{{else if .DenialsErr}}<div class="error">{{.DenialsErr}}</div>{{else}}
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Время</th><th>Клиент</th><th>Экземпляр</th><th>Адрес</th><th>Причина</th></tr></thead>
+  <tbody>
+  {{range .Denials}}
+  <tr><td>{{.Time}}</td><td><a href="{{url .Href}}">{{.Name}}</a></td><td>{{.Instance}}</td><td>{{.Addr}}</td><td>{{.Reason}}</td></tr>
+  {{else}}
+  <tr><td colspan="5" class="muted">Отказов нет.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{end}}
+{{end}}
+{{end}}
+
+{{if eq .VPN.Tab "stats"}}
+<p class="ranges">{{range .Ranges}}{{if .Current}}<b>{{.Name}}</b>{{else}}<a href="{{url .Href}}">{{.Name}}</a>{{end}} {{end}}</p>
+{{if .StatsErr}}<div class="error">{{.StatsErr}}</div>{{else}}
+<p class="muted">{{.Period}} · всего ↓ {{.SumDown}} · ↑ {{.SumUp}}{{if .Both}} · у клиентов с обоими профилями трафик общий для OpenVPN и WireGuard{{end}}</p>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Клиент</th><th>↓ получил</th><th>↑ отправил</th><th>Всего</th></tr></thead>
+  <tbody>
+  {{range .Rows}}
+  <tr><td><a href="{{url .Href}}">{{.Name}}</a></td><td>{{.Down}}</td><td>{{.Up}}</td><td>{{.Total}}</td></tr>
+  {{else}}
+  <tr><td colspan="4" class="muted">За этот период трафика нет.</td></tr>
+  {{end}}
+  </tbody>
+  {{if .Rows}}<tfoot><tr><th>Итого</th><th>{{.SumDown}}</th><th>{{.SumUp}}</th><th>{{.SumTotal}}</th></tr></tfoot>{{end}}
+</table>
+</div>
+<p class="muted">График трафика клиента — на его странице.</p>
+{{end}}
+{{end}}
+{{end}}

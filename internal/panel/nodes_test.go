@@ -168,14 +168,14 @@ func TestNodePagesWithNodeParam(t *testing.T) {
 	})
 	rn := addRemoteNode(t, e, "r1", srv, fp)
 
-	body := get(e, c, "/").Body.String()
+	body := get(e, c, "/clients").Body.String()
 	if !strings.Contains(body, "local-client") || strings.Contains(body, "remote-client") {
 		t.Fatalf("по умолчанию — первый узел: %s", body)
 	}
 	if !strings.Contains(body, "?node="+strconv.FormatInt(rn.ID, 10)) {
 		t.Fatal("нет переключателя узлов")
 	}
-	rec := get(e, c, "/?node="+strconv.FormatInt(rn.ID, 10))
+	rec := get(e, c, "/clients?node="+strconv.FormatInt(rn.ID, 10))
 	if body = rec.Body.String(); !strings.Contains(body, "remote-client") || strings.Contains(body, "local-client") {
 		t.Fatalf("?node=: %s", body)
 	}
@@ -189,16 +189,16 @@ func TestNodePagesWithNodeParam(t *testing.T) {
 		t.Fatalf("выбор не запомнен: %+v", ck)
 	}
 	// Выбор в cookie действует на ссылки без ?node=.
-	r := httptest.NewRequest("GET", "/", nil)
+	r := httptest.NewRequest("GET", "/clients", nil)
 	r.AddCookie(c)
 	r.AddCookie(ck)
 	if body = e.do(r).Body.String(); !strings.Contains(body, "remote-client") {
 		t.Fatalf("cookie: %s", body)
 	}
-	if rec = get(e, c, "/?node=999"); rec.Code != 404 {
+	if rec = get(e, c, "/clients?node=999"); rec.Code != 404 {
 		t.Fatalf("неизвестный узел: %d", rec.Code)
 	}
-	if rec = get(e, c, "/?node=abc"); rec.Code != 404 {
+	if rec = get(e, c, "/clients?node=abc"); rec.Code != 404 {
 		t.Fatalf("мусор в node: %d", rec.Code)
 	}
 }
@@ -218,7 +218,7 @@ func TestOutdatedAgentGetsNoCommands(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	rn := addRemoteNode(t, e, "old", srv, agenttls.Fingerprint(srv.Certificate().Raw))
-	rec := get(e, c, "/?node="+strconv.FormatInt(rn.ID, 10))
+	rec := get(e, c, "/clients?node="+strconv.FormatInt(rn.ID, 10))
 	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "обновите агент") || hits.Load() != 0 {
 		t.Fatalf("%d hits=%d %s", rec.Code, hits.Load(), rec.Body)
 	}

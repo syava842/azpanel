@@ -20,9 +20,11 @@ func activeLabel(groups []navGroup) string {
 func TestNavActive(t *testing.T) {
 	s := &Server{}
 	for path, want := range map[string]string{
-		"/":                    "Клиенты",
-		"/clients/ivan":        "Клиенты",
-		"/clients/new":         "Клиенты",
+		"/":                    "Главная",
+		"/monitor":             "Главная",
+		"/openvpn/stats":       "OpenVPN",
+		"/clients/ivan":        "OpenVPN",
+		"/clients/new":         "OpenVPN",
 		"/settings":            "Настройки",
 		"/settings/export":     "Настройки",
 		"/settings/access":     "Доступ",
@@ -34,7 +36,7 @@ func TestNavActive(t *testing.T) {
 		"/account":             "",
 		"/routingx":            "",
 	} {
-		if got := activeLabel(s.nav(path, true)); got != want {
+		if got := activeLabel(s.nav(path, true, false)); got != want {
 			t.Errorf("%s: %q, ждали %q", path, got, want)
 		}
 	}
@@ -42,7 +44,7 @@ func TestNavActive(t *testing.T) {
 
 func TestNavRolesAndExperimental(t *testing.T) {
 	s := &Server{}
-	if g := s.nav("/", false); len(g) != 1 || len(g[0].Items) != 1 || g[0].Items[0].Label != "Клиенты" {
+	if g := s.nav("/", false, false); len(g) != 1 || len(g[0].Items) != 1 || g[0].Items[0].Label != "Клиенты" {
 		t.Fatalf("меню не-администратора: %+v", g)
 	}
 	has := func(groups []navGroup, label string) bool {
@@ -55,11 +57,32 @@ func TestNavRolesAndExperimental(t *testing.T) {
 		}
 		return false
 	}
-	if has(s.nav("/", true), "Узлы") || has(s.nav("/", true), "Обновление") {
+	if has(s.nav("/", true, false), "Узлы") || has(s.nav("/", true, false), "Обновление") {
 		t.Fatal("без experimental видны узлы или самообновление")
 	}
 	s.Experimental = true
-	if !has(s.nav("/", true), "Узлы") || !has(s.nav("/", true), "Группы") || !has(s.nav("/", true), "Обновление") {
+	if !has(s.nav("/", true, false), "Узлы") || !has(s.nav("/", true, false), "Группы") || !has(s.nav("/", true, false), "Обновление") {
 		t.Fatal("с experimental нет узлов, групп или самообновления")
+	}
+}
+
+// WireGuard в меню — только когда на сервере есть его клиенты.
+func TestNavWireGuardOnlyWhenUsed(t *testing.T) {
+	s := &Server{}
+	has := func(wg bool) bool {
+		for _, g := range s.nav("/", true, wg) {
+			for _, it := range g.Items {
+				if it.Label == "WireGuard" {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	if has(false) || !has(true) {
+		t.Fatalf("WireGuard: без клиентов %v, с клиентами %v", has(false), has(true))
+	}
+	if got := activeLabel(s.nav("/wireguard/clients", true, true)); got != "WireGuard" {
+		t.Fatalf("активный: %q", got)
 	}
 }
