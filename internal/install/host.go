@@ -54,11 +54,12 @@ func RealHost(o Options) Host {
 			l.Close()
 			return false
 		},
-		Port80Owner: port80Owner,
-		Fetch:       httpsGet,
-		Resolve:     net.LookupHost,
-		AdminExists: func(string) bool { return false },
-		LoadConfig:  func() (config.Config, error) { return config.Load(paths.ConfigFile()) },
+		Port80Owner:  port80Owner,
+		Fetch:        httpsGet,
+		Resolve:      net.LookupHost,
+		CertNotAfter: certNotAfter,
+		AdminExists:  func(string) bool { return false },
+		LoadConfig:   func() (config.Config, error) { return config.Load(paths.ConfigFile()) },
 
 		MkLayout: makeLayout,
 		CopyBinary: func() error {

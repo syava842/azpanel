@@ -198,8 +198,14 @@ func CertbotArgs(plan ACMEPlan, domain, email string) []string {
 	} else {
 		args = append(args, "--webroot", "-w", plan.Webroot)
 	}
-	return append(args, "-d", domain, "--non-interactive", "--agree-tos", "-m", email,
-		"--deploy-hook", "systemctl reload nginx")
+	args = append(args, "-d", domain, "--non-interactive", "--agree-tos")
+	// Почта необязательна: мастер её не спрашивает, задаётся AZPANEL_EMAIL.
+	if email != "" {
+		args = append(args, "-m", email)
+	} else {
+		args = append(args, "--register-unsafely-without-email")
+	}
+	return append(args, "--deploy-hook", "systemctl reload nginx")
 }
 
 // IssueLetsEncrypt выпускает сертификат. Для ACMETemp в блок на 80 подключается
@@ -207,8 +213,8 @@ func CertbotArgs(plan ACMEPlan, domain, email string) []string {
 // остаётся для продления, его удаляет uninstall. Возвращает пути к
 // сертификату и ключу.
 func (t *TLS) IssueLetsEncrypt(plan ACMEPlan, domain, email string) (certPath, keyPath string, err error) {
-	if domain == "" || email == "" {
-		return "", "", errors.New("для Let's Encrypt нужны домен и почта")
+	if domain == "" {
+		return "", "", errors.New("для Let's Encrypt нужен домен")
 	}
 	if plan.Mode == ACMETemp {
 		if err := t.MkdirAll(plan.Webroot, 0o755); err != nil {

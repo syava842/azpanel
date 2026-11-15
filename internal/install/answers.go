@@ -14,7 +14,8 @@ import (
 	"github.com/syava842/azpanel/internal/secrets"
 )
 
-// Типы установки (вопрос 1).
+// Типы установки. Мастер их не спрашивает (обычная установка — panel+node);
+// остальные задаются только AZPANEL_MODE.
 const (
 	ModePanelNode = "panel+node"
 	ModeNode      = "node"
@@ -22,15 +23,17 @@ const (
 	ModePanel     = "panel"
 )
 
-// Как открыть панель (вопрос 4).
+// Как открывать azpanel: по имени (раздел /azpanel/ в nginx) или по порту.
+// local — только 127.0.0.1, задаётся только AZPANEL_ACCESS.
 const (
 	AccessPath  = "path"
 	AccessPort  = "port"
 	AccessLocal = "local"
 )
 
-// HTTPS (вопрос 5). existing — готовый сертификат Let's Encrypt, найденный
-// в /etc/letsencrypt/live/<домен>.
+// Сертификат при HTTPS. Мастер выбирает его сам: свой сайт в nginx — его
+// сертификат; домен — существующий или новый Let's Encrypt; IP —
+// самоподписанный. own — только через AZPANEL_TLS с путями к файлам.
 const (
 	TLSExisting    = "existing"
 	TLSLetsEncrypt = "letsencrypt"
@@ -53,7 +56,8 @@ type Answers struct {
 	Domain    string
 	Access    string
 	NginxFile string // файл с server-блоком для AccessPath
-	Port      int    // порт HTTPS для AccessPort
+	Port      int    // порт для AccessPort
+	HTTPS     bool
 	TLS       string
 	CertPath  string // свой сертификат или найденный
 	KeyPath   string
@@ -82,6 +86,7 @@ const (
 	KeyAccess    = "ACCESS"
 	KeyNginxFile = "NGINX_FILE"
 	KeyPort      = "PORT"
+	KeyHTTPS     = "HTTPS"
 	KeyTLS       = "TLS"
 	KeyCert      = "CERT"
 	KeyKey       = "KEY"
@@ -99,7 +104,7 @@ const (
 )
 
 // AnswerKeys — все ключи в порядке вопросов.
-var AnswerKeys = []string{KeyMode, KeyAddress, KeyDomain, KeyAccess, KeyNginxFile, KeyPort, KeyTLS, KeyCert, KeyKey,
+var AnswerKeys = []string{KeyMode, KeyAddress, KeyPort, KeyDomain, KeyHTTPS, KeyAccess, KeyNginxFile, KeyTLS, KeyCert, KeyKey,
 	KeyEmail, KeyAdmin, KeyAdminPass, KeyMustChg, KeyTelegram, KeyTgToken, KeyTgChat, KeyBackupDir, KeyBackupDay,
 	KeyBackupKp, KeyFirewall}
 
@@ -112,7 +117,8 @@ func EnvName(key string) string { return "AZPANEL_" + key }
 // DefaultAnswers — умолчания мастера.
 func DefaultAnswers(backupDir string) Answers {
 	return Answers{
-		Port: DefaultPort, Admin: defaultAdmin, MustChange: true,
+		Mode: ModePanelNode, Access: AccessPath, Port: DefaultPort, HTTPS: true,
+		Admin: defaultAdmin, MustChange: true,
 		BackupDir: backupDir, BackupEveryDays: 1, BackupKeep: 14,
 	}
 }
@@ -197,6 +203,8 @@ func (a *Answers) set(key, v string) (err error) {
 		a.NginxFile = v
 	case KeyPort:
 		a.Port, err = atoiRange(v, 1, 65535)
+	case KeyHTTPS:
+		a.HTTPS, err = parseBool(v)
 	case KeyTLS:
 		a.TLS, err = oneOf(v, TLSExisting, TLSLetsEncrypt, TLSOwn, TLSSelfSigned)
 	case KeyCert, KeyKey:
@@ -264,7 +272,7 @@ func (a Answers) Values(withSecrets bool) map[string]string {
 	m := map[string]string{
 		KeyMode: a.Mode, KeyAddress: a.Address, KeyDomain: a.Domain, KeyAccess: a.Access,
 		KeyNginxFile: a.NginxFile, KeyTLS: a.TLS, KeyCert: a.CertPath, KeyKey: a.KeyPath, KeyEmail: a.Email,
-		KeyAdmin: a.Admin, KeyMustChg: yn(a.MustChange),
+		KeyHTTPS: yn(a.HTTPS), KeyAdmin: a.Admin, KeyMustChg: yn(a.MustChange),
 		KeyBackupDir: a.BackupDir, KeyBackupDay: strconv.Itoa(a.BackupEveryDays),
 		KeyBackupKp: strconv.Itoa(a.BackupKeep), KeyFirewall: yn(a.Firewall),
 	}
@@ -317,22 +325,14 @@ func (a Answers) Missing(set []string) []string {
 			miss = append(miss, fmt.Sprintf("%s — %s", EnvName(key), why))
 		}
 	}
-	need(KeyMode, "что ставим: "+strings.Join([]string{ModePanelNode, ModeNode, ModeProxy, ModePanel}, ", "))
-	need(KeyAccess, "как открыть панель: "+strings.Join([]string{AccessPath, AccessPort, AccessLocal}, ", "))
-	if a.Access != AccessPath && a.Access != AccessPort {
-		return miss
-	}
-	// Домен не обязателен: без него панель открывается по внешнему IP.
-	if a.Access == AccessPath {
-		return miss // сертификат у server-блока nginx свой
-	}
-	need(KeyTLS, "HTTPS: existing, letsencrypt, own, selfsigned")
-	switch a.TLS {
-	case TLSLetsEncrypt:
-		need(KeyEmail, "почта для Let's Encrypt")
-	case TLSOwn:
+	// Всё остальное имеет умолчания: путь /azpanel/, HTTPS, домен — нет
+	// (тогда IP), сертификат мастер выбирает сам.
+	if a.HTTPS && a.TLS == TLSOwn {
 		need(KeyCert, "путь к fullchain")
 		need(KeyKey, "путь к закрытому ключу")
+	}
+	if a.HTTPS && a.TLS == TLSLetsEncrypt && a.Domain == "" {
+		need(KeyDomain, "домен для Let's Encrypt")
 	}
 	return miss
 }

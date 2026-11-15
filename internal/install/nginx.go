@@ -320,18 +320,25 @@ func AcmeSnippet(webroot string) string {
 	return fmt.Sprintf("location ^~ /.well-known/acme-challenge/ {\n    root %s;\n}\n", webroot)
 }
 
-// ServerBlock — отдельный server на своём порту (файл sites-available/azpanel).
+// ServerBlock — свой server azpanel в nginx (файл sites-available/azpanel):
+// на отдельном порту или, если подходящего сайта нет, на 80/443 с разделом
+// /azpanel/. Без сертификата (cert пуст) — обычный HTTP.
 func ServerBlock(port int, cert, key, serverName string) string {
 	if serverName == "" {
 		serverName = "_"
 	}
 	var b strings.Builder
-	b.WriteString("# azpanel: отдельный порт панели\nserver {\n")
-	fmt.Fprintf(&b, "    listen %d ssl;\n", port)
-	fmt.Fprintf(&b, "    server_name %s;\n\n", serverName)
-	fmt.Fprintf(&b, "    ssl_certificate     %s;\n", cert)
-	fmt.Fprintf(&b, "    ssl_certificate_key %s;\n", key)
-	b.WriteString("    ssl_protocols TLSv1.2 TLSv1.3;\n\n")
+	b.WriteString("# azpanel: свой сайт azpanel\nserver {\n")
+	if cert == "" {
+		fmt.Fprintf(&b, "    listen %d;\n", port)
+		fmt.Fprintf(&b, "    server_name %s;\n\n", serverName)
+	} else {
+		fmt.Fprintf(&b, "    listen %d ssl;\n", port)
+		fmt.Fprintf(&b, "    server_name %s;\n\n", serverName)
+		fmt.Fprintf(&b, "    ssl_certificate     %s;\n", cert)
+		fmt.Fprintf(&b, "    ssl_certificate_key %s;\n", key)
+		b.WriteString("    ssl_protocols TLSv1.2 TLSv1.3;\n\n")
+	}
 	fmt.Fprintf(&b, "    include %s;\n", SnippetPath)
 	b.WriteString("}\n")
 	return b.String()

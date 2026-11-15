@@ -49,23 +49,23 @@ Enter оставляет значение в скобках. Перед изме
 
 ## Установка без вопросов
 
-Ответы задаются переменными `AZPANEL_*`; чего не хватает, мастер перечислит.
+Ответы задаются переменными `AZPANEL_*`; не заданные берутся по умолчанию
+(по имени, HTTPS, по IP, логин `admin`, пароль сгенерировать).
 
 ```bash
-AZPANEL_MODE=panel+node AZPANEL_ACCESS=path AZPANEL_DOMAIN=vpn.example.com \
-AZPANEL_ADMIN=admin AZPANEL_ADMIN_PASSWORD='пароль' \
+AZPANEL_DOMAIN=vpn.example.com AZPANEL_ADMIN=admin AZPANEL_ADMIN_PASSWORD='пароль' \
   bash -c "$(curl -fsSL https://raw.githubusercontent.com/syava842/azpanel/main/scripts/setup.sh)" -- --non-interactive
 ```
 
 | Переменная | Значения |
 | --- | --- |
-| `AZPANEL_MODE` | `panel+node`, `node`, `panel`, `proxy` |
-| `AZPANEL_ACCESS` | `path`, `port`, `local` |
+| `AZPANEL_PORT` | порт для открытия по порту (по умолчанию 8443) |
 | `AZPANEL_DOMAIN`, `AZPANEL_ADDRESS` | домен, внешний IP |
-| `AZPANEL_PORT` | порт HTTPS при `port` (по умолчанию 8443) |
-| `AZPANEL_TLS` | при `port`: `existing`, `letsencrypt`, `own`, `selfsigned` |
-| `AZPANEL_EMAIL` | почта для Let's Encrypt |
-| `AZPANEL_CERT`, `AZPANEL_KEY` | пути к сертификату и ключу при `own` |
+| `AZPANEL_HTTPS` | `y` (по умолчанию) или `n` |
+| `AZPANEL_ACCESS` | `path` — по имени (по умолчанию), `port` — по порту, `local` — только 127.0.0.1 |
+| `AZPANEL_TLS=own`, `AZPANEL_CERT`, `AZPANEL_KEY` | свой сертификат вместо выбранного мастером |
+| `AZPANEL_EMAIL` | почта для Let's Encrypt (необязательна) |
+| `AZPANEL_MODE` | `panel+node` (по умолчанию); остальные — для нескольких серверов |
 | `AZPANEL_ADMIN`, `AZPANEL_ADMIN_PASSWORD` | логин и пароль администратора |
 | `AZPANEL_BACKUP_DIR`, `AZPANEL_BACKUP_DAYS`, `AZPANEL_BACKUP_KEEP` | бэкапы |
 | `AZPANEL_SKIP_ANTIZAPRET=1` | не спрашивать про AntiZapret (сервер прокси) |
@@ -81,14 +81,17 @@ AZPANEL_ADMIN=admin AZPANEL_ADMIN_PASSWORD='пароль' \
 указывает на другой сервер, мастер предупредит об этом до подтверждения.
 Адрес потом меняется на странице **Настройки**.
 
-| Как открыта панель | HTTPS |
+Сертификат при HTTPS мастер выбирает сам:
+
+| Случай | Сертификат |
 | --- | --- |
-| путь `/azpanel/` в nginx | сертификат того сайта nginx, к которому подключена панель |
-| отдельный порт | на выбор: уже выпущенный Let's Encrypt · новый Let's Encrypt · свой сертификат · самоподписанный (без домена — по умолчанию) |
-| только 127.0.0.1 | не нужен |
+| по имени, в nginx есть ваш сайт | сертификат этого сайта |
+| свой сайт azpanel (по порту или сайта нет), задан домен | уже выпущенный Let's Encrypt для домена, иначе новый |
+| свой сайт azpanel, по IP | самоподписанный (браузер покажет предупреждение) |
+| `AZPANEL_TLS=own` | ваш файл |
 
 Для нового сертификата Let's Encrypt нужны домен, который указывает на этот
-сервер, почта и порт 80. Если на 80 уже работает nginx, проверка домена идёт
+сервер, и порт 80; почта необязательна. Если на 80 уже работает nginx, проверка домена идёт
 через него, остальные сайты не меняются. Продлевает certbot по своему
 расписанию; после продления nginx перезагружается сам.
 

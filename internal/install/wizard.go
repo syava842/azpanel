@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/syava842/azpanel/internal/config"
 	"github.com/syava842/azpanel/internal/paths"
@@ -38,6 +39,8 @@ type Host struct {
 	PortBusy    func(port int) bool
 	Port80Owner func() string // "" — свободен, "nginx" или имя процесса
 	Fetch       func(url string) (string, error)
+	// CertNotAfter — срок сертификата (nil — не проверять).
+	CertNotAfter func(file string) (time.Time, error)
 	// Resolve — адреса домена (nil — не проверять, куда он указывает).
 	Resolve     func(host string) ([]string, error)
 	AdminExists func(login string) bool
@@ -91,10 +94,10 @@ type step struct {
 
 // Mode-слова для вывода.
 var modeTitles = []struct{ mode, title string }{
-	{ModePanelNode, "панель + узел (AntiZapret на этом же сервере)"},
-	{ModeNode, "только узел (подключить к панели на другом сервере)"},
+	{ModePanelNode, "azpanel (AntiZapret на этом же сервере)"},
+	{ModeNode, "только управление AntiZapret (для azpanel на другом сервере)"},
 	{ModeProxy, "только прокси-агент"},
-	{ModePanel, "только панель"},
+	{ModePanel, "только веб-интерфейс azpanel"},
 }
 
 func modeTitle(mode string) string {
@@ -118,10 +121,6 @@ func (w *Wizard) Run() error {
 		if miss := a.Missing(set); len(miss) > 0 {
 			return errors.New("не хватает обязательных ответов:\n  " + strings.Join(miss, "\n  "))
 		}
-	} else {
-		if err := w.askMode(&a); err != nil {
-			return err
-		}
 	}
 	if !w.Experimental {
 		a.Telegram, a.TelegramToken, a.TelegramChat = false, "", 0 // бот отложен: ответы о нём не берутся
@@ -144,13 +143,18 @@ func (w *Wizard) Run() error {
 		}
 	}
 	if w.Interactive {
-		if err := w.askAddress(&a); err != nil {
-			return err
+		// IP спрашивается, только если определить его не удалось.
+		if a.Address == "" {
+			if err := w.askKey(&a, KeyAddress, "Внешний IP сервера", ""); err != nil {
+				return err
+			}
+		}
+		for _, ask := range []func(*Answers) error{w.askPort, w.askDomain, w.askHTTPS} {
+			if err := ask(&a); err != nil {
+				return err
+			}
 		}
 		if err := w.askAccess(&a, servers); err != nil {
-			return err
-		}
-		if err := w.askTLS(&a); err != nil {
 			return err
 		}
 	}
@@ -425,138 +429,181 @@ func (w *Wizard) secret(label string) (string, error) {
 	return w.readLine()
 }
 
-func (w *Wizard) askMode(a *Answers) error {
-	def := 0
-	titles := make([]string, len(modeTitles))
-	for i, m := range modeTitles {
-		titles[i] = m.title
-		if m.mode == a.Mode {
-			def = i
-		}
-	}
-	i, err := w.choose("1. Что ставим", titles, def)
-	if err != nil {
-		return err
-	}
-	a.Mode = modeTitles[i].mode
-	return nil
-}
+// Вопросы мастера: порт, домен, HTTPS, как открывать, администратор. Всё
+// остальное — умолчания: они видны в итоге и меняются потом в «Настройках»
+// или переменными AZPANEL_*.
 
-func (w *Wizard) askAddress(a *Answers) error {
-	w.printf("3. Адрес сервера\n")
-	if err := w.askKey(a, KeyAddress, "Внешний IP", a.Address); err != nil {
-		return err
-	}
-	return w.askKey(a, KeyDomain, "Домен (пусто — только IP)", a.Domain)
-}
-
-// pathCandidates — server-блоки, в которые можно встроить панель: с ssl и,
-// если домен задан, с этим доменом.
-func pathCandidates(servers []NginxServer, domain string) []NginxServer {
-	var out []NginxServer
-	for _, s := range servers {
-		if s.SSL() && (domain == "" || s.NamedFor(domain)) {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
-func serverTitle(s NginxServer) string {
-	return fmt.Sprintf("%s (server_name %s, порт %v)", s.File, strings.Join(s.ServerName, " "), s.Ports())
-}
-
-func (w *Wizard) askAccess(a *Answers, servers []NginxServer) error {
-	cands := pathCandidates(servers, a.Domain)
-	var opts, vals []string
-	if len(cands) > 0 {
-		opts = append(opts, "путь "+DefaultBasePath+" в найденном nginx")
-		vals = append(vals, AccessPath)
-	}
-	opts = append(opts, fmt.Sprintf("отдельный порт HTTPS (по умолчанию %d)", DefaultPort), "только 127.0.0.1 (доступ через SSH-туннель)")
-	vals = append(vals, AccessPort, AccessLocal)
-	// Без предустановки: найденный nginx предлагается, иначе — только
-	// 127.0.0.1, наружу ничего не открываем.
-	def := len(vals) - 1
-	if a.Access == "" && len(cands) > 0 {
-		def = 0
-	}
-	for i, v := range vals {
-		if v == a.Access {
-			def = i
-		}
-	}
-	i, err := w.choose("4. Как открыть панель", opts, def)
-	if err != nil {
-		return err
-	}
-	a.Access = vals[i]
-	switch a.Access {
-	case AccessPath:
-		pick := 0
-		if len(cands) > 1 {
-			titles := make([]string, len(cands))
-			for j, c := range cands {
-				titles[j] = serverTitle(c)
-			}
-			if pick, err = w.choose("Какой server-блок", titles, 0); err != nil {
-				return err
-			}
-		}
-		a.NginxFile = cands[pick].File
-		// Домен из server_name не подставляется: не задан — панель и её
-		// ссылки работают по внешнему IP.
-	case AccessPort:
-		return w.askKey(a, KeyPort, "Порт HTTPS", strconv.Itoa(a.Port))
-	}
-	return nil
-}
-
-func (w *Wizard) askTLS(a *Answers) error {
-	switch a.Access {
-	case AccessLocal:
-		return nil
-	case AccessPath:
-		w.printf("5. HTTPS: сертификат берётся у выбранного server-блока nginx\n")
-		return nil
-	}
-	_, _, haveLE := w.TLS.ExistingLetsEncrypt(a.Domain)
-	var opts, vals []string
-	if haveLE {
-		opts = append(opts, "существующий сертификат Let's Encrypt для "+a.Domain)
-		vals = append(vals, TLSExisting)
-	}
-	opts = append(opts, "Let's Encrypt для домена (нужен свободный TCP 80)", "свой сертификат (пути к fullchain и key)", "самоподписанный")
-	vals = append(vals, TLSLetsEncrypt, TLSOwn, TLSSelfSigned)
-	def := 0
-	for i, v := range vals {
-		if v == a.TLS {
-			def = i
-		}
-	}
-	if a.TLS == "" && !haveLE && a.Domain == "" {
-		def = len(vals) - 1 // без домена Let's Encrypt не выпустить
-	}
-	i, err := w.choose("5. HTTPS", opts, def)
-	if err != nil {
-		return err
-	}
-	a.TLS = vals[i]
-	switch a.TLS {
-	case TLSLetsEncrypt:
-		if a.Domain == "" {
-			if err := w.askKey(a, KeyDomain, "Домен", ""); err != nil {
-				return err
-			}
-		}
-		return w.askKey(a, KeyEmail, "Почта для Let's Encrypt", a.Email)
-	case TLSOwn:
-		if err := w.askKey(a, KeyCert, "Путь к fullchain", a.CertPath); err != nil {
+// askPort — вопрос 1: порт для открытия azpanel по порту.
+func (w *Wizard) askPort(a *Answers) error {
+	for {
+		v, err := w.ask("1. Порт azpanel (если открывать по порту)", strconv.Itoa(a.Port))
+		if err != nil {
 			return err
 		}
-		return w.askKey(a, KeyKey, "Путь к закрытому ключу", a.KeyPath)
+		n, err := atoiRange(strings.TrimSpace(v), 1, 65535)
+		if err != nil {
+			w.printf("  %v\n", err)
+			continue
+		}
+		if w.Host.PortBusy(n) && !w.ownSiteOn(n) {
+			w.printf("  порт %d занят, выберите другой\n", n)
+			continue
+		}
+		a.Port = n
+		return nil
+	}
+}
+
+// ownSiteOn — порт занят своим же сайтом azpanel от прошлой установки.
+func (w *Wizard) ownSiteOn(port int) bool {
+	if _, err := w.Host.Stat(path.Join(w.Nginx.dir(), ownPortLink)); err != nil {
+		return false
+	}
+	servers, _ := FindServers(w.Nginx.dir())
+	for _, s := range servers {
+		if isOwnSite(s) && s.ListensOn(port) {
+			return true
+		}
+	}
+	return false
+}
+
+// isOwnSite — server из своего файла azpanel (sites-available/azpanel).
+func isOwnSite(s NginxServer) bool {
+	return path.Base(filepath.ToSlash(s.File)) == path.Base(ownPortFile)
+}
+
+// askDomain — вопрос 2. Домен, указывающий на другой сервер, не принимается:
+// ссылки по нему сюда не попадут.
+func (w *Wizard) askDomain(a *Answers) error {
+	label := "2. Домен (пусто — по IP)"
+	if a.Address != "" {
+		label = "2. Домен (пусто — по IP " + a.Address + ")"
+	}
+	if a.Domain != "" {
+		label += ", «-» — без домена"
+	}
+	for {
+		v, err := w.ask(label, a.Domain)
+		if err != nil {
+			return err
+		}
+		v = strings.ToLower(strings.TrimSpace(v))
+		if v == "" || v == "-" {
+			a.Domain = ""
+			return nil
+		}
+		if !domainRe.MatchString(v) {
+			w.printf("  %q: неверное доменное имя\n", v)
+			continue
+		}
+		a.Domain = v
+		if ips := w.domainElsewhere(a); len(ips) > 0 {
+			w.printf("  Домен %s указывает на %s, а не на этот сервер (%s): ссылки по нему сюда не попадут.\n  Введите другой или оставьте пустым — тогда по IP.\n",
+				v, strings.Join(ips, ", "), a.Address)
+			a.Domain = ""
+			continue
+		}
+		return nil
+	}
+}
+
+// askHTTPS — вопрос 3.
+func (w *Wizard) askHTTPS(a *Answers) error {
+	var err error
+	if a.HTTPS, err = w.yesno("3. Включить HTTPS", a.HTTPS); err != nil {
+		return err
+	}
+	if !a.HTTPS {
+		w.printf("  Без HTTPS логин и пароль идут по сети открытым текстом, браузер пометит страницу «Не защищено».\n")
 	}
 	return nil
+}
+
+// scheme — http или https по ответу.
+func (a Answers) scheme() string {
+	if a.HTTPS {
+		return "https"
+	}
+	return "http"
+}
+
+// host — по чему открывать azpanel: домен, иначе внешний IP.
+func (a Answers) host() string {
+	if a.Domain != "" {
+		return a.Domain
+	}
+	return a.Address
+}
+
+// siteFor — сайт в nginx, в который встраивается раздел /azpanel/: для HTTPS
+// — с ssl, без — слушающий 80; с доменом — с этим доменом. Свой сайт azpanel
+// от прошлой установки не в счёт. Из нескольких — на стандартном порту, потом
+// default_server.
+func siteFor(servers []NginxServer, a Answers) (NginxServer, bool) {
+	std := 80
+	if a.HTTPS {
+		std = 443
+	}
+	best, score := NginxServer{}, -1
+	for _, s := range servers {
+		switch {
+		case isOwnSite(s):
+			continue
+		case a.HTTPS && !s.SSL():
+			continue
+		case !a.HTTPS && !s.ListensOn(80):
+			continue
+		case a.Domain != "" && !s.NamedFor(a.Domain):
+			continue
+		case a.NginxFile != "" && s.File != a.NginxFile:
+			continue
+		}
+		n := 0
+		if s.ListensOn(std) {
+			n += 2
+		}
+		if s.defaultServer(std) {
+			n++
+		}
+		if n > score {
+			best, score = s, n
+		}
+	}
+	return best, score >= 0
+}
+
+// askAccess — вопрос 4: по имени (раздел /azpanel/) или по порту.
+func (w *Wizard) askAccess(a *Answers, servers []NginxServer) error {
+	if a.Access != AccessPath && a.Access != AccessPort {
+		a.Access = AccessPath
+	}
+	byName := a.scheme() + "://" + bracketHost(a.host()) + DefaultBasePath
+	note := "azpanel заведёт в nginx свой сайт"
+	if s, ok := siteFor(servers, *a); ok {
+		note = "разделом вашего сайта в nginx (" + s.File + ")"
+	}
+	opts := []string{
+		"по имени: " + byName + " — " + note,
+		"по порту: " + publicURL(a.scheme(), a.host(), a.Port) + "/ — ваш сайт в nginx не трогается",
+	}
+	def := 0
+	if a.Access == AccessPort {
+		def = 1
+	}
+	i, err := w.choose("4. Как открывать azpanel", opts, def)
+	if err != nil {
+		return err
+	}
+	a.Access = []string{AccessPath, AccessPort}[i]
+	return nil
+}
+
+func bracketHost(h string) string {
+	if strings.Contains(h, ":") {
+		return "[" + h + "]"
+	}
+	return h
 }
 
 func (w *Wizard) generatePassword() (string, error) {
@@ -566,19 +613,21 @@ func (w *Wizard) generatePassword() (string, error) {
 	return GeneratePassword()
 }
 
+// askAdmin — вопрос 5. Сгенерированный пароль панель попросит сменить при
+// первом входе, свой — нет.
 func (w *Wizard) askAdmin(a *Answers, p *plan) error {
-	w.printf("6. Администратор\n")
+	w.printf("5. Администратор\n")
 	if err := w.askKey(a, KeyAdmin, "Логин", a.Admin); err != nil {
 		return err
 	}
 	if w.Host.AdminExists(a.Admin) {
 		p.adminExists = true
-		w.printf("  Пользователь %s уже есть в панели: пароль не меняется (сброс — azpanel user reset %s)\n", a.Admin, a.Admin)
+		w.printf("  Пользователь %s уже есть: пароль не меняется (сменить — команда azpanel)\n", a.Admin)
 		return nil
 	}
 	p.adminExists = false
 	for {
-		pw, err := w.secret("Пароль (Enter — создать 16 символов)")
+		pw, err := w.secret("Пароль (Enter — сгенерировать)")
 		if err != nil {
 			return err
 		}
@@ -586,10 +635,10 @@ func (w *Wizard) askAdmin(a *Answers, p *plan) error {
 			if pw, err = w.generatePassword(); err != nil {
 				return err
 			}
-			a.AdminPassword = pw
+			a.AdminPassword, a.MustChange = pw, true
 			p.generated = true
-			w.printf("  Пароль администратора: %s\n  Запишите его: он будет показан ещё раз в итоге и нигде не сохраняется.\n", pw)
-			break
+			w.printf("  Пароль: %s\n  Запишите его: он будет показан ещё раз в конце и нигде не сохраняется.\n", pw)
+			return nil
 		}
 		if err := ValidatePassword(a.Admin, pw); err != nil {
 			w.printf("  %v\n", err)
@@ -603,53 +652,33 @@ func (w *Wizard) askAdmin(a *Answers, p *plan) error {
 			w.printf("  пароли не совпадают\n")
 			continue
 		}
-		a.AdminPassword = pw
-		break
+		a.AdminPassword, a.MustChange = pw, false
+		return nil
 	}
-	var err error
-	a.MustChange, err = w.yesno("Требовать смену пароля при первом входе", a.MustChange)
-	return err
 }
 
+// askExtras — Telegram, только пока он включён (panel.experimental).
 func (w *Wizard) askExtras(a *Answers) error {
+	if !w.Experimental {
+		return nil
+	}
 	var err error
-	if w.Experimental {
-		w.printf("9. Telegram (необязательно; потом меняется в «Настройках»)\n")
-		if a.Telegram, err = w.yesno("Включить бота", a.Telegram); err != nil {
-			return err
-		}
-		if a.Telegram {
-			for a.TelegramToken == "" {
-				t, err := w.secret("Токен бота")
-				if err != nil {
-					return err
-				}
-				a.TelegramToken = t
-			}
-			if err := w.askKey(a, KeyTgChat, "ID чата для уведомлений", chatDef(a.TelegramChat)); err != nil {
+	w.printf("Telegram (необязательно; потом меняется в «Настройках»)\n")
+	if a.Telegram, err = w.yesno("Включить бота", a.Telegram); err != nil {
+		return err
+	}
+	if a.Telegram {
+		for a.TelegramToken == "" {
+			t, err := w.secret("Токен бота")
+			if err != nil {
 				return err
 			}
+			a.TelegramToken = t
+		}
+		if err := w.askKey(a, KeyTgChat, "ID чата для уведомлений", chatDef(a.TelegramChat)); err != nil {
+			return err
 		}
 	}
-	w.printf("10. Бэкапы\n")
-	if err := w.askKey(a, KeyBackupDir, "Каталог", a.BackupDir); err != nil {
-		return err
-	}
-	if err := w.askKey(a, KeyBackupDay, "Автобэкап раз в N дней (0 — выкл.)", strconv.Itoa(a.BackupEveryDays)); err != nil {
-		return err
-	}
-	if err := w.askKey(a, KeyBackupKp, "Сколько копий хранить", strconv.Itoa(a.BackupKeep)); err != nil {
-		return err
-	}
-	w.printf("11. Файрвол: правила не меняются\n")
-	for _, line := range firewallPorts(*a) {
-		w.printf("  %s\n", line)
-	}
-	if a.Access == AccessPort {
-		a.Firewall, err = w.yesno(fmt.Sprintf("Добавить правило iptables для TCP %d", a.Port), a.Firewall)
-		return err
-	}
-	a.Firewall = false
 	return nil
 }
 
@@ -660,14 +689,17 @@ func chatDef(id int64) string {
 	return strconv.FormatInt(id, 10)
 }
 
-func firewallPorts(a Answers) []string {
-	switch a.Access {
-	case AccessPort:
-		return []string{fmt.Sprintf("Откройте TCP %d: панель.", a.Port)}
-	case AccessPath:
-		return []string{"Новых портов открывать не нужно: панель за вашим nginx."}
+// firewallPorts — какие порты открыть в файрволе и у хостера.
+func firewallPorts(a Answers, p *plan) []string {
+	switch {
+	case a.Access == AccessPort:
+		return []string{fmt.Sprintf("Откройте TCP %d: по нему открывается azpanel.", a.Port)}
+	case a.Access == AccessPath && p != nil && p.ownSite:
+		return []string{fmt.Sprintf("Откройте TCP %d: по нему открывается azpanel.", p.ownPort)}
+	case a.Access == AccessPath:
+		return []string{"Новых портов открывать не нужно: azpanel — раздел вашего сайта."}
 	}
-	return []string{"Панель слушает только 127.0.0.1: открывать нечего."}
+	return []string{"azpanel слушает только 127.0.0.1: открывать нечего."}
 }
 
 // GeneratePassword — 16 знаков: буквы и цифры, обязательно и те и другие.
@@ -708,10 +740,15 @@ type plan struct {
 	adminExists bool
 	generated   bool
 	listen      string
+	needCert    bool // свой сайт с HTTPS: сертификат выпускается шагом установки
 	// bakFiles — копии *.bak-* в sites-enabled (nginx читает их как конфиги);
 	// moveBak — перенести их в каталог копий мастера.
 	bakFiles []string
 	moveBak  bool
+	// ownSite — для раздела по имени подходящего сайта в nginx нет: свой сайт
+	// azpanel на ownPort (80 или 443).
+	ownSite bool
+	ownPort int
 	// finishFn достраивает конфиг и шаги по ответам, полученным после plan.
 	finishFn func(a *Answers, p *plan) error
 }
@@ -720,16 +757,13 @@ func (p *plan) finish(a *Answers) error { return p.finishFn(a, p) }
 
 func hostPort(host string, port int) string { return net.JoinHostPort(host, strconv.Itoa(port)) }
 
-// publicURL — внешний адрес панели без пути: порт 443 не пишется, адрес
-// IPv6 берётся в скобки.
-func publicURL(host string, port int) string {
-	if port != 443 {
-		return "https://" + hostPort(host, port)
+// publicURL — внешний адрес azpanel без пути: стандартный порт схемы (443
+// для https, 80 для http) не пишется, адрес IPv6 берётся в скобки.
+func publicURL(scheme, host string, port int) string {
+	if (scheme == "https" && port == 443) || (scheme == "http" && port == 80) {
+		return scheme + "://" + bracketHost(host)
 	}
-	if strings.Contains(host, ":") {
-		return "https://[" + host + "]"
-	}
-	return "https://" + host
+	return scheme + "://" + hostPort(host, port)
 }
 
 // domainElsewhere — домен указывает не на этот сервер: возвращает адреса,
@@ -772,73 +806,73 @@ func (w *Wizard) plan(a *Answers, servers []NginxServer) (*plan, error) {
 
 	switch a.Access {
 	case AccessPath:
-		cands := pathCandidates(servers, a.Domain)
-		if a.NginxFile != "" {
-			var one []NginxServer
-			for _, c := range cands {
-				if c.File == a.NginxFile {
-					one = append(one, c)
+		cfg.Panel.BasePath = DefaultBasePath
+		std := 80
+		if a.HTTPS {
+			std = 443
+		}
+		if s, ok := siteFor(servers, *a); ok {
+			// Раздел в существующем сайте: сертификат — его.
+			p.server = s
+			a.NginxFile = s.File
+			a.TLS, a.CertPath, a.KeyPath = "", "", ""
+			port := std
+			if ports := s.Ports(); !s.ListensOn(std) && len(ports) > 0 {
+				port = ports[0]
+			}
+			cfg.Panel.PublicURL = publicURL(a.scheme(), host, port)
+			p.lines = append(p.lines,
+				fmt.Sprintf("nginx: раздел %s в вашем сайте %s (server_name %s): одна строка include, фрагмент %s; копия файла в %s; после nginx -t — reload",
+					DefaultBasePath, s.File, strings.Join(s.ServerName, " "), SnippetPath, w.Nginx.backupDir()))
+			if a.HTTPS {
+				p.lines = append(p.lines, w.siteCertNotes(s, *a)...)
+			}
+		} else {
+			// Подходящего сайта нет — свой сайт azpanel на 80 или 443.
+			if w.Host.PortBusy(std) && !w.ownSiteOn(std) {
+				return nil, fmt.Errorf("порт %d занят не nginx: откройте azpanel по порту", std)
+			}
+			p.ownSite, p.ownPort = true, std
+			a.NginxFile = ""
+			cfg.Panel.PublicURL = publicURL(a.scheme(), host, std)
+			p.lines = append(p.lines,
+				fmt.Sprintf("nginx: свой сайт azpanel на порту %d (%s, ссылка в sites-enabled), раздел %s; после nginx -t — reload",
+					std, path.Join(w.Nginx.dir(), ownPortFile), DefaultBasePath))
+			if a.HTTPS {
+				if err := w.planCert(a, p, servers); err != nil {
+					return nil, err
 				}
 			}
-			cands = one
 		}
-		if len(cands) == 0 {
-			if a.Domain == "" {
-				return nil, fmt.Errorf("в nginx (%s) нет server-блока с ssl: выберите отдельный порт или 127.0.0.1", w.Nginx.dir())
-			}
-			return nil, fmt.Errorf("в nginx (%s) нет server-блока с ssl для домена %q: выберите отдельный порт или 127.0.0.1", w.Nginx.dir(), a.Domain)
-		}
-		// Предпочитаем 443.
-		p.server = cands[0]
-		for _, c := range cands {
-			if c.ListensOn(443) {
-				p.server = c
-				break
-			}
-		}
-		a.NginxFile = p.server.File
-		if a.TLS == "" {
-			a.TLS = TLSExisting
-		}
-		a.CertPath = p.server.SSLCertificate
-		cfg.Panel.BasePath = DefaultBasePath
-		// Домен задан — он, иначе внешний IP; порт — если блок не на 443.
-		port := 443
-		if ports := p.server.Ports(); !p.server.ListensOn(443) && len(ports) > 0 {
-			port = ports[0]
-		}
-		cfg.Panel.PublicURL = publicURL(host, port)
 		p.url = cfg.Panel.PublicURL + DefaultBasePath
-		p.lines = append(p.lines,
-			fmt.Sprintf("nginx: в %s (блок %s) одна строка include; фрагмент %s; копия файла в %s; после nginx -t — reload",
-				p.server.File, strings.Join(p.server.ServerName, " "), SnippetPath, w.Nginx.backupDir()))
 	case AccessPort:
-		if a.TLS == "" {
-			return nil, errors.New("не выбран тип HTTPS")
-		}
 		if _, err := w.Host.Stat(path.Join(w.Nginx.dir(), ownPortLink)); err != nil && w.Host.PortBusy(a.Port) {
 			return nil, fmt.Errorf("порт %d занят: выберите другой", a.Port)
 		}
-		pub := hostPort(host, a.Port)
-		cfg.Panel.PublicURL = "https://" + pub
-		p.url = "https://" + pub + "/"
+		a.NginxFile = ""
+		cfg.Panel.PublicURL = publicURL(a.scheme(), host, a.Port)
+		p.url = cfg.Panel.PublicURL + "/"
 		p.lines = append(p.lines,
-			fmt.Sprintf("nginx: отдельный server на порту %d (%s, ссылка в sites-enabled), фрагмент %s; после nginx -t — reload", a.Port, path.Join(w.Nginx.dir(), ownPortFile), SnippetPath))
-		if err := w.planCert(a, p, servers); err != nil {
-			return nil, err
+			fmt.Sprintf("nginx: свой сайт azpanel на порту %d (%s, ссылка в sites-enabled); ваши сайты не меняются; после nginx -t — reload", a.Port, path.Join(w.Nginx.dir(), ownPortFile)))
+		if a.HTTPS {
+			if err := w.planCert(a, p, servers); err != nil {
+				return nil, err
+			}
+		} else {
+			a.TLS, a.CertPath, a.KeyPath = "", "", ""
 		}
 	default:
 		a.Access = AccessLocal
 		// public_url и base_path, заданные в «Настройках», повторная
 		// установка в режиме local не стирает.
 		p.url = "http://" + cfg.Panel.Listen + normalizeBase(cfg.Panel.BasePath)
-		p.lines = append(p.lines, "панель слушает только "+cfg.Panel.Listen+" (доступ через SSH-туннель), nginx не меняется")
+		p.lines = append(p.lines, "azpanel слушает только "+cfg.Panel.Listen+" (доступ через SSH-туннель), nginx не меняется")
 	}
 
 	if a.Access == AccessPath || a.Access == AccessPort {
 		if ips := w.domainElsewhere(a); len(ips) > 0 {
 			p.lines = append(p.lines, fmt.Sprintf(
-				"ВНИМАНИЕ: домен %s указывает на %s, а не на этот сервер (%s): панель и ссылки портала по нему сюда не попадут. Оставьте домен пустым — будет использован IP",
+				"ВНИМАНИЕ: домен %s указывает на %s, а не на этот сервер (%s): azpanel и ссылки портала по нему сюда не попадут. Оставьте домен пустым — будет использован IP",
 				a.Domain, strings.Join(ips, ", "), a.Address))
 		}
 		p.bakFiles = w.Nginx.OldBackups()
@@ -886,8 +920,23 @@ func (w *Wizard) checkPassword(a *Answers, p *plan) error {
 	return ValidatePassword(a.Admin, a.AdminPassword)
 }
 
-// planCert проверяет всё, что нужно сертификату выбранного типа, без изменений.
+// planCert выбирает сертификат для своего сайта azpanel и проверяет всё,
+// что для него нужно, без изменений: свой (AZPANEL_TLS=own) — как задан;
+// домен — существующий Let's Encrypt или новый; IP — самоподписанный.
 func (w *Wizard) planCert(a *Answers, p *plan, servers []NginxServer) error {
+	p.needCert = true
+	if a.TLS != TLSOwn {
+		switch {
+		case a.Domain == "":
+			a.TLS = TLSSelfSigned
+		default:
+			if _, _, ok := w.TLS.ExistingLetsEncrypt(a.Domain); ok {
+				a.TLS = TLSExisting
+			} else {
+				a.TLS = TLSLetsEncrypt
+			}
+		}
+	}
 	switch a.TLS {
 	case TLSExisting:
 		cert, key, ok := w.TLS.ExistingLetsEncrypt(a.Domain)
@@ -904,8 +953,8 @@ func (w *Wizard) planCert(a *Answers, p *plan, servers []NginxServer) error {
 		}
 		p.lines = append(p.lines, "HTTPS: свой сертификат "+a.CertPath)
 	case TLSLetsEncrypt:
-		if a.Domain == "" || a.Email == "" {
-			return errors.New("для Let's Encrypt нужны домен и почта")
+		if a.Domain == "" {
+			return errors.New("для Let's Encrypt нужен домен")
 		}
 		plan, err := PlanACME(servers, a.Domain, w.Host.Port80Owner())
 		if err != nil {
@@ -914,7 +963,7 @@ func (w *Wizard) planCert(a *Answers, p *plan, servers []NginxServer) error {
 		p.acme = plan
 		p.lines = append(p.lines, "HTTPS: certbot выпустит сертификат Let's Encrypt для "+a.Domain)
 	case TLSSelfSigned:
-		p.lines = append(p.lines, "HTTPS: самоподписанный сертификат в "+filepath.Join(paths.Etc(), "tls"))
+		p.lines = append(p.lines, "HTTPS: самоподписанный сертификат на "+a.host()+" ("+filepath.Join(paths.Etc(), "tls")+"): браузер покажет предупреждение — с доменом будет Let's Encrypt")
 	}
 	return nil
 }
@@ -955,19 +1004,22 @@ func (w *Wizard) buildSteps(a *Answers, p *plan) error {
 		return h.WriteUnit(panelUnitName, PanelUnit(paths.Binary()))
 	})
 	add("хук лимита", h.InstallHook)
-	if a.Access == AccessPort {
+	if p.needCert {
 		add("сертификат", func() error { return w.issueCert(a, p) })
 	}
 	if p.moveBak {
 		add("перенос копий .bak из sites-enabled", func() error { return w.Nginx.MoveBackups(p.bakFiles) })
 	}
-	switch a.Access {
-	case AccessPath:
-		add("nginx", func() error { return w.Nginx.Enable(p.server, DefaultBasePath, p.listen) })
-	case AccessPort:
+	switch {
+	case a.Access == AccessPath && p.ownSite:
 		add("nginx", func() error {
-			name := a.Domain
-			return w.Nginx.EnableOwnPort(a.Port, a.CertPath, a.KeyPath, name, "", p.listen)
+			return w.Nginx.EnableOwnPort(p.ownPort, a.CertPath, a.KeyPath, a.Domain, DefaultBasePath, p.listen)
+		})
+	case a.Access == AccessPath:
+		add("nginx", func() error { return w.Nginx.Enable(p.server, DefaultBasePath, p.listen) })
+	case a.Access == AccessPort:
+		add("nginx", func() error {
+			return w.Nginx.EnableOwnPort(a.Port, a.CertPath, a.KeyPath, a.Domain, "", p.listen)
 		})
 	}
 	if !p.adminExists {
@@ -998,7 +1050,7 @@ func (w *Wizard) buildSteps(a *Answers, p *plan) error {
 			base = "/"
 		}
 		if err := h.WaitPanel("http://" + p.listen + base + "healthz"); err != nil {
-			return fmt.Errorf("панель не ответила на /healthz: %w; журнал — %s", err, filepath.Join(paths.Log(), "panel.log"))
+			return fmt.Errorf("azpanel не ответила на /healthz: %w; журнал — %s", err, filepath.Join(paths.Log(), "panel.log"))
 		}
 		return nil
 	})
@@ -1037,9 +1089,27 @@ func (w *Wizard) issueCert(a *Answers, p *plan) error {
 
 // ------------------------------------------------------------------- вывод
 
+// siteCertNotes — предупреждения о сертификате сайта, в который встаёт
+// раздел /azpanel/: истёк или выписан на домен, а открывать будут по IP.
+func (w *Wizard) siteCertNotes(s NginxServer, a Answers) []string {
+	var notes []string
+	if s.SSLCertificate != "" && w.Host.CertNotAfter != nil {
+		if end, err := w.Host.CertNotAfter(s.SSLCertificate); err == nil && end.Before(time.Now()) {
+			notes = append(notes, fmt.Sprintf("ВНИМАНИЕ: сертификат сайта (%s) истёк %s: браузер покажет предупреждение и не предложит сохранить пароль",
+				s.SSLCertificate, end.UTC().Format("2006-01-02")))
+		}
+	}
+	if a.Domain == "" {
+		notes = append(notes, "HTTPS — сертификат вашего сайта: он выписан на имя сайта, а открывать azpanel вы будете по IP, поэтому браузер покажет предупреждение")
+	} else {
+		notes = append(notes, "HTTPS — сертификат вашего сайта")
+	}
+	return notes
+}
+
 func (w *Wizard) summary(a Answers, p *plan) {
-	w.printf("\n12. Итог. Будет установлено: %s\n", modeTitle(a.Mode))
-	w.printf("  каталоги, бинарник и конфиг в %s\n", paths.Root())
+	w.printf("\nИтог\n")
+	w.printf("  azpanel в %s\n", paths.Root())
 	w.printf("  службы azpanel-node и azpanel-panel (%s), хук лимита в %s\n", w.unitDirNote(), w.ScriptsDir)
 	for _, l := range p.lines {
 		w.printf("  %s\n", l)
@@ -1058,11 +1128,12 @@ func (w *Wizard) summary(a Answers, p *plan) {
 	if a.Telegram {
 		w.printf("  Telegram-бот включён, чат %d\n", a.TelegramChat)
 	}
-	w.printf("  ответы без секретов — %s\n", filepath.Join(paths.Etc(), "install.env"))
+	w.printf("  бэкапы AntiZapret: раз в %d дн., хранить %d (меняется в «Настройках»)\n", a.BackupEveryDays, a.BackupKeep)
+	w.printf("  ответы без секретов — %s (при переустановке подставятся сами)\n", filepath.Join(paths.Etc(), "install.env"))
 	if a.Firewall {
 		w.printf("  правило iptables для TCP %d\n", a.Port)
 	}
-	w.printf("  адрес панели после установки: %s\n\n", p.url)
+	w.printf("  адрес azpanel после установки: %s\n\n", p.url)
 }
 
 func doneList(done []string) string {
@@ -1082,18 +1153,17 @@ func yn(b bool) string {
 }
 
 func (w *Wizard) report(a Answers, p *plan) {
-	w.printf("\nГотово. Панель: %s\n", p.url)
+	w.printf("\nГотово.\n  Адрес:  %s\n", p.url)
 	if !p.adminExists {
-		w.printf("Администратор: %s", a.Admin)
+		w.printf("  Логин:  %s\n", a.Admin)
 		if p.generated {
-			w.printf(", пароль: %s", a.AdminPassword)
+			w.printf("  Пароль: %s (при первом входе попросит сменить)\n", a.AdminPassword)
 		}
-		w.printf("\n")
 	}
 	if a.Access == AccessLocal {
 		w.printf("Открыть — SSH-туннелем с вашего компьютера:\n  ssh -L 8080:%s root@<сервер>\n  затем http://127.0.0.1:8080\n", p.listen)
 	}
-	for _, l := range firewallPorts(a) {
+	for _, l := range firewallPorts(a, p) {
 		w.printf("%s\n", l)
 	}
 	w.printf("Проверка установки: azpanel doctor\n")
