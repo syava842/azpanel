@@ -20,7 +20,42 @@
 		return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 	}
 
+	// Страницы с автообновлением (задача, «Сейчас», обновления) перезагружаются
+	// целиком: место прокрутки страницы и журналов сохраняется перед
+	// перезагрузкой и восстанавливается после. Журнал, прокрученный до конца,
+	// остаётся в конце и показывает новые строки.
+	var scrollKey = "azpanel-scroll:" + location.pathname + location.search;
+	function autoRefresh() {
+		return !!document.querySelector('meta[http-equiv="refresh"]');
+	}
+	function saveScroll() {
+		if (!autoRefresh()) return;
+		var logs = [];
+		var els = document.querySelectorAll("pre.log");
+		for (var i = 0; i < els.length; i++) {
+			var el = els[i];
+			logs.push({ top: el.scrollTop, end: el.scrollTop + el.clientHeight >= el.scrollHeight - 4 });
+		}
+		try {
+			sessionStorage.setItem(scrollKey, JSON.stringify({ y: window.scrollY, logs: logs }));
+		} catch (e) { /* без хранилища — прокрутка сбросится, как раньше */ }
+	}
+	function restoreScroll() {
+		var els = document.querySelectorAll("pre.log");
+		var saved = null;
+		try { saved = JSON.parse(sessionStorage.getItem(scrollKey) || "null"); } catch (e) { saved = null; }
+		for (var i = 0; i < els.length; i++) {
+			var s = saved && saved.logs && saved.logs[i];
+			// Впервые — с конца: там самое свежее.
+			els[i].scrollTop = !s || s.end ? els[i].scrollHeight : s.top;
+		}
+		if (saved && typeof saved.y === "number") window.scrollTo(0, saved.y);
+	}
+	window.addEventListener("pagehide", saveScroll);
+	window.addEventListener("beforeunload", saveScroll);
+
 	document.addEventListener("DOMContentLoaded", function () {
+		restoreScroll();
 		var body = document.body;
 		var toggle = document.querySelector("[data-toggle-nav]");
 
