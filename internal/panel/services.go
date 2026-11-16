@@ -35,13 +35,9 @@ type ServiceNode interface {
 
 	// WARP.
 	Warp(ctx context.Context) (nodeapi.Warp, error)
-	WarpDomains(ctx context.Context) (nodeapi.WarpList, error)
-	WarpIPs(ctx context.Context) (nodeapi.WarpList, error)
-	EditWarpDomains(ctx context.Context, e nodeapi.WarpEdit) (nodeapi.Task, error)
-	EditWarpIPs(ctx context.Context, e nodeapi.WarpEdit) (nodeapi.Task, error)
-	WarpSync(ctx context.Context) (nodeapi.Task, error)
-	WarpUpdate(ctx context.Context) (nodeapi.Task, error)
+	WarpWeb(ctx context.Context) (nodeapi.WarpWeb, error)
 	InstallWarp(ctx context.Context, a nodeapi.WarpInstallAnswers) (nodeapi.Task, error)
+	InstallWarpWeb(ctx context.Context, a nodeapi.WarpWebAnswers) (nodeapi.Task, error)
 
 	// Самообновление azpanel.
 	Update(ctx context.Context, req nodeapi.UpdateRequest) (nodeapi.Task, error)

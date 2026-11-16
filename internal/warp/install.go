@@ -74,5 +74,9 @@ func Install(ctx context.Context, a InstallAnswers, client *http.Client, workDir
 		return err
 	}
 	fmt.Fprintf(log, "install.sh AZ-WARP скачан, sha256 %s\n", sum)
-	return RunPTY(ctx, a.NewDialog(log), "/bin/bash", script.Name())
+	if err := RunPTY(ctx, a.NewDialog(log), "/bin/bash", script.Name()); err != nil || a.Web == nil {
+		return err
+	}
+	fmt.Fprintln(log, "AZ-WARP установлен, ставлю веб-панель (warper web install)")
+	return (&Warper{}).InstallWeb(ctx, *a.Web, log)
 }

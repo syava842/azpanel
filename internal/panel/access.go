@@ -15,6 +15,11 @@ const (
 	accMFA                  // только сессия, ждущая код 2FA
 	accAny                  // любой вошедший; клиентов ограничивает visibleClient
 	accAdmin                // только администратор
+	// accAdminProxy — только администратор, тело запроса не разбирается и
+	// токен формы не требуется: запросы пересылаются в чужое приложение
+	// (веб-панель AZ-WARP) со своей защитой. Межсайтовый запрос cookie
+	// сессии не несёт (SameSite=Strict).
+	accAdminProxy
 )
 
 // routes — таблица прав: каждый маршрут Handler() обязан быть здесь, иначе
@@ -141,12 +146,11 @@ var routes = map[string]access{
 	"POST /proxy":             accAdmin,
 	"POST /proxy/{id}/delete": accAdmin,
 
-	"GET /warp":          accAdmin,
-	"POST /warp/domains": accAdmin,
-	"POST /warp/ips":     accAdmin,
-	"POST /warp/sync":    accAdmin,
-	"POST /warp/update":  accAdmin,
-	"POST /warp/install": accAdmin,
+	"GET /warp":              accAdmin,
+	"POST /warp/install":     accAdmin,
+	"POST /warp/web/install": accAdmin,
+	"GET /warp/ui/":          accAdminProxy,
+	"POST /warp/ui/":         accAdminProxy,
 
 	"GET /{$}":     accAny,
 	"GET /clients": accAny,
@@ -223,14 +227,18 @@ func (s *Server) require(a access, h http.HandlerFunc) http.Handler {
 		return h
 	case accMFA:
 		return s.guard(h, guardMFA)
-	case accAdmin:
-		return s.protect(func(w http.ResponseWriter, r *http.Request) {
+	case accAdmin, accAdminProxy:
+		mode := guardNormal
+		if a == accAdminProxy {
+			mode = guardRawBody
+		}
+		return s.guard(func(w http.ResponseWriter, r *http.Request) {
 			if sess, _ := session(r); !sess.IsAdmin() {
 				s.errorPage(w, r, http.StatusForbidden, "доступно только администратору")
 				return
 			}
 			h(w, r)
-		})
+		}, mode)
 	}
 	return s.protect(h)
 }

@@ -14,6 +14,8 @@ type (
 	WarpOp             = warp.Op
 	WarpInstallAnswers = warp.InstallAnswers
 	WarpWGManual       = warp.WGManual
+	WarpWeb            = warp.WebState
+	WarpWebAnswers     = warp.WebAnswers
 	// WarpDomain — строка списка доменов: домен, источник (user, gemini, chatgpt…), включён.
 	WarpDomain = warp.DomainEntry
 )
@@ -36,6 +38,7 @@ type WarpIface struct {
 type Warp struct {
 	Builtin []WarpIface `json:"builtin"`
 	AZ      WarpStatus  `json:"az"`
+	Web     WarpWeb     `json:"web"`
 }
 
 // WarpList — вывод warper domainslist либо iplist. Lines — домены (без
@@ -94,6 +97,18 @@ func (c *HTTPClient) WarpSync(ctx context.Context) (Task, error) {
 func (c *HTTPClient) WarpUpdate(ctx context.Context) (Task, error) {
 	var v Task
 	return v, c.do(ctx, http.MethodPost, "/v1/warp/update", nil, &v)
+}
+
+// WarpWeb — состояние веб-панели AZ-WARP.
+func (c *HTTPClient) WarpWeb(ctx context.Context) (WarpWeb, error) {
+	var v WarpWeb
+	return v, c.do(ctx, http.MethodGet, "/v1/warp/web", nil, &v)
+}
+
+// InstallWarpWeb ставит веб-панель AZ-WARP задачей warp-web-install.
+func (c *HTTPClient) InstallWarpWeb(ctx context.Context, a WarpWebAnswers) (Task, error) {
+	var v Task
+	return v, c.do(ctx, http.MethodPost, "/v1/warp/web/install", a, &v)
 }
 
 // InstallWarp ставит AZ-WARP задачей warp-install (install.sh под псевдотерминалом).

@@ -42,6 +42,12 @@ func newWarpEnv(t *testing.T, installed bool) warpEnv {
 			return []byte("example.com|user|1\n# c\ngemini.google.com|gemini|0\n"), nil
 		case "iplist":
 			return []byte("198.51.100.0/24\n"), nil
+		case "web status":
+			// Состояние веб-панели задаёт тест файлом webstatus; нет — не установлена.
+			if b, err := os.ReadFile(filepath.Join(dir, "webstatus")); err == nil {
+				return b, nil
+			}
+			return []byte("installed=false\nactive=inactive\n"), nil
 		}
 		return nil, nil
 	}}
@@ -260,5 +266,51 @@ func TestWarpTaskTimeouts(t *testing.T) {
 		if DefaultTaskTimeouts[k] != d {
 			t.Errorf("%s: %v", k, DefaultTaskTimeouts[k])
 		}
+	}
+}
+
+// Состояние веб-панели: из `warper web status` и PORT в web/.env — и в сводке,
+// и отдельным запросом.
+func TestWarpWebState(t *testing.T) {
+	e := newWarpEnv(t, true)
+	ctx := context.Background()
+	if st, err := e.client.WarpWeb(ctx); err != nil || st.Installed {
+		t.Fatalf("без веб-панели: %+v %v", st, err)
+	}
+	os.WriteFile(filepath.Join(e.dir, "webstatus"), []byte("installed=true\nactive=active\nexternal_port=6060\n"), 0o644)
+	os.MkdirAll(filepath.Join(e.dir, "web"), 0o755)
+	os.WriteFile(filepath.Join(e.dir, "web", ".env"), []byte("PORT=16060\n"), 0o600)
+	st, err := e.client.WarpWeb(ctx)
+	if err != nil || !st.Installed || !st.Active || st.Port != 6060 || st.BackendPort != 16060 {
+		t.Fatalf("%+v %v", st, err)
+	}
+	if wp, err := e.client.Warp(ctx); err != nil || wp.Web.BackendPort != 16060 {
+		t.Fatalf("сводка: %+v %v", wp.Web, err)
+	}
+}
+
+func TestWarpWebInstallTask(t *testing.T) {
+	ctx := context.Background()
+	if _, err := newWarpEnv(t, false).client.InstallWarpWeb(ctx, nodeapi.WarpWebAnswers{User: "admin", Password: "secret1"}); status(err) != 409 {
+		t.Fatalf("без AZ-WARP: %v", err)
+	}
+	e := newWarpEnv(t, true)
+	if _, err := e.client.InstallWarpWeb(ctx, nodeapi.WarpWebAnswers{User: "a", Password: "secret1"}); status(err) != 400 {
+		t.Fatalf("валидация: %v", err)
+	}
+	task, err := e.client.InstallWarpWeb(ctx, nodeapi.WarpWebAnswers{User: "admin", Password: "ПАРОЛЬ-ПАНЕЛИ"})
+	if err != nil || task.Kind != TaskWarpWebInstall {
+		t.Fatalf("%+v %v", task, err)
+	}
+	files := paramsGlob(e.params)
+	if len(files) != 1 {
+		t.Fatalf("файлов параметров %d", len(files))
+	}
+	if got := e.lastCommand(t, task.ID); !strings.HasSuffix(got, "internal warp-web-install --params "+files[0]) || strings.Contains(got, "ПАРОЛЬ-ПАНЕЛИ") {
+		t.Fatalf("команда: %s", got)
+	}
+	os.WriteFile(filepath.Join(e.dir, "webstatus"), []byte("installed=true\nactive=active\n"), 0o644)
+	if _, err := e.client.InstallWarpWeb(ctx, nodeapi.WarpWebAnswers{User: "admin", Password: "secret1"}); status(err) != 409 {
+		t.Fatalf("повторная установка: %v", err)
 	}
 }

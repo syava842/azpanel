@@ -27,6 +27,9 @@ const (
 	guardNormal guardMode = iota // полный доступ: сессия без ожидания кода
 	guardMFA                     // только сессия, ждущая код 2FA
 	guardAny                     // любая живая сессия (выход)
+	// guardRawBody — как guardNormal, но тело не разбирается и токен формы
+	// не проверяется (пересылка в веб-панель AZ-WARP).
+	guardRawBody
 )
 
 type ctxKey struct{}
@@ -177,7 +180,7 @@ func (s *Server) guard(h http.HandlerFunc, mode guardMode) http.Handler {
 			s.errorPage(w, r, http.StatusForbidden, msg)
 			return
 		}
-		if !safe {
+		if !safe && mode != guardRawBody {
 			limit := int64(maxFormBody)
 			if strings.HasPrefix(r.URL.Path, "/routing/files/") {
 				limit = maxRoutingForm // списки целиком — до 1 МБ текста

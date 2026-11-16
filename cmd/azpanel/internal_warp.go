@@ -26,6 +26,14 @@ func init() {
 		}
 		return warp.Install(ctx, a, nil, os.TempDir(), out)
 	}
+	// warp-web-install --params ФАЙЛ: `warper web install` под псевдотерминалом
+	internalModes["warp-web-install"] = func(ctx context.Context, args []string, out io.Writer) error {
+		var a warp.WebAnswers
+		if err := readParams(args, &a); err != nil {
+			return err
+		}
+		return (&warp.Warper{}).InstallWeb(ctx, a, out)
+	}
 }
 
 // splitSteps делит «-- a b -- c» на команды warper [[a b] [c]].

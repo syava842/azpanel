@@ -219,6 +219,9 @@ type InstallAnswers struct {
 	OvpnPath    string    `json:"ovpn_path,omitempty"`
 	OvpnUser    string    `json:"ovpn_user,omitempty"`
 	OvpnPass    string    `json:"ovpn_pass,omitempty"`
+	// Web — логин и пароль веб-панели AZ-WARP: после install.sh ставится и
+	// она (`warper web install`). nil — без веб-панели.
+	Web *WebAnswers `json:"web,omitempty"`
 }
 
 // WGManual — данные WireGuard-соединения, вводимые вручную.
@@ -295,6 +298,9 @@ func (a *InstallAnswers) Validate() error {
 			}
 		}
 	}
+	if a.Web != nil {
+		return a.Web.Validate()
+	}
 	return nil
 }
 
@@ -330,6 +336,9 @@ func (a *InstallAnswers) SecretValues() []string {
 	vals := []string{a.SlaveLink, a.SlaveKey, a.ProxyLink, a.OvpnPass}
 	if a.WG != nil {
 		vals = append(vals, a.WG.PrivateKey, a.WG.PresharedKey)
+	}
+	if a.Web != nil {
+		vals = append(vals, a.Web.Password)
 	}
 	var out []string
 	for _, v := range vals {
@@ -430,7 +439,8 @@ func (a *InstallAnswers) Rules() []Rule {
 				}
 				return "1", true, ""
 			}},
-		// Веб-панель warper-web панель не трогает: всегда «нет».
+		// Веб-панель ставится отдельным шагом (`warper web install`) со своими
+		// вопросами: здесь всегда «нет».
 		{Name: "web-panel", Prompt: rx(`Установить веб-панель\? \(y/N\):\s*$`), Max: 1, Answer: fixed("n")},
 	}
 }

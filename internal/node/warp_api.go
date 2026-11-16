@@ -14,12 +14,15 @@ const (
 	TaskWarpUpdate  = "warp-update"
 	TaskWarpInstall = "warp-install"
 	TaskWarpSync    = "warp-sync"
+	// TaskWarpWebInstall — веб-панель AZ-WARP (`warper web install`).
+	TaskWarpWebInstall = "warp-web-install"
 )
 
 func init() {
 	DefaultTaskTimeouts[TaskWarpUpdate] = 900 * time.Second
 	DefaultTaskTimeouts[TaskWarpInstall] = 1800 * time.Second
 	DefaultTaskTimeouts[TaskWarpSync] = 600 * time.Second
+	DefaultTaskTimeouts[TaskWarpWebInstall] = 900 * time.Second
 }
 
 // WarpService — WARP на узле: чтение состояния самим агентом, изменения —
@@ -40,6 +43,8 @@ func (a *API) registerWarp(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/warp/sync", a.warpSync)
 	mux.HandleFunc("POST /v1/warp/update", a.warpUpdate)
 	mux.HandleFunc("POST /v1/warp/install", a.warpInstall)
+	mux.HandleFunc("GET /v1/warp/web", a.warpWeb)
+	mux.HandleFunc("POST /v1/warp/web/install", a.warpWebInstall)
 }
 
 func (a *API) warpReady(w http.ResponseWriter) bool {
@@ -88,7 +93,53 @@ func (a *API) warpSummary(w http.ResponseWriter, r *http.Request) {
 	if !a.warpReady(w) {
 		return
 	}
-	writeJSON(w, http.StatusOK, nodeapi.Warp{Builtin: a.warpBuiltin(r), AZ: a.Warp.Warper.Status(r.Context())})
+	out := nodeapi.Warp{Builtin: a.warpBuiltin(r), AZ: a.Warp.Warper.Status(r.Context())}
+	// Сбой чтения состояния веб-панели — пустое состояние: сводка нужнее.
+	out.Web, _ = a.Warp.Warper.Web(r.Context())
+	writeJSON(w, http.StatusOK, out)
+}
+
+// warpWeb — состояние веб-панели AZ-WARP: панель azpanel пересылает на её
+// внутренний порт запросы раздела WARP.
+func (a *API) warpWeb(w http.ResponseWriter, r *http.Request) {
+	if !a.warpReady(w) {
+		return
+	}
+	st, err := a.Warp.Warper.Web(r.Context())
+	if err != nil {
+		a.fail(w, "состояние веб-панели AZ-WARP не прочитано", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
+// warpWebInstall ставит веб-панель на уже установленный AZ-WARP.
+func (a *API) warpWebInstall(w http.ResponseWriter, r *http.Request) {
+	if !a.warpReady(w) {
+		return
+	}
+	var ans warp.WebAnswers
+	if !decode(w, r, &ans) {
+		return
+	}
+	if err := ans.Validate(); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, ok := a.Warp.Warper.Version(); !ok {
+		writeErr(w, http.StatusConflict, "AZ-WARP не установлен")
+		return
+	}
+	if st, err := a.Warp.Warper.Web(r.Context()); err == nil && st.Installed {
+		writeErr(w, http.StatusConflict, "веб-панель AZ-WARP уже установлена")
+		return
+	}
+	file, err := writeParamsFile(a.Warp.ParamsDir, ans)
+	if err != nil {
+		a.fail(w, "параметры задачи не записаны", err)
+		return
+	}
+	a.startExtTask(w, TaskWarpWebInstall, []string{a.Warp.Self, "internal", "warp-web-install", "--params", file}, file)
 }
 
 func (a *API) warpLists(w http.ResponseWriter, r *http.Request, list func() (nodeapi.WarpList, error), what string) {

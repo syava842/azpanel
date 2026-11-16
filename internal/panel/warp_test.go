@@ -2,150 +2,203 @@ package panel
 
 import (
 	"context"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/syava842/azpanel/internal/nodeapi"
 )
 
-func warpInstalledNode(n *svcNode, domains nodeapi.WarpList) {
-	hs := time.Date(2026, 11, 2, 8, 30, 0, 0, time.UTC)
+// warpNode — AZ-WARP в заданном состоянии; web.BackendPort — порт поддельной
+// веб-панели.
+func warpNode(n *svcNode, installed bool, web nodeapi.WarpWeb) {
 	n.WarpFn = func(context.Context) (nodeapi.Warp, error) {
-		w := nodeapi.Warp{Builtin: []nodeapi.WarpIface{{Name: "warp0", Peers: []nodeapi.WarpPeer{{Endpoint: "162.159.1.1:2408", LatestHandshake: &hs, RxBytes: 2048, TxBytes: 1}}}}}
-		w.AZ.Installed, w.AZ.Version, w.AZ.RemoteVersion, w.AZ.UpdateAvailable = true, "1.5.7", "1.5.8", true
-		w.AZ.DomainsSynced = true
-		w.AZ.Subnet.Fake = "10.224.0.0/16"
-		w.AZ.Singbox.Running = true
-		w.AZ.OutboundMode = "warp"
+		var w nodeapi.Warp
+		w.AZ.Installed, w.AZ.Version = installed, "1.5.7"
+		w.Web = web
 		return w, nil
 	}
-	n.WarpDomainsFn = func(context.Context) (nodeapi.WarpList, error) { return domains, nil }
-	n.WarpIPsFn = func(context.Context) (nodeapi.WarpList, error) {
-		return nodeapi.WarpList{Lines: []string{"1.2.3.0/24"}}, nil
-	}
+	n.WarpWebFn = func(context.Context) (nodeapi.WarpWeb, error) { return web, nil }
 }
 
-func TestWarpPageSummaryDomainsAndIPs(t *testing.T) {
+func TestWarpPageStates(t *testing.T) {
 	e, n, c, _ := svcEnv(t)
-	warpInstalledNode(n, nodeapi.WarpList{
-		Lines:   []string{"claud.ai", "off.example"},
-		Domains: []nodeapi.WarpDomain{{Domain: "claud.ai", Source: "user", Enabled: true}, {Domain: "gemini.google.com", Source: "gemini", Enabled: false}},
-	})
-	rec := get(e, c, "/warp")
-	b := rec.Body.String()
-	if rec.Code != 200 {
-		t.Fatalf("%d %s", rec.Code, b)
-	}
-	for _, want := range []string{"warp0", "162.159.1.1:2408", "2026-11-02 08:30 UTC", "2.0 КБ", "1.5.8", "claud.ai", "gemini.google.com", "1.2.3.0/24", "10.224.0.0/16"} {
-		if !strings.Contains(b, want) {
-			t.Errorf("нет %q", want)
-		}
-	}
-	// удалять можно только пользовательские домены
-	if strings.Contains(b, `name="arg" value="gemini.google.com"`) {
-		t.Error("кнопка удаления у домена не из user")
-	}
-}
-
-func TestWarpDomainsOldAgentShowsRawLines(t *testing.T) {
-	e, n, c, _ := svcEnv(t)
-	warpInstalledNode(n, nodeapi.WarpList{Lines: []string{"claud.ai|user|1"}})
-	rec := get(e, c, "/warp")
-	if !strings.Contains(rec.Body.String(), "claud.ai|user|1") {
-		t.Fatalf("строка целиком не показана: %s", rec.Body)
-	}
-}
-
-func TestWarpEditDomainsAndIPs(t *testing.T) {
-	e, n, c, csrf := svcEnv(t)
-	warpInstalledNode(n, nodeapi.WarpList{})
-	var gotD, gotI nodeapi.WarpEdit
-	n.EditWarpDomainsFn = func(_ context.Context, ed nodeapi.WarpEdit) (nodeapi.Task, error) {
-		gotD = ed
-		return nodeapi.Task{ID: "0123456789ab"}, nil
-	}
-	n.EditWarpIPsFn = func(_ context.Context, ed nodeapi.WarpEdit) (nodeapi.Task, error) {
-		gotI = ed
-		return nodeapi.Task{ID: "ba9876543210"}, nil
-	}
-	rec := post(e, c, "/warp/domains", url.Values{"csrf": {csrf}, "action": {"add"}, "arg": {"example.com"}, "sync": {"1"}})
-	if rec.Code != 303 || len(gotD.Ops) != 1 || gotD.Ops[0].Op != "add" || gotD.Ops[0].Arg != "example.com" || !gotD.Sync {
-		t.Fatalf("add: %d %+v", rec.Code, gotD)
-	}
-	rec = post(e, c, "/warp/ips", url.Values{"csrf": {csrf}, "action": {"ipadd"}, "arg": {"10.0.0.0/8"}})
-	if rec.Code != 303 || gotI.Ops[0].Op != "ipadd" || gotI.Sync {
-		t.Fatalf("ipadd: %d %+v", rec.Code, gotI)
-	}
-	n.Calls = nil
-	for name, f := range map[string]url.Values{
-		"домен":    {"action": {"add"}, "arg": {"bad domain;rm"}},
-		"список":   {"action": {"enable"}, "arg": {"other"}},
-		"действие": {"action": {"drop"}, "arg": {"a.com"}},
-		"ip":       {"action": {"ipadd"}, "arg": {"a.com"}},
+	for _, tc := range []struct {
+		name      string
+		installed bool
+		web       nodeapi.WarpWeb
+		want      []string
+		not       string
+	}{
+		{"не установлен", false, nodeapi.WarpWeb{}, []string{`action="/warp/install"`, `name="web_user"`, `name="web_pass"`, `name="mode"`}, "<iframe"},
+		{"без веб-панели", true, nodeapi.WarpWeb{}, []string{`action="/warp/web/install"`, `name="web_pass"`}, `name="mode"`},
+		{"панель не работает", true, nodeapi.WarpWeb{Installed: true, BackendPort: 16060}, []string{"warper web start"}, "<iframe"},
+		{"окно", true, nodeapi.WarpWeb{Installed: true, Active: true, Port: 6060, BackendPort: 16060}, []string{`<iframe class="app-frame" src="/warp/ui/"`}, `action="/warp/`},
 	} {
-		f.Set("csrf", csrf)
-		if rec := post(e, c, "/warp/domains", f); rec.Code != 400 {
-			t.Errorf("%s: %d", name, rec.Code)
+		warpNode(n, tc.installed, tc.web)
+		rec := get(e, c, "/warp")
+		b := rec.Body.String()
+		if rec.Code != 200 {
+			t.Fatalf("%s: %d %s", tc.name, rec.Code, b)
+		}
+		for _, w := range tc.want {
+			if !strings.Contains(b, w) {
+				t.Errorf("%s: нет %q", tc.name, w)
+			}
+		}
+		if strings.Contains(b, tc.not) {
+			t.Errorf("%s: лишнее %q", tc.name, tc.not)
 		}
 	}
-	if rec := post(e, c, "/warp/ips", url.Values{"csrf": {csrf}, "action": {"ipadd"}, "arg": {"not-a-net"}}); rec.Code != 400 {
-		t.Errorf("подсеть: %d", rec.Code)
+	n.WarpFn = func(context.Context) (nodeapi.Warp, error) {
+		return nodeapi.Warp{}, &nodeapi.Error{Status: 503, Message: "WARP не настроен"}
 	}
-	if n.called("EditWarpDomains") != 0 {
-		t.Error("плохая правка дошла до агента")
+	if b := get(e, c, "/warp").Body.String(); !strings.Contains(b, "состояние AZ-WARP недоступно") {
+		t.Fatalf("ошибка агента: %s", b)
 	}
 }
 
-func TestWarpUpdateNeedsConfirmSyncAndInstall(t *testing.T) {
+func TestWarpInstallWithWebPanel(t *testing.T) {
 	e, n, c, csrf := svcEnv(t)
-	n.WarpFn = func(context.Context) (nodeapi.Warp, error) { return nodeapi.Warp{}, nil } // AZ-WARP не установлен
-	n.WarpUpdateFn = func(context.Context) (nodeapi.Task, error) { return nodeapi.Task{ID: "0123456789ab"}, nil }
-	n.WarpSyncFn = func(context.Context) (nodeapi.Task, error) { return nodeapi.Task{ID: "0123456789ab"}, nil }
-	if rec := post(e, c, "/warp/update", url.Values{"csrf": {csrf}}); rec.Code != 400 || n.called("WarpUpdate") != 0 {
-		t.Fatalf("без подтверждения: %d", rec.Code)
-	}
-	if rec := post(e, c, "/warp/update", url.Values{"csrf": {csrf}, "confirm": {"1"}}); rec.Code != 303 {
-		t.Fatalf("update: %d", rec.Code)
-	}
-	if rec := post(e, c, "/warp/sync", url.Values{"csrf": {csrf}}); rec.Code != 303 {
-		t.Fatalf("sync: %d", rec.Code)
-	}
-	if b := get(e, c, "/warp").Body.String(); !strings.Contains(b, "AZ-WARP не установлен") || !strings.Contains(b, `name="mode"`) {
-		t.Fatalf("форма установки не показана: %s", b)
-	}
+	warpNode(n, false, nodeapi.WarpWeb{})
 	var got nodeapi.WarpInstallAnswers
 	n.InstallWarpFn = func(_ context.Context, a nodeapi.WarpInstallAnswers) (nodeapi.Task, error) {
 		got = a
 		return nodeapi.Task{ID: "0123456789ab"}, nil
 	}
 	f := url.Values{"csrf": {csrf}, "mode": {"wg"}, "mtu": {"1380"}, "subnet": {"10.224.0.0/16"}, "no_chatgpt": {"1"},
-		"wg_endpoint": {"vpn.example.org:51820"}, "wg_address": {"10.9.0.2/32"}, "wg_private_key": {"PRIVATEKEYSECRET="}, "wg_public_key": {"PUB="}}
+		"wg_endpoint": {"vpn.example.org:51820"}, "wg_address": {"10.9.0.2/32"}, "wg_private_key": {"PRIVATEKEYSECRET="}, "wg_public_key": {"PUB="},
+		"web_user": {"boss"}, "web_pass": {"ПАРОЛЬ-ПАНЕЛИ"}}
 	rec := post(e, c, "/warp/install", f)
-	if rec.Code != 303 || got.Mode != "wg" || got.MTU != 1380 || !got.NoChatGPT || got.WG == nil || got.WG.PrivateKey != "PRIVATEKEYSECRET=" {
+	if rec.Code != 303 || got.Mode != "wg" || got.MTU != 1380 || !got.NoChatGPT || got.WG == nil || got.WG.PrivateKey != "PRIVATEKEYSECRET=" ||
+		got.Web == nil || got.Web.User != "boss" || got.Web.Password != "ПАРОЛЬ-ПАНЕЛИ" {
 		t.Fatalf("install: %d %+v", rec.Code, got)
 	}
 	list, _, _ := e.st.AuditList(context.Background(), 10, 0, "warp_install")
-	if len(list) != 1 || strings.Contains(list[0].After+list[0].Target, "PRIVATEKEY") {
+	if len(list) != 1 || strings.Contains(list[0].After+list[0].Target, "PRIVATEKEY") || strings.Contains(list[0].After+list[0].Target, "ПАРОЛЬ-ПАНЕЛИ") {
 		t.Fatalf("секрет в журнале: %+v", list)
 	}
-	// неполные ответы отвергаются до запуска; секреты не возвращаются в форме
+	// Без пароля панели и с неполными ответами — отказ до запуска; секреты
+	// в форму не возвращаются.
 	n.Calls = nil
-	rec = post(e, c, "/warp/install", url.Values{"csrf": {csrf}, "mode": {"slave"}})
-	if rec.Code != 400 || n.called("InstallWarp") != 0 {
-		t.Fatalf("slave без ссылки: %d", rec.Code)
+	for _, f := range []url.Values{
+		{"csrf": {csrf}, "mode": {"warp"}, "web_user": {"boss"}},
+		{"csrf": {csrf}, "mode": {"slave"}, "web_user": {"boss"}, "web_pass": {"secret1"}},
+		{"csrf": {csrf}, "mode": {"nope"}, "ovpn_pass": {"HUNTER2"}, "web_user": {"boss"}, "web_pass": {"ПАРОЛЬ-ПАНЕЛИ"}},
+	} {
+		rec := post(e, c, "/warp/install", f)
+		if rec.Code != 400 || strings.Contains(rec.Body.String(), "HUNTER2") || strings.Contains(rec.Body.String(), "ПАРОЛЬ-ПАНЕЛИ") {
+			t.Fatalf("%v: %d", f, rec.Code)
+		}
 	}
-	rec = post(e, c, "/warp/install", url.Values{"csrf": {csrf}, "mode": {"nope"}, "ovpn_pass": {"HUNTER2"}})
-	if rec.Code != 400 || strings.Contains(rec.Body.String(), "HUNTER2") {
-		t.Fatalf("эхо секрета: %d", rec.Code)
+	if n.called("InstallWarp") != 0 {
+		t.Fatal("установка запущена с неверными ответами")
+	}
+}
+
+func TestWarpWebInstall(t *testing.T) {
+	e, n, c, csrf := svcEnv(t)
+	warpNode(n, true, nodeapi.WarpWeb{})
+	var got nodeapi.WarpWebAnswers
+	n.InstallWarpWebFn = func(_ context.Context, a nodeapi.WarpWebAnswers) (nodeapi.Task, error) {
+		got = a
+		return nodeapi.Task{ID: "0123456789ab"}, nil
+	}
+	if rec := post(e, c, "/warp/web/install", url.Values{"csrf": {csrf}, "web_user": {"x"}, "web_pass": {"secret1"}}); rec.Code != 400 || n.called("InstallWarpWeb") != 0 {
+		t.Fatalf("короткий логин: %d", rec.Code)
+	}
+	rec := post(e, c, "/warp/web/install", url.Values{"csrf": {csrf}, "web_user": {"boss"}, "web_pass": {"secret1"}})
+	if rec.Code != 303 || got.User != "boss" || got.Password != "secret1" {
+		t.Fatalf("%d %+v", rec.Code, got)
+	}
+}
+
+// warpBackend — поддельная веб-панель AZ-WARP: запоминает, что получила.
+func warpBackend(t *testing.T) (*httptest.Server, int, *http.Request, *string) {
+	t.Helper()
+	last := &http.Request{}
+	body := new(string)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*last = *r.Clone(context.Background())
+		b, _ := io.ReadAll(r.Body)
+		*body = string(b)
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte(`<script src="/x/static/app.js"></script>ok`))
+	}))
+	t.Cleanup(srv.Close)
+	_, p, _ := net.SplitHostPort(srv.Listener.Addr().String())
+	port, _ := strconv.Atoi(p)
+	return srv, port, last, body
+}
+
+func TestWarpUIProxy(t *testing.T) {
+	e, n, c, _ := svcEnv(t)
+	e.srv.BasePath = "/azpanel/"
+	e.h = e.srv.Handler()
+	_, port, last, body := warpBackend(t)
+	warpNode(n, true, nodeapi.WarpWeb{Installed: true, Active: true, BackendPort: port})
+
+	r := httptest.NewRequest(http.MethodPost, "/azpanel/warp/ui/htmx/domains/add?x=1", strings.NewReader("domain=example.com"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.Host = "panel.example"
+	r.AddCookie(c)
+	r.AddCookie(&http.Cookie{Name: "session", Value: "warper-cookie"})
+	rec := e.do(r)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "ok") {
+		t.Fatalf("POST без токена формы: %d %s", rec.Code, rec.Body.String())
+	}
+	if last.URL.Path != "/azpanel/warp/ui/htmx/domains/add" || last.URL.RawQuery != "x=1" || *body != "domain=example.com" {
+		t.Fatalf("переслано: %s?%s %q", last.URL.Path, last.URL.RawQuery, *body)
+	}
+	h := last.Header
+	if h.Get("Script_name") != "/azpanel/warp/ui" || h.Get("X-Forwarded-Host") != "panel.example" || last.Host != "panel.example" {
+		t.Fatalf("заголовки: %v host %s", h, last.Host)
+	}
+	if ck := h.Get("Cookie"); strings.Contains(ck, cookieName) || !strings.Contains(ck, "session=warper-cookie") {
+		t.Fatalf("cookie: %q", ck)
+	}
+	rh := rec.Header()
+	if rh.Get("X-Frame-Options") != "SAMEORIGIN" || rh.Get("Content-Security-Policy") != "frame-ancestors 'self'" {
+		t.Fatalf("заголовки ответа: %v", rh)
+	}
+
+	// Запрос с чужого сайта и без входа не проходят.
+	r = httptest.NewRequest(http.MethodGet, "/azpanel/warp/ui/", nil)
+	r.AddCookie(c)
+	r.Header.Set("Sec-Fetch-Site", "cross-site")
+	if rec := e.do(r); rec.Code != 403 {
+		t.Fatalf("чужой сайт: %d", rec.Code)
+	}
+	if rec := e.do(httptest.NewRequest(http.MethodGet, "/azpanel/warp/ui/", nil)); rec.Code != 303 {
+		t.Fatalf("без входа: %d", rec.Code)
+	}
+}
+
+func TestWarpUIBackendDown(t *testing.T) {
+	e, n, c, _ := svcEnv(t)
+	warpNode(n, true, nodeapi.WarpWeb{Installed: true, Active: false, BackendPort: 16060})
+	if rec := get(e, c, "/warp/ui/"); rec.Code != 502 {
+		t.Fatalf("панель не работает: %d", rec.Code)
+	}
+	// Порт есть, но там никто не слушает.
+	srv, port, _, _ := warpBackend(t)
+	srv.Close()
+	warpNode(n, true, nodeapi.WarpWeb{Installed: true, Active: true, BackendPort: port})
+	if rec := get(e, c, "/warp/ui/"); rec.Code != 502 || !strings.Contains(rec.Body.String(), "не отвечает") {
+		t.Fatalf("недоступна: %d", rec.Code)
 	}
 }
 
 func TestWarpRoutesAdminOnly(t *testing.T) {
-	for _, p := range []string{"GET /warp", "POST /warp/domains", "POST /warp/ips", "POST /warp/sync", "POST /warp/update", "POST /warp/install"} {
-		if routes[p] != accAdmin {
-			t.Errorf("%s: не администратор", p)
+	for p, want := range map[string]access{"GET /warp": accAdmin, "POST /warp/install": accAdmin, "POST /warp/web/install": accAdmin,
+		"GET /warp/ui/": accAdminProxy, "POST /warp/ui/": accAdminProxy} {
+		if routes[p] != want {
+			t.Errorf("%s: права %v", p, routes[p])
 		}
 	}
 }

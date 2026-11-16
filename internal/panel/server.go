@@ -78,9 +78,11 @@ var _ Node = (*nodeapi.HTTPClient)(nil)
 
 type Server struct {
 	// wg — есть ли на узлах клиенты WireGuard (раздел в меню); создаётся в Handler.
-	wg      *wgFlags
-	Node    Node
-	Version string
+	wg *wgFlags
+	// warpPort — внутренний порт веб-панели AZ-WARP для пересылки /warp/ui/.
+	warpPort warpPortCache
+	Node     Node
+	Version  string
 	// SessionTTL — срок жизни сессии; ноль — семь суток.
 	SessionTTL time.Duration
 	// DataKey — 32 байта ключа AES-256-GCM для секретов TOTP; пусто — 2FA
@@ -367,11 +369,10 @@ func (s *Server) Handler() http.Handler {
 
 	// WARP: встроенный и AZ-WARP.
 	s.route(mux, "GET /warp", s.warpPage)
-	s.route(mux, "POST /warp/domains", s.warpEdit("domains"))
-	s.route(mux, "POST /warp/ips", s.warpEdit("ips"))
-	s.route(mux, "POST /warp/sync", s.warpSync)
-	s.route(mux, "POST /warp/update", s.warpUpdate)
 	s.route(mux, "POST /warp/install", s.warpInstall)
+	s.route(mux, "POST /warp/web/install", s.warpWebInstall)
+	s.route(mux, "GET /warp/ui/", s.warpUI)
+	s.route(mux, "POST /warp/ui/", s.warpUI)
 
 	// Обновление azpanel: версия, изменения, запуск.
 	s.route(mux, "GET /update", s.updatePage)

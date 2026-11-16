@@ -115,7 +115,7 @@ func TestPermissionsEveryRouteAsUser(t *testing.T) {
 		switch {
 		case a == accPublic || a == accMFA || a == accPortal:
 			continue // вход, выход, статика, портал: права роли не участвуют (портал — portal_test.go)
-		case a == accAdmin:
+		case a == accAdmin || a == accAdminProxy:
 			// и страницы, и любые действия — 403, даже над своим клиентом
 			for _, name := range []string{ownClient, foreignClient} {
 				m, p := concrete(pattern, name, bob.ID)

@@ -405,3 +405,15 @@ pre.notes { white-space: pre-wrap; word-break: break-word; margin: 0; font: inhe
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
+
+/* Встроенное окно чужой панели (AZ-WARP): вся ширина и высота под шапкой. */
+main:has(> .app-frame) { max-width: none; padding-bottom: 1rem; }
+.frame-head { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap; margin-bottom: .75rem; }
+.frame-head h1 { margin: 0; }
+.app-frame {
+  display: block; width: 100%; border: 1px solid var(--line); border-radius: var(--radius);
+  height: calc(100vh - 52px - 6.5rem); height: calc(100dvh - 52px - 6.5rem); min-height: 28rem;
+  background: var(--surface);
+}
+fieldset { border: 1px solid var(--line); border-radius: var(--radius); padding: .75rem 1rem; margin: 0 0 1rem; }
+legend { padding: 0 .35rem; font-weight: 600; }
