@@ -22,53 +22,83 @@
   <button type="submit">Установить веб-панель</button>
 </form>
 {{else}}
-<p>AZ-WARP пускает выбранные домены и подсети через WARP или другой выход. Он не установлен — поставьте его здесь: установщик отвечает на вопросы по этой форме, ход установки виден в задаче. После установки его панель откроется в этом разделе.</p>
-<form method="post" action="{{url "/warp/install"}}" class="card">
+<p>AZ-WARP пускает выбранные домены и подсети через WARP или другой выход. Он не установлен — поставьте его здесь: вопросы те же, что задаёт его установщик, ответы берутся из этой формы, ход установки виден в задаче. После установки его панель откроется в этом разделе.</p>
+<form method="post" action="{{url "/warp/install"}}" class="card warp-install">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
+
+  <fieldset>
+    <legend>Маршрутизация доменов</legend>
+    {{if and .Opt .Opt.GeminiListed}}<p class="muted">Домены Gemini уже в списке с прошлой установки — установщик их оставит.</p>
+    {{else}}<label class="inline"><input type="checkbox" name="gemini" value="1"{{if eq (index .Typed "gemini") "1"}} checked{{end}}> добавить Gemini в список доменов для WARP</label>{{end}}
+    {{if and .Opt .Opt.ChatGPTListed}}<p class="muted">Домены ChatGPT уже в списке с прошлой установки — установщик их оставит.</p>
+    {{else}}<label class="inline"><input type="checkbox" name="chatgpt" value="1"{{if eq (index .Typed "chatgpt") "1"}} checked{{end}}> добавить ChatGPT в список доменов для WARP</label>{{end}}
+  </fieldset>
+
+  <fieldset>
+    <legend>Сеть</legend>
+    <label>Фейковая подсеть <small class="muted">пусто — 10.224.0.0/16, рекомендуется</small> <input type="text" name="subnet" value="{{index .Typed "subnet"}}" spellcheck="false" placeholder="10.224.0.0/16"></label>
+    <label class="inline"><input type="checkbox" name="force_subnet" value="1"{{if eq (index .Typed "force_subnet") "1"}} checked{{end}}> использовать, даже если подсеть уже занята локально или Docker</label>
+    <label>MTU туннеля sing-box <small class="muted">{{if .Opt}}пусто — рекомендуемый {{.Opt.RecMTU}} (MTU интерфейса {{.Opt.PhysMTU}} − 80){{else}}пусто — рекомендуемый установщиком{{end}}; 1280–1500</small>
+      <input type="number" name="mtu" min="1280" max="1500" value="{{index .Typed "mtu"}}"{{if .Opt}} placeholder="{{.Opt.RecMTU}}"{{end}}></label>
+  </fieldset>
+
+  <fieldset>
+    <legend>Режим маршрутизации</legend>
+    <label>Выход
+      <select name="mode">{{range .Modes}}<option value="{{.Value}}"{{if eq (index $.Typed "mode") .Value}} selected{{end}}>{{.Title}}</option>{{end}}</select>
+    </label>
+
+    <div class="mode-block" data-mode="warp">
+      <label>Источник WARP-ключей
+        <select name="warp_source">
+        {{if .Opt}}{{range .Opt.WarpSources}}<option value="{{.ID}}"{{if eq (index $.Typed "warp_source") .ID}} selected{{end}}>{{.Label}}</option>{{end}}
+        {{else}}<option value="">первый в списке установщика</option><option value="generate"{{if eq (index .Typed "warp_source") "generate"}} selected{{end}}>Сгенерировать новый ключ WARP</option>{{end}}
+        </select>
+      </label>
+    </div>
+
+    <div class="mode-block" data-mode="slave">
+      <p class="muted">На доноре выполните <code>warperslave link</code> и вставьте ссылку. Для старого донора без ссылки — его IP или домен, порт и ключ.</p>
+      <label>Ссылка ss:// / vless:// / hy2:// или адрес донора <input type="text" name="slave_link" value="{{index .Typed "slave_link"}}" spellcheck="false"></label>
+      <label>Порт <small class="muted">только для адреса; пусто — 8444</small> <input type="text" name="slave_port" value="{{index .Typed "slave_port"}}" placeholder="8444"></label>
+      <label>Ключ Shadowsocks <small class="muted">только для адреса; на доноре: <code>warperslave showkey</code></small> <input type="password" name="slave_key" autocomplete="off"></label>
+    </div>
+
+    <div class="mode-block" data-mode="vless hy2">
+      <label>Ссылка vless:// или hy2:// <input type="text" name="proxy_link" value="{{index .Typed "proxy_link"}}" spellcheck="false"></label>
+    </div>
+
+    <div class="mode-block" data-mode="wg">
+      <label>WireGuard-конфиг <small class="muted">ищется в /root и /root/warper</small>
+        <select name="wg_conf">
+          {{if .Opt}}{{range .Opt.WGConfs}}<option value="{{.Path}}"{{if eq (index $.Typed "wg_conf") .Path}} selected{{end}}>{{.Path}}{{if .Endpoint}} ({{.Endpoint}}){{end}}</option>{{end}}{{end}}
+          <option value=""{{if and (index .Typed "mode") (eq (index .Typed "wg_conf") "")}} selected{{end}}>Ввести данные вручную</option>
+        </select>
+      </label>
+      <div class="wg-manual">
+        <label>Endpoint (IP:порт) <input type="text" name="wg_endpoint" value="{{index .Typed "wg_endpoint"}}" spellcheck="false"></label>
+        <label>Address <small class="muted">например 172.28.8.3/32</small> <input type="text" name="wg_address" value="{{index .Typed "wg_address"}}" spellcheck="false"></label>
+        <label>PrivateKey <input type="password" name="wg_private_key" autocomplete="off"></label>
+        <label>PublicKey <input type="text" name="wg_public_key" value="{{index .Typed "wg_public_key"}}" spellcheck="false"></label>
+        <label>PresharedKey <small class="muted">пусто — нет</small> <input type="password" name="wg_preshared_key" autocomplete="off"></label>
+        <label>PersistentKeepalive <small class="muted">пусто — 15</small> <input type="text" name="wg_keepalive" value="{{index .Typed "wg_keepalive"}}" placeholder="15"></label>
+      </div>
+    </div>
+
+    <div class="mode-block" data-mode="openvpn">
+      <label>Файл .ovpn <small class="muted">ищется в /root и /root/warper</small>
+        <select name="ovpn_file">
+          {{if .Opt}}{{range .Opt.OvpnFiles}}<option value="{{.Path}}"{{if eq (index $.Typed "ovpn_file") .Path}} selected{{end}}>{{.Path}}{{if .Auth}} — нужен логин и пароль{{end}}</option>{{end}}{{end}}
+          <option value=""{{if and (index .Typed "mode") (eq (index .Typed "ovpn_file") "")}} selected{{end}}>Указать путь</option>
+        </select>
+      </label>
+      <label class="ovpn-path">Путь к .ovpn <input type="text" name="ovpn_path" value="{{index .Typed "ovpn_path"}}" spellcheck="false"></label>
+      <label>Логин <small class="muted">если конфиг требует auth-user-pass</small> <input type="text" name="ovpn_user" value="{{index .Typed "ovpn_user"}}"></label>
+      <label>Пароль <input type="password" name="ovpn_pass" autocomplete="off"></label>
+    </div>
+  </fieldset>
+
   {{template "warpweb" .}}
-  <label>Выход
-    <select name="mode">{{range .Modes}}<option value="{{.Value}}"{{if eq (index $.Typed "mode") .Value}} selected{{end}}>{{.Title}}</option>{{end}}</select>
-  </label>
-
-  <details class="fold">
-    <summary>Дополнительно</summary>
-    <label>Фейковая подсеть <small class="muted">пусто — 10.224.0.0/16</small> <input type="text" name="subnet" value="{{index .Typed "subnet"}}" spellcheck="false" placeholder="10.224.0.0/16"></label>
-    <label class="inline"><input type="checkbox" name="force_subnet" value="1"> использовать подсеть, даже если установщик считает её занятой</label>
-    <label>MTU <small class="muted">1280–1500; пусто — рекомендуемый</small> <input type="number" name="mtu" value="{{index .Typed "mtu"}}"></label>
-    <label>Номер источника ключей WARP <small class="muted">пусто — первый</small> <input type="number" name="warp_key" value="{{index .Typed "warp_key"}}"></label>
-    <label class="inline"><input type="checkbox" name="no_gemini" value="1"> не добавлять домены Gemini</label>
-    <label class="inline"><input type="checkbox" name="no_chatgpt" value="1"> не добавлять домены ChatGPT</label>
-  </details>
-
-  <details class="fold">
-    <summary>Донор (выход «Донор»)</summary>
-    <label>Ссылка ss:// или адрес <input type="text" name="slave_link" value="{{index .Typed "slave_link"}}" spellcheck="false"></label>
-    <label>Порт <small class="muted">только для адреса</small> <input type="text" name="slave_port" value="{{index .Typed "slave_port"}}"></label>
-    <label>Ключ Shadowsocks <small class="muted">только для адреса</small> <input type="password" name="slave_key" autocomplete="off"></label>
-  </details>
-
-  <details class="fold">
-    <summary>VLESS / Hysteria2</summary>
-    <label>Ссылка vless:// или hy2:// <input type="text" name="proxy_link" value="{{index .Typed "proxy_link"}}" spellcheck="false"></label>
-  </details>
-
-  <details class="fold">
-    <summary>WireGuard</summary>
-    <label>Номер найденного .conf <small class="muted">0 или пусто — ввести вручную</small> <input type="number" name="wg_conf_index" value="{{index .Typed "wg_conf_index"}}"></label>
-    <label>Endpoint (host:port) <input type="text" name="wg_endpoint" value="{{index .Typed "wg_endpoint"}}" spellcheck="false"></label>
-    <label>Address <input type="text" name="wg_address" value="{{index .Typed "wg_address"}}" spellcheck="false"></label>
-    <label>Приватный ключ <input type="password" name="wg_private_key" autocomplete="off"></label>
-    <label>Публичный ключ сервера <input type="text" name="wg_public_key" value="{{index .Typed "wg_public_key"}}" spellcheck="false"></label>
-    <label>PresharedKey <input type="password" name="wg_preshared_key" autocomplete="off"></label>
-    <label>PersistentKeepalive <input type="text" name="wg_keepalive" value="{{index .Typed "wg_keepalive"}}"></label>
-  </details>
-
-  <details class="fold">
-    <summary>OpenVPN</summary>
-    <label>Путь к .ovpn <input type="text" name="ovpn_path" value="{{index .Typed "ovpn_path"}}" spellcheck="false"></label>
-    <label>Пользователь <input type="text" name="ovpn_user" value="{{index .Typed "ovpn_user"}}"></label>
-    <label>Пароль <input type="password" name="ovpn_pass" autocomplete="off"></label>
-  </details>
 
   <p class="muted">Встретит установщик неизвестный вопрос — остановится, не угадывая; вывод останется в журнале задачи.</p>
   <button type="submit">Установить AZ-WARP</button>
@@ -79,9 +109,23 @@
 
 {{define "warpweb"}}
 <fieldset>
-  <legend>Вход в панель AZ-WARP</legend>
+  <legend>Веб-панель AZ-WARP</legend>
   <p class="muted">У панели AZ-WARP свой логин и пароль: она спросит их при первом открытии раздела.</p>
-  <label>Логин <small class="muted">3–32 символа: латиница, цифры, _ или -</small> <input type="text" name="web_user" value="{{with index .Typed "web_user"}}{{.}}{{else}}admin{{end}}" required pattern="[A-Za-z0-9_\-]{3,32}" autocomplete="off" spellcheck="false"></label>
-  <label>Пароль <small class="muted">от 6 символов</small> <input type="password" name="web_pass" required minlength="6" maxlength="256" autocomplete="new-password"></label>
+  <label>Логин администратора <small class="muted">3–32 символа: латиница, цифры, _ или -</small> <input type="text" name="web_user" value="{{with index .Typed "web_user"}}{{.}}{{else}}admin{{end}}" required pattern="[A-Za-z0-9_\-]{3,32}" autocomplete="off" spellcheck="false"></label>
+  <label>Пароль <small class="muted">от 6 символов; сгенерированный установщик напечатал бы в журнал задачи, поэтому задаётся здесь</small> <input type="password" name="web_pass" required minlength="6" maxlength="256" autocomplete="new-password"></label>
+  <details class="fold"{{if or (index .Typed "web_port") (index .Typed "web_backend_port") (index .Typed "web_https") (index .Typed "web_publish")}} open{{end}}>
+    <summary>Порты, HTTPS и публикация</summary>
+    <label>Внешний порт веб-панели <small class="muted">пусто — 6060</small> <input type="number" name="web_port" min="1" max="65535" value="{{index .Typed "web_port"}}" placeholder="6060"></label>
+    <label>Внутренний порт (gunicorn) <small class="muted">пусто — 16060</small> <input type="number" name="web_backend_port" min="1" max="65535" value="{{index .Typed "web_backend_port"}}" placeholder="16060"></label>
+    <label class="inline"><input type="checkbox" name="web_https" value="1"{{if eq (index .Typed "web_https") "1"}} checked{{end}}> включить HTTPS</label>
+    <label>Режим публикации панели
+      <select name="web_publish">
+        <option value="">как решит установщик: через nginx, а если порт 80 занят посторонним — напрямую</option>
+        <option value="nginx"{{if eq (index .Typed "web_publish") "nginx"}} selected{{end}}>через nginx (reverse-proxy)</option>
+        <option value="direct"{{if eq (index .Typed "web_publish") "direct"}} selected{{end}}>напрямую, без nginx (gunicorn слушает внешний порт)</option>
+      </select>
+    </label>
+    <label class="web-domain">Доменное имя для Let's Encrypt <small class="muted">пусто — самоподписанный сертификат</small> <input type="text" name="web_domain" value="{{index .Typed "web_domain"}}" spellcheck="false" placeholder="panel.example.com"></label>
+  </details>
 </fieldset>
 {{end}}

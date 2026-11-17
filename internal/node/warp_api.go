@@ -32,6 +32,7 @@ type WarpService struct {
 	Warper    *warp.Warper
 	Self      string // путь к бинарнику azpanel, которым запускаются задачи
 	ParamsDir string // каталог файлов параметров задач (0700)
+	Root      string // корень файловой системы для поиска вариантов установки; "" — "/"
 }
 
 func (a *API) registerWarp(mux *http.ServeMux) {
@@ -96,6 +97,10 @@ func (a *API) warpSummary(w http.ResponseWriter, r *http.Request) {
 	out := nodeapi.Warp{Builtin: a.warpBuiltin(r), AZ: a.Warp.Warper.Status(r.Context())}
 	// Сбой чтения состояния веб-панели — пустое состояние: сводка нужнее.
 	out.Web, _ = a.Warp.Warper.Web(r.Context())
+	if !out.AZ.Installed {
+		opts := a.Warp.Warper.Options(a.Warp.Root)
+		out.Install = &opts
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 

@@ -2,9 +2,12 @@ package panel
 
 import (
 	"context"
+	"crypto/tls"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,8 +43,17 @@ const warpPortTTL = 30 * time.Second
 type warpPortCache struct {
 	mu   sync.Mutex
 	port int
+	tls  bool // gunicorn без nginx с HTTPS: говорит TLS сам
 	at   time.Time
 }
+
+// warpTLSTransport — к gunicorn с самоподписанным сертификатом. Только
+// 127.0.0.1 этого же сервера: проверять сертификат там не от чего.
+var warpTLSTransport = func() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // только loopback
+	return t
+}()
 
 func (s *Server) warpPage(w http.ResponseWriter, r *http.Request) {
 	s.warpView(w, r, http.StatusOK, "", nil)
@@ -66,7 +78,7 @@ func (s *Server) warpView(w http.ResponseWriter, r *http.Request, status int, er
 		s.render(w, r, status, "warp", data)
 		return
 	}
-	data["AZ"], data["Web"] = wp.AZ, wp.Web
+	data["AZ"], data["Web"], data["Opt"] = wp.AZ, wp.Web, wp.Install
 	switch {
 	case !wp.AZ.Installed || !wp.Web.Installed:
 		// форма установки AZ-WARP или его веб-панели
@@ -75,21 +87,43 @@ func (s *Server) warpView(w http.ResponseWriter, r *http.Request, status int, er
 	case !wp.Web.Active || wp.Web.BackendPort == 0:
 		data["WebDown"] = true
 	default:
-		s.rememberWarpPort(wp.Web.BackendPort)
+		s.rememberWarpPort(wp.Web)
 		data["Frame"] = true
 	}
 	s.render(w, r, status, "warp", data)
 }
 
-// warpWebAnswers — логин и пароль веб-панели из формы.
-func warpWebAnswers(f map[string][]string) nodeapi.WarpWebAnswers {
-	get := func(k string) string {
-		if v := f[k]; len(v) > 0 {
-			return v[0]
+// warpWebAnswers — ответы установщику веб-панели из формы. Неверный порт —
+// ошибка, а не умолчание: установщик получил бы не то, что просили.
+func warpWebAnswers(f url.Values) (nodeapi.WarpWebAnswers, error) {
+	a := nodeapi.WarpWebAnswers{User: strings.TrimSpace(f.Get("web_user")), Password: f.Get("web_pass"),
+		HTTPS: f.Get("web_https") == "1", Domain: strings.TrimSpace(f.Get("web_domain")), Publish: strings.TrimSpace(f.Get("web_publish"))}
+	for _, x := range []struct {
+		key string
+		dst *int
+	}{{"web_port", &a.Port}, {"web_backend_port", &a.BackendPort}} {
+		v := strings.TrimSpace(f.Get(x.key))
+		if v == "" {
+			continue
 		}
-		return ""
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return a, errors.New("порт веб-панели: число от 1 до 65535")
+		}
+		*x.dst = n
 	}
-	return nodeapi.WarpWebAnswers{User: strings.TrimSpace(get("web_user")), Password: get("web_pass")}
+	return a, nil
+}
+
+// warpTyped — введённое в форму без секретов: вернуть при ошибке.
+func warpTyped(f url.Values) map[string]string {
+	typed := map[string]string{}
+	for _, k := range []string{"mode", "subnet", "force_subnet", "mtu", "warp_source", "gemini", "chatgpt",
+		"slave_link", "slave_port", "proxy_link", "wg_conf", "wg_endpoint", "wg_address", "wg_public_key", "wg_keepalive",
+		"ovpn_file", "ovpn_path", "ovpn_user", "web_user", "web_port", "web_backend_port", "web_https", "web_domain", "web_publish"} {
+		typed[k] = strings.TrimSpace(f.Get(k))
+	}
+	return typed
 }
 
 // warpInstall — форма вопросов установщика AZ-WARP; веб-панель ставится той
@@ -101,43 +135,43 @@ func (s *Server) warpInstall(w http.ResponseWriter, r *http.Request) {
 	}
 	f := r.PostForm
 	get := func(k string) string { return strings.TrimSpace(f.Get(k)) }
-	typed := map[string]string{"mode": get("mode"), "subnet": get("subnet"), "mtu": get("mtu"), "warp_key": get("warp_key"),
-		"slave_link": get("slave_link"), "slave_port": get("slave_port"), "proxy_link": get("proxy_link"),
-		"wg_endpoint": get("wg_endpoint"), "wg_address": get("wg_address"), "wg_public_key": get("wg_public_key"),
-		"wg_keepalive": get("wg_keepalive"), "wg_conf_index": get("wg_conf_index"), "ovpn_path": get("ovpn_path"), "ovpn_user": get("ovpn_user"),
-		"web_user": get("web_user")}
+	typed := warpTyped(f)
 	bad := func(text string) { s.warpView(w, r, http.StatusBadRequest, text, typed) }
-	web := warpWebAnswers(f)
-	a := nodeapi.WarpInstallAnswers{
-		Mode: get("mode"), NoGemini: f.Get("no_gemini") == "1", NoChatGPT: f.Get("no_chatgpt") == "1",
-		Subnet: get("subnet"), ForceSubnet: f.Get("force_subnet") == "1",
-		SlaveLink: get("slave_link"), SlavePort: get("slave_port"), SlaveKey: get("slave_key"),
-		ProxyLink: get("proxy_link"), OvpnPath: get("ovpn_path"), OvpnUser: get("ovpn_user"), OvpnPass: f.Get("ovpn_pass"),
-		Web: &web,
+	web, err := warpWebAnswers(f)
+	if err != nil {
+		bad(err.Error())
+		return
 	}
-	for _, x := range []struct {
-		key string
-		dst *int
-		msg string
-	}{
-		{"mtu", &a.MTU, "MTU: число от 1280 до 1500."},
-		{"warp_key", &a.WarpKey, "Номер источника ключей: целое число."},
-		{"wg_conf_index", &a.WGConfIndex, "Номер найденного .conf: целое число."},
-	} {
-		v := get(x.key)
-		if v == "" {
-			continue
+	a := nodeapi.WarpInstallAnswers{
+		Mode: get("mode"), Gemini: f.Get("gemini") == "1", ChatGPT: f.Get("chatgpt") == "1",
+		Subnet: get("subnet"), ForceSubnet: f.Get("force_subnet") == "1", WarpSource: get("warp_source"),
+		ProxyLink: get("proxy_link"), Web: &web,
+	}
+	switch a.Mode {
+	case "slave":
+		a.SlaveLink, a.SlavePort, a.SlaveKey = get("slave_link"), get("slave_port"), get("slave_key")
+	case "wg":
+		if a.WGConf = get("wg_conf"); a.WGConf == "" {
+			a.WG = &nodeapi.WarpWGManual{Endpoint: get("wg_endpoint"), Address: get("wg_address"), PrivateKey: get("wg_private_key"),
+				PublicKey: get("wg_public_key"), PresharedKey: get("wg_preshared_key"), Keepalive: get("wg_keepalive")}
 		}
-		num, err := strconv.Atoi(v)
-		if err != nil {
-			bad(x.msg)
+	case "openvpn":
+		if a.OvpnPath = get("ovpn_file"); a.OvpnPath == "" {
+			a.OvpnPath = get("ovpn_path")
+		}
+		a.OvpnUser, a.OvpnPass = get("ovpn_user"), f.Get("ovpn_pass")
+	}
+	if a.Mode != "vless" && a.Mode != "hy2" {
+		a.ProxyLink = ""
+	}
+	if a.Mode != "warp" {
+		a.WarpSource = ""
+	}
+	if v := get("mtu"); v != "" {
+		if a.MTU, err = strconv.Atoi(v); err != nil {
+			bad("MTU: число от 1280 до 1500.")
 			return
 		}
-		*x.dst = num
-	}
-	if a.Mode == "wg" && a.WGConfIndex == 0 {
-		a.WG = &nodeapi.WarpWGManual{Endpoint: get("wg_endpoint"), Address: get("wg_address"), PrivateKey: get("wg_private_key"),
-			PublicKey: get("wg_public_key"), PresharedKey: get("wg_preshared_key"), Keepalive: get("wg_keepalive")}
 	}
 	if err := a.Validate(); err != nil {
 		bad(err.Error())
@@ -158,6 +192,19 @@ func (s *Server) warpInstall(w http.ResponseWriter, r *http.Request) {
 	if a.MTU != 0 {
 		detail += ", MTU " + strconv.Itoa(a.MTU)
 	}
+	if a.WarpSource != "" {
+		detail += ", ключи " + a.WarpSource
+	}
+	var lists []string
+	if a.Gemini {
+		lists = append(lists, "Gemini")
+	}
+	if a.ChatGPT {
+		lists = append(lists, "ChatGPT")
+	}
+	if len(lists) > 0 {
+		detail += ", домены " + strings.Join(lists, " и ")
+	}
 	s.taskStarted(w, r, "warp_install", a.Mode, detail+", веб-панель "+web.User+";", t)
 }
 
@@ -167,9 +214,12 @@ func (s *Server) warpWebInstall(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	a := warpWebAnswers(r.PostForm)
-	typed := map[string]string{"web_user": a.User}
-	if err := a.Validate(); err != nil {
+	a, err := warpWebAnswers(r.PostForm)
+	typed := warpTyped(r.PostForm)
+	if err == nil {
+		err = a.Validate()
+	}
+	if err != nil {
 		s.warpView(w, r, http.StatusBadRequest, err.Error(), typed)
 		return
 	}
@@ -184,9 +234,9 @@ func (s *Server) warpWebInstall(w http.ResponseWriter, r *http.Request) {
 	s.taskStarted(w, r, "warp_web_install", a.User, "логин "+a.User+";", t)
 }
 
-func (s *Server) rememberWarpPort(port int) {
+func (s *Server) rememberWarpPort(st nodeapi.WarpWeb) {
 	s.warpPort.mu.Lock()
-	s.warpPort.port, s.warpPort.at = port, s.now()
+	s.warpPort.port, s.warpPort.tls, s.warpPort.at = st.BackendPort, st.TLS, s.now()
 	s.warpPort.mu.Unlock()
 }
 
@@ -196,26 +246,26 @@ func (s *Server) forgetWarpPort() {
 	s.warpPort.mu.Unlock()
 }
 
-// warpBackend — внутренний порт веб-панели AZ-WARP; 0 — не установлена или
-// не работает.
-func (s *Server) warpBackend(ctx context.Context) int {
+// warpBackend — порт веб-панели AZ-WARP на 127.0.0.1 и говорит ли она TLS;
+// порт 0 — не установлена или не работает.
+func (s *Server) warpBackend(ctx context.Context) (int, bool) {
 	s.warpPort.mu.Lock()
-	port, at := s.warpPort.port, s.warpPort.at
+	port, useTLS, at := s.warpPort.port, s.warpPort.tls, s.warpPort.at
 	s.warpPort.mu.Unlock()
 	if port != 0 && s.now().Sub(at) < warpPortTTL {
-		return port
+		return port, useTLS
 	}
 	n := s.serviceNode()
 	if n == nil {
-		return 0
+		return 0, false
 	}
 	st, err := n.WarpWeb(ctx)
 	if err != nil || !st.Installed || !st.Active || st.BackendPort == 0 {
 		s.forgetWarpPort()
-		return 0
+		return 0, false
 	}
-	s.rememberWarpPort(st.BackendPort)
-	return st.BackendPort
+	s.rememberWarpPort(st)
+	return st.BackendPort, st.TLS
 }
 
 // warpUI пересылает запрос во веб-панель AZ-WARP. Она живёт под префиксом
@@ -230,7 +280,7 @@ func (s *Server) warpUI(w http.ResponseWriter, r *http.Request) {
 		s.errorPage(w, r, http.StatusNotFound, "панель AZ-WARP открывается только для локального узла")
 		return
 	}
-	port := s.warpBackend(r.Context())
+	port, useTLS := s.warpBackend(r.Context())
 	if port == 0 {
 		s.errorPage(w, r, http.StatusBadGateway, "веб-панель AZ-WARP не установлена или не работает")
 		return
@@ -240,9 +290,15 @@ func (s *Server) warpUI(w http.ResponseWriter, r *http.Request) {
 	if s.isHTTPS(r) {
 		proto = "https"
 	}
+	scheme := "http"
+	var transport http.RoundTripper
+	if useTLS {
+		scheme, transport = "https", warpTLSTransport
+	}
 	rp := &httputil.ReverseProxy{
+		Transport: transport,
 		Rewrite: func(pr *httputil.ProxyRequest) {
-			pr.Out.URL.Scheme = "http"
+			pr.Out.URL.Scheme = scheme
 			pr.Out.URL.Host = net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
 			pr.Out.URL.Path = prefix + strings.TrimPrefix(pr.In.URL.Path, warpUIPath)
 			pr.Out.URL.RawPath = ""

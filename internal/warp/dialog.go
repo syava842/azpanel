@@ -20,6 +20,9 @@ type Rule struct {
 	Context *regexp.Regexp // по всему окну с прошлого ответа; nil — не проверять
 	// Answer возвращает ответ; ok == false — остановить установку (с причиной).
 	Answer func(m []string) (answer string, ok bool, reason string)
+	// Choose — вместо Answer, когда ответ зависит от напечатанного меню: window
+	// — весь вывод с прошлого ответа.
+	Choose func(m []string, window string) (answer string, ok bool, reason string)
 	Secret bool // ответ секретный: в журнал не пишется
 	Max    int  // сколько раз можно ответить; 0 — 3 (повтор вопроса значит, что ответ не принят)
 }
@@ -163,7 +166,15 @@ func (d *Dialog) Run(ctx context.Context, rw io.ReadWriter) error {
 				flush(true)
 				return fmt.Errorf("установщик повторяет вопрос %q больше %d раз — ответ не принят", rule.Name, max)
 			}
-			ans, ok, reason := rule.Answer(m)
+			var (
+				ans, reason string
+				ok          bool
+			)
+			if rule.Choose != nil {
+				ans, ok, reason = rule.Choose(m, window)
+			} else {
+				ans, ok, reason = rule.Answer(m)
+			}
 			if !ok {
 				flush(true)
 				return fmt.Errorf("вопрос %q: %s", rule.Name, reason)
@@ -201,21 +212,22 @@ func (d *Dialog) match(last, window string) (*Rule, []string) {
 // InstallAnswers — ответы на вопросы install.sh AZ-WARP.
 type InstallAnswers struct {
 	Mode string `json:"mode"` // warp | slave | wg | vless | hy2 | openvpn
-	// Gemini и ChatGPT: по умолчанию домены добавляются (как Enter в установщике).
-	NoGemini  bool `json:"no_gemini,omitempty"`
-	NoChatGPT bool `json:"no_chatgpt,omitempty"`
+	// Gemini и ChatGPT — добавить их домены. По умолчанию нет (у установщика
+	// Enter — да): домены владелец включает сам.
+	Gemini  bool `json:"gemini,omitempty"`
+	ChatGPT bool `json:"chatgpt,omitempty"`
 	// Subnet — фейковая подсеть; пусто — 10.224.0.0/16. ForceSubnet — подтвердить
 	// использование подсети, которую установщик считает занятой.
 	Subnet      string    `json:"subnet,omitempty"`
 	ForceSubnet bool      `json:"force_subnet,omitempty"`
-	MTU         int       `json:"mtu,omitempty"`        // 0 — рекомендуемый установщиком
-	WarpKey     int       `json:"warp_key,omitempty"`   // номер источника ключей WARP, 0 — первый
-	SlaveLink   string    `json:"slave_link,omitempty"` // ss://… или адрес донора
-	SlavePort   string    `json:"slave_port,omitempty"` // только для адреса донора
-	SlaveKey    string    `json:"slave_key,omitempty"`  // только для адреса донора
-	ProxyLink   string    `json:"proxy_link,omitempty"` // vless://… либо hy2://…
+	MTU         int       `json:"mtu,omitempty"`         // 0 — рекомендуемый установщиком
+	WarpSource  string    `json:"warp_source,omitempty"` // system | wgcf | root | generate; пусто — первый в меню
+	SlaveLink   string    `json:"slave_link,omitempty"`  // ss://… или адрес донора
+	SlavePort   string    `json:"slave_port,omitempty"`  // только для адреса донора
+	SlaveKey    string    `json:"slave_key,omitempty"`   // только для адреса донора
+	ProxyLink   string    `json:"proxy_link,omitempty"`  // vless://… либо hy2://…
 	WG          *WGManual `json:"wg,omitempty"`
-	WGConfIndex int       `json:"wg_conf_index,omitempty"` // номер найденного .conf; 0 — ввести вручную
+	WGConf      string    `json:"wg_conf,omitempty"` // путь найденного .conf; пусто — ввести вручную
 	OvpnPath    string    `json:"ovpn_path,omitempty"`
 	OvpnUser    string    `json:"ovpn_user,omitempty"`
 	OvpnPass    string    `json:"ovpn_pass,omitempty"`
@@ -237,9 +249,26 @@ type WGManual struct {
 const defaultSubnet = "10.224.0.0/16"
 
 var (
+	menuItemRe   = regexp.MustCompile(`(?m)^[ \t]*(\d+)\.[ \t]+(.+?)[ \t]*$`)
+	wgMenuRe     = regexp.MustCompile(`(?m)^[ \t]*(\d+)\.[ \t]+(\S+\.conf)[ \t]+\(`)
 	wgEndpointRe = regexp.MustCompile(`^[0-9a-zA-Z._-]+:[0-9]+$`)
 	modeNumbers  = map[string]string{"warp": "1", "slave": "2", "wg": "3", "vless": "4", "hy2": "5", "openvpn": "6"}
 )
+
+// warpSourceOf — какой источник ключей описывает пункт меню install.sh.
+func warpSourceOf(label string) string {
+	switch {
+	case strings.Contains(label, "ключи AntiZapret"):
+		return "system"
+	case strings.HasPrefix(label, DefaultDir+"/wgcf/wgcf-profile.conf"):
+		return "wgcf"
+	case strings.HasPrefix(label, "/root/wgcf-profile.conf"):
+		return "root"
+	case strings.HasPrefix(label, "Сгенерировать новый ключ WARP"):
+		return "generate"
+	}
+	return ""
+}
 
 // Validate проверяет ответы до запуска установщика.
 func (a *InstallAnswers) Validate() error {
@@ -252,8 +281,8 @@ func (a *InstallAnswers) Validate() error {
 	if a.MTU != 0 && (a.MTU < 1280 || a.MTU > 1500) {
 		return errors.New("MTU вне диапазона 1280–1500")
 	}
-	if a.WarpKey < 0 {
-		return errors.New("номер источника ключей WARP отрицательный")
+	if a.WarpSource != "" && !WarpSourceIDs[a.WarpSource] {
+		return fmt.Errorf("источник ключей WARP %q неизвестен", a.WarpSource)
 	}
 	switch a.Mode {
 	case "slave":
@@ -264,7 +293,10 @@ func (a *InstallAnswers) Validate() error {
 			return errors.New("для адреса донора нужен ключ Shadowsocks")
 		}
 	case "wg":
-		if a.WGConfIndex == 0 {
+		if a.WGConf != "" && !strings.HasSuffix(a.WGConf, ".conf") {
+			return errors.New("WireGuard: ожидается путь к .conf")
+		}
+		if a.WGConf == "" {
 			w := a.WG
 			if w == nil || !wgEndpointRe.MatchString(w.Endpoint) || w.Address == "" || w.PrivateKey == "" || w.PublicKey == "" {
 				return errors.New("для режима wg нужны endpoint (host:порт), address, private_key и public_key")
@@ -286,7 +318,7 @@ func (a *InstallAnswers) Validate() error {
 	// Ответы идут в псевдотерминал: дисциплина линии превращает Ctrl-C, Ctrl-D,
 	// Ctrl-U, Ctrl-Z и подобные байты в сигналы, конец ввода и стирание строки —
 	// установщик прервался бы или получил обрезанный ответ.
-	for _, s := range []string{a.SlaveLink, a.SlavePort, a.SlaveKey, a.ProxyLink, a.OvpnPath, a.OvpnUser, a.OvpnPass, a.Subnet} {
+	for _, s := range []string{a.SlaveLink, a.SlavePort, a.SlaveKey, a.ProxyLink, a.OvpnPath, a.OvpnUser, a.OvpnPass, a.Subnet, a.WGConf} {
 		if hasControl(s) {
 			return errors.New("ответы не могут содержать управляющие символы и переводы строк")
 		}
@@ -385,8 +417,8 @@ func (a *InstallAnswers) Rules() []Rule {
 	}
 	keepalive := w.Keepalive
 	return []Rule{
-		{Name: "gemini", Prompt: rx(`Добавить Gemini в список доменов для WARP\? \(Y/n\):\s*$`), Answer: fixed(yn(!a.NoGemini))},
-		{Name: "chatgpt", Prompt: rx(`Добавить ChatGPT в список доменов для WARP\? \(Y/n\):\s*$`), Answer: fixed(yn(!a.NoChatGPT))},
+		{Name: "gemini", Prompt: rx(`Добавить Gemini в список доменов для WARP\? \(Y/n\):\s*$`), Answer: fixed(yn(a.Gemini))},
+		{Name: "chatgpt", Prompt: rx(`Добавить ChatGPT в список доменов для WARP\? \(Y/n\):\s*$`), Answer: fixed(yn(a.ChatGPT))},
 		{Name: "subnet-default", Prompt: rx(`Использовать фейковую подсеть (\S+) \(рекомендуется\)\? \[Y/n\]:\s*$`),
 			Answer: func(m []string) (string, bool, string) {
 				if subnet == m[1] {
@@ -416,13 +448,24 @@ func (a *InstallAnswers) Rules() []Rule {
 		{Name: "slave-key", Prompt: rx(`Ключ Shadowsocks \(.*\):\s*$`), Max: 1, Secret: true, Answer: required("slave_key", a.SlaveKey)},
 		{Name: "proxy-link", Prompt: rx(`Ссылка \(Enter — назад\):\s*$`), Max: 1, Secret: true, Answer: required("proxy_link", a.ProxyLink)},
 		{Name: "wg-menu-found", Prompt: rx(`Выбор:\s*$`), Context: rx(`M\.\s+Ввести данные вручную`), Max: 2,
-			Answer: func([]string) (string, bool, string) {
-				if a.WGConfIndex > 0 {
-					return strconv.Itoa(a.WGConfIndex), true, ""
+			Choose: func(_ []string, window string) (string, bool, string) {
+				if a.WGConf == "" {
+					return "M", true, ""
 				}
-				return "M", true, ""
+				for _, m := range wgMenuRe.FindAllStringSubmatch(window, -1) {
+					if m[2] == a.WGConf {
+						return m[1], true, ""
+					}
+				}
+				return "", false, "установщик не предложил " + a.WGConf
 			}},
-		{Name: "wg-menu-empty", Prompt: rx(`Выбор:\s*$`), Context: rx(`1\.\s+Ввести данные вручную`), Max: 1, Answer: fixed("1")},
+		{Name: "wg-menu-empty", Prompt: rx(`Выбор:\s*$`), Context: rx(`1\.\s+Ввести данные вручную`), Max: 1,
+			Answer: func([]string) (string, bool, string) {
+				if a.WGConf != "" {
+					return "", false, "установщик не нашёл WireGuard-конфигов, " + a.WGConf + " в том числе"
+				}
+				return "1", true, ""
+			}},
 		{Name: "wg-endpoint", Prompt: rx(`Endpoint \(IP:порт\):\s*$`), Max: 1, Answer: required("wg.endpoint", w.Endpoint)},
 		{Name: "wg-address", Prompt: rx(`Address \(.*\):\s*$`), Max: 1, Answer: required("wg.address", w.Address)},
 		{Name: "wg-private", Prompt: rx(`PrivateKey:\s*$`), Max: 1, Secret: true, Answer: required("wg.private_key", w.PrivateKey)},
@@ -433,11 +476,16 @@ func (a *InstallAnswers) Rules() []Rule {
 		{Name: "ovpn-user", Prompt: rx(`Логин:\s*$`), Max: 1, Answer: fixed(a.OvpnUser)},
 		{Name: "ovpn-pass", Prompt: rx(`Пароль:\s*$`), Max: 1, Secret: true, Answer: fixed(a.OvpnPass)},
 		{Name: "warp-key", Prompt: rx(`Выбор \[по умолчанию 1\]:\s*$`), Max: 1,
-			Answer: func([]string) (string, bool, string) {
-				if a.WarpKey > 0 {
-					return strconv.Itoa(a.WarpKey), true, ""
+			Choose: func(_ []string, window string) (string, bool, string) {
+				if a.WarpSource == "" {
+					return "1", true, ""
 				}
-				return "1", true, ""
+				for _, m := range menuItemRe.FindAllStringSubmatch(window, -1) {
+					if warpSourceOf(m[2]) == a.WarpSource {
+						return m[1], true, ""
+					}
+				}
+				return "", false, "установщик не предложил источник ключей WARP " + a.WarpSource
 			}},
 		// Веб-панель ставится отдельным шагом (`warper web install`) со своими
 		// вопросами: здесь всегда «нет».

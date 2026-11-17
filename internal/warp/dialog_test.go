@@ -80,7 +80,7 @@ const (
 )
 
 func TestDialogWarpMode(t *testing.T) {
-	a := InstallAnswers{Mode: "warp", NoChatGPT: true, MTU: 1380}
+	a := InstallAnswers{Mode: "warp", Gemini: true, MTU: 1380}
 	steps := []step{
 		{out: cG + "== установка ==" + cN + "\r\n", noRead: true},
 		{out: "Добавить Gemini в список доменов для WARP? (Y/n): "},
@@ -231,6 +231,8 @@ func TestAnswersValidate(t *testing.T) {
 		"vless схема":     {Mode: "vless", ProxyLink: "http://x"},
 		"hy2 схема":       {Mode: "hy2", ProxyLink: "vless://x"},
 		"ovpn":            {Mode: "openvpn"},
+		"источник ключей": {Mode: "warp", WarpSource: "2"},
+		"wg не .conf":     {Mode: "wg", WGConf: "/root/a.txt"},
 		"перевод строки":  {Mode: "vless", ProxyLink: "vless://a\nb"},
 	}
 	for name, a := range bad {
@@ -242,7 +244,7 @@ func TestAnswersValidate(t *testing.T) {
 		{Mode: "warp"}, {Mode: "warp", Subnet: "10.10.0.0/16", MTU: 1400},
 		{Mode: "slave", SlaveLink: "ss://x@h:1"}, {Mode: "slave", SlaveLink: "203.0.113.7", SlaveKey: "k"},
 		{Mode: "wg", WG: &WGManual{Endpoint: "h:1", Address: "a", PrivateKey: "p", PublicKey: "q"}},
-		{Mode: "wg", WGConfIndex: 1}, {Mode: "hy2", ProxyLink: "hy2://x"}, {Mode: "openvpn", OvpnPath: "/root/a.ovpn"},
+		{Mode: "wg", WGConf: "/root/a.conf"}, {Mode: "warp", WarpSource: "wgcf"}, {Mode: "hy2", ProxyLink: "hy2://x"}, {Mode: "openvpn", OvpnPath: "/root/a.ovpn"},
 	}
 	for _, a := range good {
 		if err := a.Validate(); err != nil {

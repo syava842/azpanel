@@ -26,7 +26,11 @@ func TestWebRulesCoverInstallScript(t *testing.T) {
 			continue
 		}
 		n++
-		if r, _ := d.match(prompt, ""); r == nil {
+		window := ""
+		if prompt == "Выбор [1]: " || prompt == "Выбор [2]: " {
+			window = "Режим публикации панели:\n  1) через nginx (reverse-proxy)\n" + prompt
+		}
+		if r, _ := d.match(prompt, window); r == nil {
 			t.Errorf("нет правила для вопроса установщика: %q", prompt)
 		}
 	}
@@ -50,7 +54,8 @@ func TestWebDialogAnswersAndHidesPassword(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "||boss|Pa55word!|Pa55word!|y|"; strings.Join(got, "|") != want {
+	// Умолчания установщика: порты Enter, HTTPS «нет».
+	if want := "||boss|Pa55word!|Pa55word!|n|"; strings.Join(got, "|") != want {
 		t.Fatalf("ответы %q, ждали %q", strings.Join(got, "|"), want)
 	}
 	if strings.Contains(log, "Pa55word!") {
@@ -77,6 +82,11 @@ func TestWebAnswersValidate(t *testing.T) {
 		{User: "ад мин", Password: "secret1"},
 		{User: "admin", Password: "12345"},
 		{User: "admin", Password: "secret\n1"},
+		{User: "admin", Password: "secret1", Port: 70000},
+		{User: "admin", Password: "secret1", Port: 16060},
+		{User: "admin", Password: "secret1", Port: 7000, BackendPort: 7000},
+		{User: "admin", Password: "secret1", Domain: "panel.example.com"},
+		{User: "admin", Password: "secret1", HTTPS: true, Domain: "panel_example"},
 	} {
 		if a.Validate() == nil {
 			t.Errorf("приняты неверные ответы %+v", a)

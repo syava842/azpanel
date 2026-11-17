@@ -16,7 +16,6 @@ NC='\033[0m'
 
 REPO_BRANCH="${WARPER_WEB_BRANCH:-main}"
 REPO_RAW="https://raw.githubusercontent.com/Liafanx/AZ-WARP/${REPO_BRANCH}"
-REPO_GIT="https://github.com/Liafanx/AZ-WARP.git"
 
 WARPER_DIR="/root/warper"
 WEB_DIR="${WARPER_DIR}/web"
@@ -50,9 +49,9 @@ echo ""
 _port_in_use() {
     local port="$1"
     if command -v ss >/dev/null 2>&1; then
-        ss -tlnH "sport = :$port" 2>/dev/null | grep -q .
+        grep -q . <<< "$(ss -tlnH "sport = :$port" 2>/dev/null)"
     elif command -v netstat >/dev/null 2>&1; then
-        netstat -tlnp 2>/dev/null | grep -qE ":${port}\s"
+        grep -qE ":${port}\s" <<< "$(netstat -tlnp 2>/dev/null)"
     else
         return 1
     fi
@@ -65,6 +64,50 @@ _port_owner() {
     else
         echo "?"
     fi
+}
+
+# PID процесса, слушающего порт (пусто, если порт свободен).
+_port_pid() {
+    local port="$1"
+    command -v ss >/dev/null 2>&1 || return 0
+    ss -tlnpH "sport = :$port" 2>/dev/null | head -1 \
+        | grep -oP 'pid=\K[0-9]+' | head -1
+}
+
+# Принадлежит ли PID юниту nginx.service.
+# Имени процесса доверять нельзя: сторонняя сборка тоже зовётся nginx.
+# Подстрокой в cgroup тоже нельзя: имена вида "<что-то>-nginx.service"
+# её содержат. Сравниваем имя юнита целиком.
+_pid_in_nginx_unit() {
+    local pid="$1" unit
+    [ -n "$pid" ] || return 1
+    unit=$(sed -n 's|.*/\([^/]*\.service\)$|\1|p' "/proc/$pid/cgroup" 2>/dev/null | head -1)
+    [ "$unit" = "nginx.service" ]
+}
+
+# Webroot для ACME-challenge. Когда 80-й держит чужой nginx, наш
+# /var/www/html недоступен снаружи и challenge вернёт 404.
+_acme_webroot() {
+    local pid cfg root
+    pid=$(_port_pid 80)
+    if [ -z "$pid" ] || _pid_in_nginx_unit "$pid"; then
+        echo "/var/www/html"
+        return 0
+    fi
+    # Чужой nginx: путь к конфигу есть только у мастера, порт слушает воркер
+    local cmdline
+    cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
+    if ! grep -q -- '-c ' <<< "$cmdline"; then
+        local ppid
+        ppid=$(awk '{print $4}' "/proc/$pid/stat" 2>/dev/null)
+        [ -n "$ppid" ] && cmdline=$(tr '\0' ' ' < "/proc/$ppid/cmdline" 2>/dev/null)
+    fi
+    cfg=$(echo "$cmdline" | grep -oE -- '-c[[:space:]]+[^[:space:]]+' | head -1 | awk '{print $2}')
+    [ -n "$cfg" ] && [ -f "$cfg" ] || return 1
+    root=$(grep -hoE '^[[:space:]]*root[[:space:]]+[^;]+;' "$cfg" 2>/dev/null \
+        | head -1 | awk '{print $2}' | tr -d ';')
+    [ -n "$root" ] && [ -d "$root" ] || return 1
+    echo "$root"
 }
 
 _validate_port() {
@@ -219,6 +262,40 @@ if [ "$ENABLE_HTTPS" = "y" ]; then
     fi
 fi
 
+# ===== Режим публикации =====
+# nginx как reverse-proxy или gunicorn напрямую на внешнем порту.
+WEB_MODE="nginx"
+_nginx_busy=""
+if _port_in_use 80; then
+    _p80=$(_port_pid 80)
+    if [ -n "$_p80" ] && ! _pid_in_nginx_unit "$_p80"; then
+        _nginx_busy="y"
+    fi
+fi
+
+echo ""
+if [ -n "$_nginx_busy" ]; then
+    echo -e "${YELLOW}Порт 80 занят посторонним процессом ($(_port_owner 80)).${NC}"
+    echo -e "${YELLOW}Пакетный nginx может не запуститься.${NC}"
+fi
+echo -e "${CYAN}Режим публикации панели:${NC}"
+echo "  1) через nginx (reverse-proxy)"
+echo "  2) напрямую, без nginx (gunicorn слушает внешний порт)"
+while true; do
+    if [ -n "$_nginx_busy" ]; then
+        read -r -e -p "Выбор [2]: " _mode_input
+        _mode_input="${_mode_input:-2}"
+    else
+        read -r -e -p "Выбор [1]: " _mode_input
+        _mode_input="${_mode_input:-1}"
+    fi
+    case "$_mode_input" in
+        1) WEB_MODE="nginx"; break ;;
+        2) WEB_MODE="standalone"; break ;;
+        *) echo -e "${RED}Введите 1 или 2${NC}" ;;
+    esac
+done
+
 echo ""
 echo -e "${YELLOW}=== Установка ===${NC}"
 
@@ -226,10 +303,17 @@ echo -e "${YELLOW}=== Установка ===${NC}"
 
 echo -e "${CYAN}1. Установка зависимостей...${NC}"
 apt-get update -qq
-apt-get install -y -qq python3 python3-venv python3-pip nginx git curl openssl >/dev/null
+apt-get install -y -qq python3 python3-venv python3-pip curl openssl >/dev/null
+if [ "$WEB_MODE" = "nginx" ]; then
+    apt-get install -y -qq nginx >/dev/null
+fi
 
 if [ "$ENABLE_HTTPS" = "y" ] && [ -n "$DOMAIN" ]; then
-    apt-get install -y -qq certbot python3-certbot-nginx >/dev/null
+    if [ "$WEB_MODE" = "nginx" ]; then
+        apt-get install -y -qq certbot python3-certbot-nginx >/dev/null
+    else
+        apt-get install -y -qq certbot >/dev/null
+    fi
 fi
 
 # ===== Скачивание файлов =====
@@ -238,12 +322,31 @@ echo -e "${CYAN}2. Скачивание файлов веб-панели...${NC}
 
 mkdir -p "$WEB_DIR/static" "$WEB_DIR/templates/partials"
 
+# Скачивает файлы из web/files.txt в КАТАЛОГ по raw-ссылкам — тем же путём,
+# что и остальное обновление. git clone с github.com проходит не везде.
+#   _fetch_web_files RAW_BASE КАТАЛОГ
+_fetch_web_files() {
+    local base="$1" dest="$2" path
+    mkdir -p "$dest"
+    if ! curl -fsSL --retry 4 --retry-delay 3 --connect-timeout 15 "$base/web/files.txt?t=$(date +%s)" \
+        -o "$dest/files.txt"; then
+        echo -e "${RED}Не удалось скачать список файлов панели: $base/web/files.txt${NC}" >&2
+        return 1
+    fi
+    while IFS= read -r path; do
+        [ -z "$path" ] || [[ "$path" == \#* ]] && continue
+        mkdir -p "$dest/$(dirname "$path")"
+        if ! curl -fsSL --retry 4 --retry-delay 3 --connect-timeout 15 "$base/$path?t=$(date +%s)" \
+            -o "$dest/$path"; then
+            echo -e "${RED}Не удалось скачать $path${NC}" >&2
+            return 1
+        fi
+    done < "$dest/files.txt"
+}
+
 TMP_DIR=$(mktemp -d)
-cd "$TMP_DIR"
-if ! git clone --depth 1 -b "$REPO_BRANCH" "$REPO_GIT" repo 2>/dev/null; then
-    echo -e "${RED}Не удалось скачать репозиторий ветки $REPO_BRANCH${NC}"
-    exit 1
-fi
+cd "$TMP_DIR" || exit 1
+_fetch_web_files "$REPO_RAW" "$TMP_DIR/repo" || exit 1
 
 if [ ! -d "repo/web" ]; then
     echo -e "${RED}В ветке $REPO_BRANCH нет папки web/${NC}"
@@ -269,7 +372,7 @@ rm -rf "$TMP_DIR"
 # ===== Python venv =====
 
 echo -e "${CYAN}3. Создание venv и установка пакетов...${NC}"
-cd "$WEB_DIR"
+cd "$WEB_DIR" || exit 1
 python3 -m venv venv
 source venv/bin/activate
 pip install --quiet --upgrade pip
@@ -282,6 +385,8 @@ echo -e "${CYAN}4. Создание .env...${NC}"
 cat > "$WEB_DIR/.env" <<EOF
 PORT=$BACKEND_PORT
 DEBUG=false
+WEB_MODE=$WEB_MODE
+EXTERNAL_PORT=$PORT
 EOF
 chmod 600 "$WEB_DIR/.env"
 
@@ -292,6 +397,26 @@ chmod 700 "$WEB_DIR/data"
 # ===== systemd =====
 
 echo -e "${CYAN}5. Создание systemd сервиса...${NC}"
+
+GUNICORN_TLS=""
+if [ "$WEB_MODE" = "standalone" ]; then
+    GUNICORN_BIND="0.0.0.0:$PORT"
+    if [ "$ENABLE_HTTPS" = "y" ]; then
+        SSL_DIR="/etc/warper-web/ssl"
+        mkdir -p "$SSL_DIR"
+        chmod 700 "$SSL_DIR"
+        if [ ! -f "$SSL_DIR/warper-web.crt" ]; then
+            openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+                -keyout "$SSL_DIR/warper-web.key" \
+                -out "$SSL_DIR/warper-web.crt" \
+                -subj "/CN=${DOMAIN:-warper-web}" 2>/dev/null
+            chmod 600 "$SSL_DIR/warper-web.key"
+        fi
+        GUNICORN_TLS="--certfile $SSL_DIR/warper-web.crt --keyfile $SSL_DIR/warper-web.key"
+    fi
+else
+    GUNICORN_BIND="127.0.0.1:$BACKEND_PORT"
+fi
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=AZ-WARP Web Panel
@@ -303,7 +428,7 @@ User=root
 Group=root
 WorkingDirectory=$WEB_DIR
 EnvironmentFile=$WEB_DIR/.env
-ExecStart=$WEB_DIR/venv/bin/gunicorn --workers 2 --threads 8 --worker-class gthread --bind 127.0.0.1:$BACKEND_PORT --access-logfile - --error-logfile - --timeout 600 --graceful-timeout 30 --max-requests 1000 --max-requests-jitter 100 app:app
+ExecStart=$WEB_DIR/venv/bin/gunicorn --workers 2 --threads 8 --worker-class gthread --bind $GUNICORN_BIND $GUNICORN_TLS --access-logfile - --error-logfile - --timeout 600 --graceful-timeout 30 --max-requests 1000 --max-requests-jitter 100 app:app
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
@@ -315,6 +440,10 @@ EOF
 
 # ===== nginx =====
 
+if [ "$WEB_MODE" = "standalone" ]; then
+    echo -e "${CYAN}6. Режим без nginx — reverse-proxy не настраивается${NC}"
+    echo -e " - ${CYAN}gunicorn слушает 0.0.0.0:$PORT напрямую${NC}"
+else
 echo -e "${CYAN}6. Настройка nginx...${NC}"
 rm -f "$NGINX_LINK"
 
@@ -328,11 +457,13 @@ if [ -L "$_default_link" ] || [ -f "$_default_link" ]; then
     _default_target=$(readlink -f "$_default_link" 2>/dev/null || echo "$_default_link")
     _is_placeholder="n"
 
-    # Признак заглушки: нет proxy_pass и нет реального приложения
-    if ! grep -qE 'proxy_pass|fastcgi_pass|uwsgi_pass' "$_default_target" 2>/dev/null; then
-        # И размер маленький (стандартная заглушка ~5-15 строк)
-        _line_count=$(grep -c '' "$_default_target" 2>/dev/null || echo 0)
-        if [ "$_line_count" -lt 30 ]; then
+    # Признак заглушки: нет проксирования на приложение и виден стоковый
+    # корень Debian/Ubuntu. По числу строк судить нельзя — стоковый default
+    # занимает ~91 строку, почти целиком из комментариев. По этой же причине
+    # комментарии отбрасываем: в стоковом файле fastcgi_pass закомментирован.
+    _default_active=$(sed 's/#.*//' "$_default_target" 2>/dev/null)
+    if ! grep -qE 'proxy_pass|fastcgi_pass|uwsgi_pass' <<< "$_default_active"; then
+        if grep -qE 'index\.nginx-debian\.html|/var/www/html' <<< "$_default_active"; then
             _is_placeholder="y"
         fi
     fi
@@ -477,16 +608,84 @@ if ! nginx -t >/dev/null 2>&1; then
 fi
 
 # ===== Запуск =====
+fi
 
 echo -e "${CYAN}7. Запуск сервисов...${NC}"
 systemctl daemon-reload
-systemctl enable warper-web nginx >/dev/null 2>&1
-systemctl restart warper-web nginx
+systemctl enable warper-web >/dev/null 2>&1
+systemctl restart warper-web
+
+# nginx -t проверяет только синтаксис: занятый чужим процессом порт
+# он пропускает, а ExecStart падает с "Address already in use".
+# Проверяем все listen-порты активных vhost до рестарта.
+if [ "$WEB_MODE" = "nginx" ]; then
+systemctl enable nginx >/dev/null 2>&1
+_nginx_conflict=""
+for _vhost in /etc/nginx/sites-enabled/*; do
+    [ -e "$_vhost" ] || continue
+    while IFS= read -r _lport; do
+        [ -n "$_lport" ] || continue
+        _lpid=$(_port_pid "$_lport")
+        [ -n "$_lpid" ] || continue
+        _pid_in_nginx_unit "$_lpid" && continue
+        _nginx_conflict="${_nginx_conflict}\n   порт ${_lport} занят процессом $(_port_owner "$_lport") (pid ${_lpid}), vhost $(basename "$_vhost")"
+    done < <(grep -oE '^[[:space:]]*listen[[:space:]]+([0-9.]+:)?[0-9]+' "$_vhost" 2>/dev/null \
+        | grep -oE '[0-9]+$' | sort -u)
+done
+
+if [ -n "$_nginx_conflict" ]; then
+    echo -e "${RED} - nginx не запущен: порты заняты другим процессом${NC}"
+    echo -e "${YELLOW}$(printf '%b' "$_nginx_conflict")${NC}"
+    echo -e "${YELLOW}   Отключите конфликтующий vhost или освободите порт,${NC}"
+    echo -e "${YELLOW}   затем выполните: systemctl start nginx${NC}"
+elif ! systemctl restart nginx 2>/dev/null; then
+    echo -e "${RED} - nginx не запустился:${NC}"
+    systemctl status nginx --no-pager -l 2>&1 | tail -5
+fi
+fi
 sleep 2
 
 # ===== Получение Let's Encrypt + переписывание конфига на HTTPS =====
 
-if [ "$ENABLE_HTTPS" = "y" ] && [ -n "$DOMAIN" ]; then
+if [ "$ENABLE_HTTPS" = "y" ] && [ -n "$DOMAIN" ] && [ "$WEB_MODE" = "standalone" ]; then
+    echo -e "${CYAN}8. Получение Let's Encrypt сертификата для $DOMAIN (без nginx)...${NC}"
+
+    _le_ok="n"
+    if ! _port_in_use 80; then
+        # Порт 80 свободен — certbot поднимет свой временный сервер
+        certbot certonly --standalone --non-interactive --agree-tos \
+            --register-unsafely-without-email -d "$DOMAIN" >/dev/null 2>&1 && _le_ok="y"
+    else
+        _wr=$(_acme_webroot || echo "")
+        if [ -n "$_wr" ]; then
+            echo -e "${CYAN}Порт 80 занят, challenge через webroot $_wr${NC}"
+            certbot certonly --webroot --webroot-path "$_wr" --non-interactive \
+                --agree-tos --register-unsafely-without-email -d "$DOMAIN" >/dev/null 2>&1 && _le_ok="y"
+        else
+            echo -e "${YELLOW}⚠ Порт 80 занят, webroot не определён — LE недоступен${NC}"
+        fi
+    fi
+
+    if [ "$_le_ok" = "y" ]; then
+        # Переключаем gunicorn на выданный сертификат
+        sed -i "s|--certfile [^ ]*|--certfile /etc/letsencrypt/live/$DOMAIN/fullchain.pem|; \
+                s|--keyfile [^ ]*|--keyfile /etc/letsencrypt/live/$DOMAIN/privkey.pem|" "$SERVICE_FILE"
+        # gunicorn не перечитывает сертификат сам
+        mkdir -p /etc/letsencrypt/renewal-hooks/deploy
+        cat > /etc/letsencrypt/renewal-hooks/deploy/warper-web.sh <<'HOOKEOF'
+#!/bin/bash
+systemctl restart warper-web 2>/dev/null || true
+HOOKEOF
+        chmod +x /etc/letsencrypt/renewal-hooks/deploy/warper-web.sh
+        systemctl daemon-reload
+        systemctl restart warper-web
+        echo -e "${GREEN}✓ Сертификат Let's Encrypt получен и подключён${NC}"
+    else
+        echo -e "${YELLOW}⚠ Оставлен самоподписанный сертификат${NC}"
+    fi
+fi
+
+if [ "$ENABLE_HTTPS" = "y" ] && [ -n "$DOMAIN" ] && [ "$WEB_MODE" = "nginx" ]; then
     echo -e "${CYAN}8. Получение Let's Encrypt сертификата для $DOMAIN...${NC}"
 
     # Все переменные инициализируем заранее чтобы set -u не падал
@@ -543,9 +742,9 @@ if [ "$ENABLE_HTTPS" = "y" ] && [ -n "$DOMAIN" ]; then
         if [ -z "$_port80_pids" ]; then
             echo -e "${YELLOW}⚠ Порт 80 никем не слушается${NC}"
             echo -e "${YELLOW}Возможно nginx не смог занять порт 80. Проверяем дальше...${NC}"
-        elif echo "$_port80_proc" | grep -qi "nginx" && [ "$_az_openvpn_backup" != "y" ]; then
-            echo -e "${GREEN}✓ Порт 80 слушает nginx — отлично${NC}"
-        elif echo "$_port80_proc" | grep -qiE "openvpn" || [ "$_az_openvpn_backup" = "y" ]; then
+        elif _pid_in_nginx_unit "$(_port_pid 80)" && [ "$_az_openvpn_backup" != "y" ]; then
+            echo -e "${GREEN}✓ Порт 80 слушает наш nginx — отлично${NC}"
+        elif grep -qiE "openvpn" <<< "$_port80_proc" || [ "$_az_openvpn_backup" = "y" ]; then
             echo -e "${YELLOW}⚠ Порт 80 связан с OpenVPN (backup-подключения AntiZapret)${NC}"
             if [ "$_az_openvpn_backup" = "y" ]; then
                 echo -e "${YELLOW}  В /root/antizapret/setup: OPENVPN_BACKUP_TCP=y${NC}"
@@ -617,10 +816,10 @@ if [ "$ENABLE_HTTPS" = "y" ] && [ -n "$DOMAIN" ]; then
             _port80_pid=$(ss -tlnpH "sport = :80" 2>/dev/null | head -1 | grep -oP 'pid=\K\d+' || echo "")
             if [ -n "$_port80_pid" ]; then
                 _port80_proc=$(ps -p "$_port80_pid" -o comm= 2>/dev/null || echo "?")
-                if [ "$_port80_proc" = "nginx" ]; then
+                if _pid_in_nginx_unit "$_port80_pid"; then
                     echo -e "${GREEN}✓ Порт 80 теперь у nginx, готов получать сертификат${NC}"
                 else
-                    echo -e "${YELLOW}⚠ Порт 80 у $_port80_proc, не у nginx${NC}"
+                    echo -e "${YELLOW}⚠ Порт 80 у $_port80_proc (не nginx.service)${NC}"
                 fi
             else
                 echo -e "${YELLOW}⚠ Порт 80 свободен, но nginx его не занял${NC}"
@@ -646,14 +845,23 @@ if [ "$ENABLE_HTTPS" = "y" ] && [ -n "$DOMAIN" ]; then
 
             # Self-test HTTP с внешнего адреса
             echo -e "${CYAN}Self-test HTTP с внешнего адреса...${NC}"
-            mkdir -p /var/www/html/.well-known/acme-challenge
+            ACME_WEBROOT=$(_acme_webroot || echo "")
+            if [ -z "$ACME_WEBROOT" ]; then
+                echo -e "${YELLOW}⚠ Порт 80 держит посторонний сервер, его webroot не определён.${NC}"
+                echo -e "${YELLOW}  Let's Encrypt через webroot невозможен — нужен DNS-01${NC}"
+                echo -e "${YELLOW}  или освобождение порта 80.${NC}"
+                ACME_WEBROOT="/var/www/html"
+            elif [ "$ACME_WEBROOT" != "/var/www/html" ]; then
+                echo -e "${CYAN}Порт 80 держит другой сервер, webroot: $ACME_WEBROOT${NC}"
+            fi
+            mkdir -p "$ACME_WEBROOT/.well-known/acme-challenge"
             _test_token="warper-test-$(date +%s)"
-            echo "$_test_token" > "/var/www/html/.well-known/acme-challenge/$_test_token"
-            chmod 644 "/var/www/html/.well-known/acme-challenge/$_test_token"
+            echo "$_test_token" > "$ACME_WEBROOT/.well-known/acme-challenge/$_test_token"
+            chmod 644 "$ACME_WEBROOT/.well-known/acme-challenge/$_test_token"
 
             _self_test=$(curl -s --max-time 10 \
                 "http://$DOMAIN/.well-known/acme-challenge/$_test_token" 2>/dev/null || echo "")
-            rm -f "/var/www/html/.well-known/acme-challenge/$_test_token"
+            rm -f "$ACME_WEBROOT/.well-known/acme-challenge/$_test_token"
 
             if [ "$_self_test" = "$_test_token" ]; then
                 echo -e "${GREEN}✓ Сервер доступен извне, можно запрашивать сертификат${NC}"
@@ -667,7 +875,7 @@ if [ "$ENABLE_HTTPS" = "y" ] && [ -n "$DOMAIN" ]; then
             echo -e "${CYAN}Запуск certbot...${NC}"
             mkdir -p /var/www/html
 
-            if certbot certonly --webroot --webroot-path /var/www/html \
+            if certbot certonly --webroot --webroot-path "$ACME_WEBROOT" \
                 -d "$DOMAIN" --non-interactive --agree-tos \
                 --register-unsafely-without-email 2>&1 | tail -15; then
                 sleep 2
@@ -683,7 +891,7 @@ if [ "$ENABLE_HTTPS" = "y" ] && [ -n "$DOMAIN" ]; then
                 # Проверяем характерные ошибки в логе certbot
                 _certbot_log="/var/log/letsencrypt/letsencrypt.log"
                 if [ -f "$_certbot_log" ]; then
-                    if tail -50 "$_certbot_log" | grep -qE "SERVFAIL.*CAA|CAA.*SERVFAIL"; then
+                    if grep -qE "SERVFAIL.*CAA|CAA.*SERVFAIL" <<< "$(tail -50 "$_certbot_log")"; then
                         echo -e ""
                         echo -e "${YELLOW}═══ Похоже на временную проблему DNS-провайдера ═══${NC}"
                         echo -e "${YELLOW}Let's Encrypt не смог проверить CAA-запись для домена.${NC}"
@@ -696,9 +904,9 @@ if [ "$ENABLE_HTTPS" = "y" ] && [ -n "$DOMAIN" ]; then
                         echo -e "     ${CYAN}dig CAA $(echo $DOMAIN | rev | cut -d. -f1-2 | rev) @1.1.1.1${NC}"
                         echo -e "  3. Если проблема не уходит — рассмотреть смену DNS-провайдера"
                         echo -e ""
-                    elif tail -50 "$_certbot_log" | grep -qE "Connection refused|Connection reset"; then
+                    elif grep -qE "Connection refused|Connection reset" <<< "$(tail -50 "$_certbot_log")"; then
                         echo -e "${YELLOW}Похоже на сетевую проблему — порт 80 может быть заблокирован${NC}"
-                    elif tail -50 "$_certbot_log" | grep -qE "rate limit|too many"; then
+                    elif grep -qE "rate limit|too many" <<< "$(tail -50 "$_certbot_log")"; then
                         echo -e "${YELLOW}Превышен лимит запросов Let's Encrypt для этого домена${NC}"
                         echo -e "${YELLOW}Попробуйте через час${NC}"
                     fi
@@ -949,6 +1157,10 @@ elif [ "$ENABLE_HTTPS" = "y" ]; then
     echo -e "  URL:    ${CYAN}https://$EXTERNAL_IP:$PORT${NC}  ${YELLOW}(самоподписанный сертификат)${NC}"
 else
     echo -e "  URL:    ${CYAN}http://$EXTERNAL_IP:$PORT${NC}"
+fi
+
+if [ "$WEB_MODE" = "standalone" ]; then
+    echo -e "  Режим:  ${CYAN}без nginx${NC} (gunicorn слушает порт напрямую)"
 fi
 
 echo -e "  Логин:  ${CYAN}$ADMIN_USER${NC}"

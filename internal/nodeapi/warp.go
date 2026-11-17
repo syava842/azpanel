@@ -16,6 +16,7 @@ type (
 	WarpWGManual       = warp.WGManual
 	WarpWeb            = warp.WebState
 	WarpWebAnswers     = warp.WebAnswers
+	WarpInstallOptions = warp.InstallOptions
 	// WarpDomain — строка списка доменов: домен, источник (user, gemini, chatgpt…), включён.
 	WarpDomain = warp.DomainEntry
 )
@@ -39,6 +40,9 @@ type Warp struct {
 	Builtin []WarpIface `json:"builtin"`
 	AZ      WarpStatus  `json:"az"`
 	Web     WarpWeb     `json:"web"`
+	// Install — что предложит установщик (ключи, конфиги, MTU); только пока
+	// AZ-WARP не установлен.
+	Install *WarpInstallOptions `json:"install,omitempty"`
 }
 
 // WarpList — вывод warper domainslist либо iplist. Lines — домены (без

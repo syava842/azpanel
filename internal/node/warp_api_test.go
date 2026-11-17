@@ -52,7 +52,7 @@ func newWarpEnv(t *testing.T, installed bool) warpEnv {
 		return nil, nil
 	}}
 	params := filepath.Join(dir, "params")
-	e.api.Warp = &WarpService{Warper: w, Self: "/opt/azpanel/bin/azpanel", ParamsDir: params}
+	e.api.Warp = &WarpService{Warper: w, Self: "/opt/azpanel/bin/azpanel", ParamsDir: params, Root: filepath.Join(dir, "fsroot")}
 	now := time.Unix(2_000_000_000, 0)
 	e.api.WGCmd = func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		return []byte("antizapret vpn warp-az warp-vpn\n"), nil
@@ -105,6 +105,13 @@ func TestWarpSummaryNotInstalled(t *testing.T) {
 	sum, err := e.client.Warp(context.Background())
 	if err != nil || sum.AZ.Installed {
 		t.Fatalf("%+v %v", sum, err)
+	}
+	// Пока AZ-WARP не стоит, сводка несёт варианты установки.
+	if sum.Install == nil || sum.Install.RecMTU != 1420 || len(sum.Install.WarpSources) == 0 {
+		t.Fatalf("варианты установки: %+v", sum.Install)
+	}
+	if sum, _ := newWarpEnv(t, true).client.Warp(context.Background()); sum.Install != nil {
+		t.Fatalf("варианты при установленном AZ-WARP: %+v", sum.Install)
 	}
 	if _, err := e.client.WarpDomains(context.Background()); status(err) != 409 {
 		t.Fatalf("%v", err)

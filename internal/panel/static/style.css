@@ -417,3 +417,14 @@ main:has(> .app-frame) { max-width: none; padding-bottom: 1rem; }
 }
 fieldset { border: 1px solid var(--line); border-radius: var(--radius); padding: .75rem 1rem; margin: 0 0 1rem; }
 legend { padding: 0 .35rem; font-weight: 600; }
+/* Форма установки AZ-WARP: видны только поля выбранного выхода. */
+.warp-install .mode-block{display:none}
+.warp-install:has(select[name=mode] option[value=warp]:checked) .mode-block[data-mode~=warp],
+.warp-install:has(select[name=mode] option[value=slave]:checked) .mode-block[data-mode~=slave],
+.warp-install:has(select[name=mode] option[value=wg]:checked) .mode-block[data-mode~=wg],
+.warp-install:has(select[name=mode] option[value=vless]:checked) .mode-block[data-mode~=vless],
+.warp-install:has(select[name=mode] option[value=hy2]:checked) .mode-block[data-mode~=hy2],
+.warp-install:has(select[name=mode] option[value=openvpn]:checked) .mode-block[data-mode~=openvpn]{display:block}
+.warp-install:has(select[name=wg_conf] option[value=""]:not(:checked)) .wg-manual,
+.warp-install:has(select[name=ovpn_file] option[value=""]:not(:checked)) .ovpn-path,
+fieldset:has(input[name=web_https]:not(:checked)) .web-domain{display:none}
