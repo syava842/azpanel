@@ -59,6 +59,14 @@ type Session struct {
 	TxBytes       int64      `json:"tx_bytes"`
 	Since         *time.Time `json:"since,omitempty"`          // OpenVPN
 	LastHandshake *time.Time `json:"last_handshake,omitempty"` // WireGuard
+	VPNAddr       string     `json:"vpn_addr,omitempty"`       // адрес клиента в VPN
+	Proto         string     `json:"proto,omitempty"`          // udp, tcp
+	Port          int        `json:"port,omitempty"`           // порт экземпляра или интерфейса
+	// RxRate, TxRate — байт/с по двум последним замерам агента; RateOK —
+	// скорость известна (у только что увиденного сеанса её ещё нет).
+	RxRate int64 `json:"rx_rate,omitempty"`
+	TxRate int64 `json:"tx_rate,omitempty"`
+	RateOK bool  `json:"rate_ok,omitempty"`
 }
 
 // Denial — отказ хука в подключении. Reason: limit (сверх лимита

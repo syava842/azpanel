@@ -21,7 +21,7 @@ func TestVPNStatsByKind(t *testing.T) {
 	if pos("bob") < 0 || pos("azpanel-test-1") < pos("bob") || pos("wg-only") >= 0 {
 		t.Fatalf("статистика OpenVPN: %s", body)
 	}
-	if !strings.Contains(body, "Итого") || !strings.Contains(body, `?range=7d`) {
+	if !strings.Contains(body, "Итого") || !strings.Contains(body, `?period=week`) {
 		t.Fatalf("нет итога или периодов: %s", body)
 	}
 	if wg := get(e, c, "/wireguard/stats").Body.String(); !strings.Contains(wg, ">wg-only</a>") {

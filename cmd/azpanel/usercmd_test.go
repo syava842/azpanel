@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -208,5 +209,23 @@ func TestPasswdUnknownUserInNonEmptyDB(t *testing.T) {
 	u, _ := st.UserByID(context.Background(), admin.ID)
 	if bcrypt.CompareHashAndPassword([]byte(u.Hash), []byte("brand-new-pass1")) == nil {
 		t.Fatal("пароль применился к чужому пользователю")
+	}
+}
+
+// «azpanel user add --help» показывал не справку, а заводил пользователя
+// «--help»: логин с «-» в начале — ошибка вызова, «.» в начале — неверный логин.
+func TestUserAddDashLogin(t *testing.T) {
+	st, _ := userEnv(t)
+	before, _ := st.Users(context.Background())
+	for _, args := range [][]string{{"add", "--help"}, {"add", "-x", "--admin"}} {
+		if err := cmdUser(args, &bytes.Buffer{}); !errors.Is(err, errUsage) {
+			t.Fatalf("%v: %v", args, err)
+		}
+	}
+	if err := cmdUser([]string{"add", ".hidden"}, &bytes.Buffer{}); err == nil {
+		t.Fatal("логин с точкой в начале принят")
+	}
+	if list, _ := st.Users(context.Background()); len(list) != len(before) {
+		t.Fatalf("пользователи заведены: %+v", list)
 	}
 }

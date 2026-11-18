@@ -1,22 +1,37 @@
-{{define "head"}}{{if eq .VPN.Tab "sessions"}}<meta http-equiv="refresh" content="15">{{end}}{{end}}
+{{define "head"}}{{end}}
 {{define "content"}}
 {{template "vpntabs" .VPN}}
 
 {{if eq .VPN.Tab "sessions"}}
 {{if .SessionsErr}}<div class="error">{{.SessionsErr}}</div>{{else}}
-<p class="muted">Онлайн: {{len .Sessions}} · ↓ {{.SumDown}} · ↑ {{.SumUp}}</p>
+<div class="table-tools">
+  <span class="muted">Онлайн: {{len .Sessions}}</span>
+  <label class="inline"><input type="checkbox" data-toggle-ip checked> Показать IP</label>
+  <label class="inline"><input type="checkbox" data-autorefresh="15" checked> Автообновление 15 с</label>
+</div>
 <div class="table-wrap">
-<table>
-  <thead><tr><th>Клиент</th><th>Экземпляр</th><th>Адрес</th>{{if .HasGeo}}<th>Город</th><th>Провайдер</th>{{end}}<th>↓</th><th>↑</th><th>{{if eq .VPN.Kind "wireguard"}}Рукопожатие{{else}}Подключён{{end}}</th></tr></thead>
+<table class="sessions">
+  <thead><tr>{{range .Heads}}<th><a href="{{url .Href}}">{{.Title}}{{if .Current}} {{if .Desc}}↓{{else}}↑{{end}}{{end}}</a></th>{{end}}</tr></thead>
   <tbody>
   {{range .Sessions}}
-  <tr><td><a href="{{url .Href}}">{{.Name}}</a></td><td>{{.Instance}}</td><td>{{.Addr}}{{if .Flapping}} <span class="warn" title="адрес меняется часто">⚠ адрес меняется часто — возможно, один ключ на двух устройствах</span>{{end}}</td>{{if $.HasGeo}}<td>{{.City}}</td><td>{{.ISP}}</td>{{end}}<td>{{.Down}}</td><td>{{.Up}}</td><td>{{.Time}}</td></tr>
+  <tr>
+    <td><a href="{{url .Href}}">{{.Name}}</a>{{if .Flapping}} <span class="warn" title="адрес меняется часто — возможно, один ключ на двух устройствах">⚠</span>{{end}}</td>
+    <td><span class="ip">{{.Addr}}</span>{{if or .City .ISP}}<br><small class="muted">{{.City}}{{if and .City .ISP}} · {{end}}{{.ISP}}</small>{{end}}</td>
+    <td><span class="ip">{{with .VPNAddr}}{{.}}{{else}}—{{end}}</span></td>
+    <td>{{.Down}}{{with .DownRate}}<br><small class="muted">↓ {{.}}</small>{{end}}</td>
+    <td>{{.Up}}{{with .UpRate}}<br><small class="muted">↑ {{.}}</small>{{end}}</td>
+    <td>{{if .Since}}<time datetime="{{.Since}}" data-local>{{.SinceText}}</time>{{else}}—{{end}}</td>
+    <td>{{with .Duration}}{{.}}{{else}}—{{end}}</td>
+    <td>{{with .Proto}}{{.}}{{else}}—{{end}}<br><small class="muted">{{.Route}}{{with .Handshake}} · рукопожатие {{.}}{{end}}</small></td>
+  </tr>
   {{else}}
-  <tr><td colspan="{{if $.HasGeo}}8{{else}}6{{end}}" class="muted">Сейчас никто не подключён.</td></tr>
+  <tr><td colspan="8" class="muted">Сейчас никто не подключён.</td></tr>
   {{end}}
   </tbody>
+  {{if .Sessions}}<tfoot><tr><th>Итого: {{len .Sessions}}</th><th></th><th></th><th>{{.SumDown}}<br><small class="muted">↓ {{.SumDownRate}}</small></th><th>{{.SumUp}}<br><small class="muted">↑ {{.SumUpRate}}</small></th><th></th><th></th><th></th></tr></tfoot>{{end}}
 </table>
 </div>
+<p class="muted">Получено — сколько получил клиент, отправлено — сколько отдал; под ними скорость за последние секунды. AntiZapret — через VPN идут только заблокированные сайты, VPN — весь трафик.{{if eq .VPN.Kind "wireguard"}} У WireGuard «подключён» — с первого свежего рукопожатия, которое увидела панель.{{end}}</p>
 {{end}}
 
 {{if eq .VPN.Kind "openvpn"}}
@@ -38,24 +53,67 @@
 {{end}}
 {{end}}
 
-{{if eq .VPN.Tab "stats"}}
-<p class="ranges">{{range .Ranges}}{{if .Current}}<b>{{.Name}}</b>{{else}}<a href="{{url .Href}}">{{.Name}}</a>{{end}} {{end}}</p>
-{{if .StatsErr}}<div class="error">{{.StatsErr}}</div>{{else}}
-<p class="muted">{{.Period}} · всего ↓ {{.SumDown}} · ↑ {{.SumUp}}{{if .Both}} · у клиентов с обоими профилями трафик общий для OpenVPN и WireGuard{{end}}</p>
+{{if eq .VPN.Tab "history"}}
+{{if .HistErr}}<div class="error">{{.HistErr}}</div>{{else}}
+<form method="get" action="{{url .Base}}" class="table-tools">
+  <input type="search" name="q" value="{{.Q}}" placeholder="Имя, IP или протокол" aria-label="Фильтр">
+  <button type="submit">Найти</button>
+  <span class="muted grow">Подключений: {{.Total}}</span>
+  <label class="inline"><input type="checkbox" data-toggle-ip checked> Показать IP</label>
+</form>
 <div class="table-wrap">
-<table>
-  <thead><tr><th>Клиент</th><th>↓ получил</th><th>↑ отправил</th><th>Всего</th></tr></thead>
+<table class="sessions">
+  <thead><tr><th>Клиент</th><th>Реальный IP</th><th>IP в VPN</th><th>Подключён</th><th>Отключён</th><th>Длительность</th><th>Протокол</th><th>Получено</th><th>Отправлено</th></tr></thead>
   <tbody>
   {{range .Rows}}
-  <tr><td><a href="{{url .Href}}">{{.Name}}</a></td><td>{{.Down}}</td><td>{{.Up}}</td><td>{{.Total}}</td></tr>
+  <tr>
+    <td><a href="{{url .Href}}">{{.Name}}</a></td>
+    <td><span class="ip">{{with .Addr}}{{.}}{{else}}—{{end}}</span></td>
+    <td><span class="ip">{{with .VPNAddr}}{{.}}{{else}}—{{end}}</span></td>
+    <td><time datetime="{{.Start}}" data-local>{{.StartText}}</time></td>
+    <td>{{if .End}}<time datetime="{{.End}}" data-local>{{.EndText}}</time>{{else}}<span class="ok">подключён</span>{{end}}</td>
+    <td>{{.Duration}}</td>
+    <td>{{with .Proto}}{{.}}{{else}}—{{end}}<br><small class="muted">{{.Route}}</small></td>
+    <td>{{.Down}}</td>
+    <td>{{.Up}}</td>
+  </tr>
   {{else}}
-  <tr><td colspan="4" class="muted">За этот период трафика нет.</td></tr>
+  <tr><td colspan="9" class="muted">{{if .Q}}Ничего не найдено.{{else}}Подключений пока нет: история ведётся с установки этой версии.{{end}}</td></tr>
   {{end}}
   </tbody>
-  {{if .Rows}}<tfoot><tr><th>Итого</th><th>{{.SumDown}}</th><th>{{.SumUp}}</th><th>{{.SumTotal}}</th></tr></tfoot>{{end}}
 </table>
 </div>
-<p class="muted">График трафика клиента — на его странице.</p>
+{{with .Pages}}<nav class="pager" aria-label="Страницы">{{range .}}{{if not .Num}}<span>…</span>{{else if .Current}}<b>{{.Num}}</b>{{else}}<a href="{{url .Href}}">{{.Num}}</a>{{end}}{{end}}</nav>{{end}}
+<p class="muted">Записи пишет сборщик панели раз в минуту: время подключения и отключения — с этой точностью, коротких сеансов между проходами в истории нет. Хранится столько суток, сколько задано в «Настройках» (история, по умолчанию 30). Трафик — счётчики сеанса на момент последнего прохода.</p>
+{{end}}
+{{end}}
+
+{{if eq .VPN.Tab "stats"}}
+<div class="table-tools">
+  <nav class="ranges" aria-label="Период">{{range .Periods}}{{if .Current}}<b>{{.Name}}</b>{{else}}<a href="{{url .Href}}">{{.Name}}</a>{{end}} {{end}}</nav>
+  <form method="get" action="{{url .Base}}" class="table-tools">
+    <label class="inline">с <input type="date" name="from" value="{{.From}}" required></label>
+    <label class="inline">по <input type="date" name="to" value="{{.To}}" required></label>
+    <button type="submit" class="secondary">Показать</button>
+  </form>
+</div>
+{{if .StatsErr}}<div class="error">{{.StatsErr}}</div>{{else}}
+<p class="muted">Период: <b>{{.Period}}</b> · получено {{.SumDown}} · отправлено {{.SumUp}} · всего {{.SumTotal}}{{if .Both}} · у клиентов с обоими профилями трафик общий для OpenVPN и WireGuard{{end}}</p>
+{{with .Chart}}<div class="card chart chart-box">{{.}}</div>{{end}}
+<div class="table-wrap">
+<table>
+  <thead><tr>{{range .Heads}}<th><a href="{{url .Href}}">{{.Title}}{{if .Current}} {{if .Desc}}↓{{else}}↑{{end}}{{end}}</a></th>{{end}}<th>Доля</th></tr></thead>
+  <tbody>
+  {{range .Rows}}
+  <tr{{if not .Share}} class="muted"{{end}}><td><a href="{{url .Href}}">{{.Name}}</a></td><td>{{.Down}}</td><td>{{.Up}}</td><td>{{.Total}}</td><td>{{with .Share}}{{.}}{{else}}—{{end}}</td></tr>
+  {{else}}
+  <tr><td colspan="5" class="muted">Клиентов нет.</td></tr>
+  {{end}}
+  </tbody>
+  {{if .Rows}}<tfoot><tr><th>Итого: {{len .Rows}}</th><th>{{.SumDown}}</th><th>{{.SumUp}}</th><th>{{.SumTotal}}</th><th></th></tr></tfoot>{{end}}
+</table>
+</div>
+<p class="muted">Получено — сколько получили клиенты, отправлено — сколько отдали. Сутки — по UTC. Трафик за год хранится по суткам, за последний месяц — по часам; учёт начинается с установки azpanel. График трафика клиента — на его странице.</p>
 {{end}}
 {{end}}
 {{end}}

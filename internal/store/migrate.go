@@ -112,6 +112,32 @@ CREATE TABLE groups (
   note TEXT NOT NULL DEFAULT '',
   created INTEGER NOT NULL DEFAULT 0,
   added_by_panel INTEGER NOT NULL DEFAULT 0);`,
+	// 9: история подключений и суточный трафик. conn_log — по сеансу на
+	// строку: since — «подключён с» OpenVPN (0 у WireGuard, у него сеанс —
+	// время, пока свежи рукопожатия), start — начало, last_seen — последний
+	// проход сборщика, где сеанс был, ended — NULL у идущего. traffic_day —
+	// для статистики за год: часовой трафик живёт только MinTrafficDays.
+	`CREATE TABLE conn_log (
+  id INTEGER PRIMARY KEY,
+  node_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  instance TEXT NOT NULL,
+  name TEXT NOT NULL,
+  since INTEGER NOT NULL DEFAULT 0,
+  start INTEGER NOT NULL,
+  last_seen INTEGER NOT NULL,
+  ended INTEGER,
+  real_addr TEXT NOT NULL DEFAULT '',
+  vpn_addr TEXT NOT NULL DEFAULT '',
+  proto TEXT NOT NULL DEFAULT '',
+  port INTEGER NOT NULL DEFAULT 0,
+  rx INTEGER NOT NULL DEFAULT 0,
+  tx INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX conn_log_open ON conn_log (node_id, ended);
+CREATE INDEX conn_log_start ON conn_log (node_id, start);
+CREATE TABLE traffic_day (node_id INTEGER, name TEXT, ts INTEGER, rx INTEGER, tx INTEGER, PRIMARY KEY (node_id, name, ts));
+INSERT INTO traffic_day (node_id, name, ts, rx, tx)
+  SELECT node_id, name, ts / 86400 * 86400, sum(rx), sum(tx) FROM traffic_hour GROUP BY node_id, name, ts / 86400;`,
 }
 
 // SchemaVersion — версия схемы в базе; 0 у пустой.

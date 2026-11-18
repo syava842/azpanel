@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/syava842/azpanel/internal/nodeapi"
 	"github.com/syava842/azpanel/internal/store"
@@ -248,21 +250,38 @@ func (s *Server) vpnSessions(sec vpnSection) http.HandlerFunc {
 			if col := s.collectorFor(r); col != nil {
 				flap = col.Flapping()
 			}
-			rows := []liveSession{}
-			var down, up int64
+			// У WireGuard «подключён с» нет: берётся начало из истории подключений.
+			var starts map[string]int64
+			if s.Store != nil && sec.Kind == nodeapi.KindWireGuard {
+				starts, _ = s.Store.OpenConnStarts(ctx, s.nodeIDFor(r)) // нет — длительность «—»
+			}
+			rows := []vpnSessRow{}
+			var down, up, downRate, upRate int64
 			for _, x := range sess {
 				if x.Kind != sec.Kind {
 					continue
 				}
-				city, isp := s.Geo.Lookup(x.Addr)
-				rows = append(rows, liveSession{sessionRow: newSessionRow(x), Name: x.Name, Href: clientHref(x.Name),
-					City: city, ISP: isp, Flapping: x.Kind == nodeapi.KindWireGuard && flap[x.Name]})
+				var start time.Time
+				if ts, ok := starts[x.Kind+"|"+x.Instance+"|"+x.Name]; ok {
+					start = time.Unix(ts, 0)
+				}
+				row := newVPNSessRow(x, now, start)
+				row.City, row.ISP = s.Geo.Lookup(x.Addr)
+				row.Flapping = x.Kind == nodeapi.KindWireGuard && flap[x.Name]
+				rows = append(rows, row)
 				down += x.TxBytes
 				up += x.RxBytes
+				if x.RateOK {
+					downRate += x.TxRate
+					upRate += x.RxRate
+				}
 			}
-			sort.SliceStable(rows, func(i, j int) bool { return strings.ToLower(rows[i].Name) < strings.ToLower(rows[j].Name) })
+			key, desc := sortParams(r.URL.Query(), sessSortKeys, "name", false)
+			sortSessRows(rows, key, desc)
+			data["Heads"] = sortHeads(sec.Base, sessSortKeys, key, desc, "")
 			data["Sessions"] = rows
 			data["SumDown"], data["SumUp"] = humanBytes(uint64(max(down, 0))), humanBytes(uint64(max(up, 0)))
+			data["SumDownRate"], data["SumUpRate"] = rateText(downRate, true), rateText(upRate, true)
 		}
 		if sec.Kind == nodeapi.KindOpenVPN {
 			var ne *nodeapi.Error
@@ -301,16 +320,57 @@ func (s *Server) vpnClients(sec vpnSection) http.HandlerFunc {
 type statRow struct {
 	Name, Href      string
 	Down, Up, Total string
-	total           int64
+	Share           string // доля в общем трафике раздела
+	down, up, total int64
 }
 
-// vpnStats — вкладка «Статистика»: трафик клиентов раздела за период.
+// statPeriods — готовые периоды статистики: последние N суток.
+var statPeriods = []struct {
+	Key, Title string
+	Days       int
+}{{"day", "Сутки", 1}, {"week", "Неделя", 7}, {"month", "Месяц", 30}, {"year", "Год", 365}}
+
+var statSortKeys = []struct{ Key, Title string }{
+	{"name", "Клиент"}, {"down", "Получено"}, {"up", "Отправлено"}, {"total", "Всего"},
+}
+
+// statWindow — период из запроса: period=day|week|month|year или свой
+// диапазон from..to (даты UTC включительно). Неверное — месяц.
+func statWindow(q url.Values, now time.Time) (from, to time.Time, key, label string) {
+	if f, err1 := time.Parse("2006-01-02", q.Get("from")); err1 == nil {
+		if t, err2 := time.Parse("2006-01-02", q.Get("to")); err2 == nil && !t.Before(f) {
+			to = t.AddDate(0, 0, 1)
+			if to.After(now) {
+				to = now
+			}
+			return f, to, "custom", f.Format("02.01.2006") + " — " + t.Format("02.01.2006")
+		}
+	}
+	key = q.Get("period")
+	for _, p := range statPeriods {
+		if p.Key == key {
+			return now.AddDate(0, 0, -p.Days), now, p.Key, p.Title
+		}
+	}
+	return now.AddDate(0, 0, -30), now, "month", "Месяц"
+}
+
+// vpnStats — вкладка «Статистика»: трафик всех клиентов раздела за период —
+// сутки, неделя, месяц, год или свои даты; график по дням, доля, итог.
 // Трафик пишется по имени клиента, поэтому у клиента с обоими профилями он
 // общий для OpenVPN и WireGuard.
 func (s *Server) vpnStats(sec vpnSection) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		h := parseRange(r)
-		data := map[string]any{"VPN": sec.tab("stats"), "Ranges": rangeLinks(sec.Base+"/stats", h)}
+		q := r.URL.Query()
+		now := s.now().UTC()
+		from, to, period, label := statWindow(q, now)
+		base := sec.Base + "/stats"
+		periods := make([]rangeLink, 0, len(statPeriods))
+		for _, p := range statPeriods {
+			periods = append(periods, rangeLink{Name: p.Title, Href: base + "?period=" + p.Key, Current: p.Key == period})
+		}
+		data := map[string]any{"VPN": sec.tab("stats"), "Periods": periods, "Base": base,
+			"From": from.Format("2006-01-02"), "To": to.Add(-time.Second).Format("2006-01-02")}
 		if s.Store == nil {
 			data["StatsErr"] = "история трафика не ведётся: у панели нет базы"
 			s.render(w, r, http.StatusOK, "vpn", data)
@@ -323,36 +383,92 @@ func (s *Server) vpnStats(sec vpnSection) http.HandlerFunc {
 			return
 		}
 		s.noteWG(r, list)
-		from, to := h.window(s.now())
-		totals, err := s.Store.TrafficTotals(r.Context(), s.nodeIDFor(r), from.Unix(), to.Unix()+1)
+		node := s.nodeIDFor(r)
+		totals, err := s.Store.TrafficTotalsLong(r.Context(), node, from.Unix(), to.Unix()+1, now.Unix())
 		if err != nil {
 			s.internalError(w, r, "трафик не прочитан", err)
 			return
 		}
 		rows := []statRow{}
+		names := map[string]bool{}
 		var sum store.Bytes
 		both := false
 		for _, c := range list {
 			if !hasKind(c, sec.Kind) {
 				continue
 			}
+			names[c.Name] = true
 			b := totals[c.Name]
-			if b.Rx+b.Tx <= 0 {
-				continue
-			}
 			both = both || (c.OpenVPN && c.WireGuard)
-			rows = append(rows, statRow{Name: c.Name, Href: clientHref(c.Name),
-				Down: humanBytes(uint64(max(b.Tx, 0))), Up: humanBytes(uint64(max(b.Rx, 0))),
-				Total: humanBytes(uint64(max(b.Rx+b.Tx, 0))), total: b.Rx + b.Tx})
-			sum.Rx += b.Rx
-			sum.Tx += b.Tx
+			rows = append(rows, statRow{Name: c.Name, Href: clientHref(c.Name), down: max(b.Tx, 0), up: max(b.Rx, 0), total: max(b.Rx+b.Tx, 0)})
+			sum.Rx += max(b.Rx, 0)
+			sum.Tx += max(b.Tx, 0)
 		}
-		sort.SliceStable(rows, func(i, j int) bool { return rows[i].total > rows[j].total })
+		all := sum.Rx + sum.Tx
+		for i := range rows {
+			x := &rows[i]
+			x.Down, x.Up, x.Total = humanBytes(uint64(x.down)), humanBytes(uint64(x.up)), humanBytes(uint64(x.total))
+			if all > 0 && x.total > 0 {
+				x.Share = fmt.Sprintf("%.1f%%", float64(x.total)*100/float64(all))
+			}
+		}
+		key, desc := sortParams(q, statSortKeys, "total", true)
+		sortStatRows(rows, key, desc)
+		extra := "&period=" + period
+		if period == "custom" {
+			extra = "&from=" + url.QueryEscape(q.Get("from")) + "&to=" + url.QueryEscape(q.Get("to"))
+		}
+		data["Heads"] = sortHeads(base, statSortKeys, key, desc, extra)
 		data["Rows"] = rows
-		data["SumDown"], data["SumUp"] = humanBytes(uint64(max(sum.Tx, 0))), humanBytes(uint64(max(sum.Rx, 0)))
-		data["SumTotal"] = humanBytes(uint64(max(sum.Rx+sum.Tx, 0)))
+		data["SumDown"], data["SumUp"] = humanBytes(uint64(sum.Tx)), humanBytes(uint64(sum.Rx))
+		data["SumTotal"] = humanBytes(uint64(all))
 		data["Both"] = both
-		data["Period"] = from.UTC().Format("2006-01-02 15:04") + " — " + to.UTC().Format("2006-01-02 15:04") + " UTC"
+		data["Period"] = label
+		// График по суткам — от двух суток: у одних суток точка одна.
+		if to.Sub(from) > 36*time.Hour && all > 0 {
+			days, err := s.Store.TrafficByDay(r.Context(), node, from.Unix(), to.Unix()+1, now.Unix())
+			if err != nil {
+				s.internalError(w, r, "трафик по дням не прочитан", err)
+				return
+			}
+			dn, up := Series{Name: "↓ получено", Step: 24 * time.Hour}, Series{Name: "↑ отправлено", Step: 24 * time.Hour}
+			for d := from.Truncate(24 * time.Hour); d.Before(to); d = d.Add(24 * time.Hour) {
+				var b store.Bytes
+				for name, v := range days[d.Unix()] {
+					if names[name] {
+						b.Rx += v.Rx
+						b.Tx += v.Tx
+					}
+				}
+				dn.Points = append(dn.Points, ChartPoint{d, float64(b.Tx)})
+				up.Points = append(up.Points, ChartPoint{d, float64(b.Rx)})
+			}
+			data["Chart"] = LineChart([]Series{dn, up}, from.Truncate(24*time.Hour), to, "Б")
+		}
 		s.render(w, r, http.StatusOK, "vpn", data)
 	}
+}
+
+func sortStatRows(rows []statRow, key string, desc bool) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		a, b := rows[i], rows[j]
+		var c int
+		switch key {
+		case "down":
+			c = cmpInt(a.down, b.down)
+		case "up":
+			c = cmpInt(a.up, b.up)
+		case "total":
+			c = cmpInt(a.total, b.total)
+		default:
+			c = strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
+		}
+		if desc {
+			c = -c
+		}
+		if c == 0 {
+			return strings.ToLower(a.Name) < strings.ToLower(b.Name)
+		}
+		return c < 0
+	})
 }

@@ -22,6 +22,8 @@ type WGPeer struct {
 	LatestHandshake time.Time
 	RxBytes         int64 // принято сервером от пира
 	TxBytes         int64
+	AllowedIPs      string // адрес пира в туннеле, «(none)» — пусто
+	ListenPort      int    // порт интерфейса
 }
 
 // ParseWGDump разбирает «wg show <iface> dump»: первая строка — сам
@@ -30,12 +32,14 @@ type WGPeer struct {
 func ParseWGDump(iface string, r io.Reader) ([]WGPeer, error) {
 	sc := bufio.NewScanner(r)
 	var out []WGPeer
+	listen := 0
 	for n := 1; sc.Scan(); n++ {
 		f := strings.Split(strings.TrimRight(sc.Text(), "\r"), "\t")
 		if n == 1 {
 			if len(f) != 4 {
 				return nil, fmt.Errorf("wg show %s dump: в строке интерфейса %d полей, ожидалось 4", iface, len(f))
 			}
+			listen, _ = strconv.Atoi(f[2])
 			continue
 		}
 		if len(f) != 8 {
@@ -44,7 +48,10 @@ func ParseWGDump(iface string, r io.Reader) ([]WGPeer, error) {
 		hs, _ := strconv.ParseInt(f[4], 10, 64)
 		rx, _ := strconv.ParseInt(f[5], 10, 64)
 		tx, _ := strconv.ParseInt(f[6], 10, 64)
-		p := WGPeer{Interface: iface, PublicKey: f[0], RxBytes: rx, TxBytes: tx}
+		p := WGPeer{Interface: iface, PublicKey: f[0], RxBytes: rx, TxBytes: tx, ListenPort: listen}
+		if f[3] != "(none)" {
+			p.AllowedIPs = f[3]
+		}
 		if f[2] != "(none)" {
 			p.Endpoint = NormalizeAddr(f[2])
 		}

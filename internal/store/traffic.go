@@ -116,3 +116,94 @@ func (s *Store) DeleteTraffic(ctx context.Context, node int64, name string) erro
 		return nil
 	})
 }
+
+// longCut — граница, до которой трафик берётся из суток, а не из часов:
+// часы живут MinTrafficDays, берём с запасом.
+func longCut(now int64) int64 { return now - now%86400 - int64(MinTrafficDays-5)*86400 }
+
+// TrafficTotalsLong — как TrafficTotals, но для любого периода: старше
+// longCut — из суточного трафика (DayTrafficDays), новее — из часов и минут.
+func (s *Store) TrafficTotalsLong(ctx context.Context, node int64, from, to, now int64) (map[string]Bytes, error) {
+	cut := longCut(now)
+	if from >= cut {
+		return s.TrafficTotals(ctx, node, from, to)
+	}
+	out, err := s.TrafficTotals(ctx, node, cut, to)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT name, sum(rx), sum(tx) FROM traffic_day
+		WHERE node_id = ? AND ts >= ? AND ts < ? GROUP BY name`, node, from-from%86400, min(cut, to))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var n string
+		var b Bytes
+		if err := rows.Scan(&n, &b.Rx, &b.Tx); err != nil {
+			return nil, err
+		}
+		o := out[n]
+		o.Rx += b.Rx
+		o.Tx += b.Tx
+		out[n] = o
+	}
+	return out, rows.Err()
+}
+
+// TrafficByDay — трафик по суткам UTC (начало суток → имя → байты) за
+// [from, to): старше longCut — из суточной таблицы, новее — из часов и минут.
+func (s *Store) TrafficByDay(ctx context.Context, node int64, from, to, now int64) (map[int64]map[string]Bytes, error) {
+	cut := longCut(now)
+	out := map[int64]map[string]Bytes{}
+	add := func(day int64, name string, b Bytes) {
+		m := out[day]
+		if m == nil {
+			m = map[string]Bytes{}
+			out[day] = m
+		}
+		o := m[name]
+		o.Rx += b.Rx
+		o.Tx += b.Tx
+		m[name] = o
+	}
+	scan := func(q string, args ...any) error {
+		rows, err := s.db.QueryContext(ctx, q, args...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var day int64
+			var n string
+			var b Bytes
+			if err := rows.Scan(&day, &n, &b.Rx, &b.Tx); err != nil {
+				return err
+			}
+			add(day, n, b)
+		}
+		return rows.Err()
+	}
+	start := max(from, cut)
+	if from < cut {
+		if err := scan(`SELECT ts, name, rx, tx FROM traffic_day WHERE node_id = ? AND ts >= ? AND ts < ?`,
+			node, from-from%86400, min(cut, to)); err != nil {
+			return nil, err
+		}
+	}
+	if start < to {
+		err := scan(`SELECT ts / 86400 * 86400, name, sum(rx), sum(tx) FROM (
+				SELECT name, ts, rx, tx FROM traffic_hour WHERE node_id = ? AND ts >= ? AND ts < ?
+				UNION ALL
+				SELECT m.name, m.ts, m.rx, m.tx FROM traffic_minute m
+					WHERE m.node_id = ? AND m.ts >= ? AND m.ts < ?
+					AND NOT EXISTS (SELECT 1 FROM traffic_hour h
+						WHERE h.node_id = m.node_id AND h.name = m.name AND h.ts = m.ts / 3600 * 3600)
+			) GROUP BY ts / 86400, name`, node, start, to, node, start, to)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}

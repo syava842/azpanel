@@ -157,6 +157,11 @@ func (c *Collector) Tick(ctx context.Context) error {
 			return err
 		}
 		c.trackAddrs(now, s)
+		// История подключений — только по удачному опросу: недоступный агент
+		// не должен закрыть все сеансы разом.
+		if err := c.Store.SyncConnLog(ctx, c.NodeID, now.Unix(), connSeen(s)); err != nil {
+			return fmt.Errorf("история подключений: %w", err)
+		}
 		return c.collectTraffic(ctx, now, s)
 	})
 	step("ресурсы", stepTimeout, func(ctx context.Context) error { return c.collectResources(ctx, now) })
@@ -166,6 +171,20 @@ func (c *Collector) Tick(ctx context.Context) error {
 	step("автоблокировка", 0, func(ctx context.Context) error { return c.autoBlock(ctx, now) })
 	step("напоминания", stepTimeout, func(ctx context.Context) error { return c.remindExpiring(ctx, now) })
 	return errors.Join(errs...)
+}
+
+// connSeen — живые сеансы для истории подключений.
+func connSeen(list []nodeapi.Session) []store.ConnSeen {
+	out := make([]store.ConnSeen, 0, len(list))
+	for _, s := range list {
+		c := store.ConnSeen{Kind: s.Kind, Instance: s.Instance, Name: s.Name, RealAddr: s.Addr, VPNAddr: s.VPNAddr,
+			Proto: s.Proto, Port: s.Port, Rx: s.RxBytes, Tx: s.TxBytes}
+		if s.Since != nil {
+			c.Since = s.Since.Unix()
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 func sessionKey(s nodeapi.Session) string {

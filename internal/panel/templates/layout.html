@@ -72,6 +72,7 @@
 <nav class="tabs" aria-label="{{.Title}}">
   <a href="{{url .Base}}"{{if eq .Tab "sessions"}} class="on" aria-current="page"{{end}}>Сеансы</a>
   <a href="{{url .Base "/clients"}}"{{if eq .Tab "clients"}} class="on" aria-current="page"{{end}}>Клиенты</a>
+  <a href="{{url .Base "/history"}}"{{if eq .Tab "history"}} class="on" aria-current="page"{{end}}>История</a>
   <a href="{{url .Base "/stats"}}"{{if eq .Tab "stats"}} class="on" aria-current="page"{{end}}>Статистика</a>
 </nav>
 {{end}}

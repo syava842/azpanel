@@ -76,6 +76,8 @@ const (
 	// history_days: лимиты «неделя» и «месяц» считаются по нему, и усечение
 	// истории не должно снимать блок посреди периода.
 	MinTrafficDays = 35
+	// DayTrafficDays — сколько суток хранить суточный трафик (статистика за год).
+	DayTrafficDays = 400
 	// AuditKeepDays — сколько суток хранить журнал действий.
 	AuditKeepDays = 365
 	// OutboxKeepDays — сколько суток хранить уже отправленные уведомления.
@@ -104,11 +106,18 @@ func (s *Store) Rollup(ctx context.Context, now int64, historyDays int) error {
 			{`INSERT OR REPLACE INTO resource_hour (node_id, ` + resCols + `)
 				SELECT m.node_id, ` + resHourAgg + ` FROM resource_minute m
 				WHERE m.ts < ? GROUP BY m.node_id, m.ts / 3600`, []any{cur}},
+			// сутки пересчитываются из часов за последние двое суток: свёртка идёт
+			// каждый час, сегодняшние сутки дорастают
+			{`INSERT OR REPLACE INTO traffic_day (node_id, name, ts, rx, tx)
+				SELECT node_id, name, ts / 86400 * 86400, sum(rx), sum(tx) FROM traffic_hour
+				WHERE ts >= ? GROUP BY node_id, name, ts / 86400`, []any{now - now%86400 - 2*86400}},
 			{`DELETE FROM traffic_minute WHERE ts < ?`, []any{minCut}},
 			{`DELETE FROM resource_minute WHERE ts < ?`, []any{minCut}},
 			{`DELETE FROM traffic_hour WHERE ts < ?`, []any{trafficCut}},
 			{`DELETE FROM resource_hour WHERE ts < ?`, []any{hourCut}},
 			{`DELETE FROM audit WHERE ts < ?`, []any{auditCut}},
+			{`DELETE FROM traffic_day WHERE ts < ?`, []any{now - DayTrafficDays*86400}},
+			{`DELETE FROM conn_log WHERE ended IS NOT NULL AND ended < ?`, []any{hourCut}},
 			// истёкшие одноразовые ссылки уже недоступны (мёртвые и несуществующие
 			// отвечают одинаково); отправленные уведомления нужны разве что для разбора
 			{`DELETE FROM download_links WHERE expires < ?`, []any{now}},

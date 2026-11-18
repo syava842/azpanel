@@ -47,7 +47,8 @@ func cmdUserWith(args []string, c *console) error {
 	case "add":
 		// --admin — роль администратора; --password — задать свой пароль
 		// (спросит дважды), иначе пароль случайный.
-		if len(args) < 2 {
+		// «azpanel user add --help» — справка, а не пользователь «--help».
+		if len(args) < 2 || strings.HasPrefix(args[1], "-") {
 			return errUsage
 		}
 		role, own := store.RoleUser, false
@@ -63,7 +64,7 @@ func cmdUserWith(args []string, c *console) error {
 		}
 		login := strings.ToLower(strings.TrimSpace(args[1]))
 		if !install.ValidLogin(login) {
-			return errors.New("логин: 3-32 знака, строчные латинские буквы, цифры и _ . -")
+			return errors.New("логин: 3-32 знака, строчные латинские буквы, цифры и _ . -; первый знак — буква, цифра или _")
 		}
 		pw := ""
 		if own {

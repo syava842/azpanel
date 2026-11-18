@@ -33,33 +33,34 @@ const (
 // API — HTTP API агента для панели. Клиенты AntiZapret меняются только
 // через client.sh; лимиты и блокировки — в limits.json, который читает хук.
 type API struct {
-	Token         string
-	Version       string
-	Tracker       *Tracker
-	LimitsPath    string
-	Inventory     antizapret.Inventory
-	ClientSh      *antizapret.ClientSh
-	AntiZapretDir string
-	BackupDir     string // куда client.sh 8 кладёт backup*.tar.gz; пусто — node.antizapret_dir
-	SocketDir     string
-	Sampler       *sysinfo.Sampler
-	Denials       *Denials                   // отказы хука; nil — журнал пуст
-	Tasks         *Tasks                     // фоновые задачи AntiZapret
-	Routing       *antizapret.Routing        // списки config/*.txt; nil — не настроены
-	Setup         *antizapret.SetupFile      // ключи setup; nil — не настроены
-	AZ            *AZUpdater                 // обновление AntiZapret; nil — не настроено
-	AZVersion     *antizapret.VersionService // версия AntiZapret по коммитам; nil — не настроена
-	Telemt        *TelemtService             // telemt; nil — не настроен
-	Warp          *WarpService               // WARP; nil — не настроен
-	Update        *UpdateService             // самообновление azpanel; nil — не настроено
-	Sync          *SyncService               // набор синхронизации и роль узла; nil — не настроены
-	Nginx         *NginxService              // правка фрагмента nginx панели; nil — не настроена
-	Services      func(ctx context.Context) ([]sysinfo.Service, error)
-	WGShow        func(ctx context.Context, iface string) ([]antizapret.WGPeer, error)
-	Kill          func(sock, name string, timeout time.Duration) (int, error)
-	WGCmd         func(ctx context.Context, name string, args ...string) ([]byte, error) // wg, wg-quick; nil — сторож WireGuard выключен
-	Log           *slog.Logger
-	Now           func() time.Time
+	Token          string
+	Version        string
+	Tracker        *Tracker
+	LimitsPath     string
+	Inventory      antizapret.Inventory
+	ClientSh       *antizapret.ClientSh
+	AntiZapretDir  string
+	BackupDir      string // куда client.sh 8 кладёт backup*.tar.gz; пусто — node.antizapret_dir
+	SocketDir      string
+	OpenVPNConfDir string // конфиги экземпляров OpenVPN: протокол и порт сеанса
+	Sampler        *sysinfo.Sampler
+	Denials        *Denials                   // отказы хука; nil — журнал пуст
+	Tasks          *Tasks                     // фоновые задачи AntiZapret
+	Routing        *antizapret.Routing        // списки config/*.txt; nil — не настроены
+	Setup          *antizapret.SetupFile      // ключи setup; nil — не настроены
+	AZ             *AZUpdater                 // обновление AntiZapret; nil — не настроено
+	AZVersion      *antizapret.VersionService // версия AntiZapret по коммитам; nil — не настроена
+	Telemt         *TelemtService             // telemt; nil — не настроен
+	Warp           *WarpService               // WARP; nil — не настроен
+	Update         *UpdateService             // самообновление azpanel; nil — не настроено
+	Sync           *SyncService               // набор синхронизации и роль узла; nil — не настроены
+	Nginx          *NginxService              // правка фрагмента nginx панели; nil — не настроена
+	Services       func(ctx context.Context) ([]sysinfo.Service, error)
+	WGShow         func(ctx context.Context, iface string) ([]antizapret.WGPeer, error)
+	Kill           func(sock, name string, timeout time.Duration) (int, error)
+	WGCmd          func(ctx context.Context, name string, args ...string) ([]byte, error) // wg, wg-quick; nil — сторож WireGuard выключен
+	Log            *slog.Logger
+	Now            func() time.Time
 	// Exit завершает агента (отмена контекста Run, как при SIGTERM); nil —
 	// перезапуск по API недоступен. RestartDelay — пауза после ответа, 0 — restartDelay.
 	Exit         func()
@@ -70,6 +71,9 @@ type API struct {
 	// ops → mu; ops при удерживаемом mu не берётся.
 	ops sync.Mutex
 	mu  sync.Mutex // чтение-изменение-запись limits.json
+
+	rateMu sync.Mutex
+	rates  map[string]rateSample // скорость сеансов: прошлый замер по ключу сеанса
 }
 
 func (a *API) Handler() http.Handler {
@@ -533,12 +537,22 @@ func (a *API) updateLimits(edit func(*limits.Data)) error {
 
 func (a *API) sessions(w http.ResponseWriter, r *http.Request) {
 	out := []nodeapi.Session{}
+	now := a.Now()
+	listens := map[string]antizapret.Listen{}
 	for _, s := range a.Tracker.Sessions() {
 		since := s.ConnectedSince.UTC()
-		out = append(out, nodeapi.Session{
+		l, ok := listens[s.Instance]
+		if !ok && a.OpenVPNConfDir != "" {
+			l = antizapret.InstanceListen(a.OpenVPNConfDir, s.Instance)
+			listens[s.Instance] = l
+		}
+		ns := nodeapi.Session{
 			Kind: nodeapi.KindOpenVPN, Instance: s.Instance, Name: s.CommonName, Addr: s.RealAddr,
 			RxBytes: s.BytesRx, TxBytes: s.BytesTx, Since: &since,
-		})
+			VPNAddr: s.VirtAddr, Proto: l.Proto, Port: l.Port,
+		}
+		ns.RxRate, ns.TxRate, ns.RateOK = a.rate(fmt.Sprintf("o|%s|%s|%d|%s", s.Instance, s.CommonName, since.Unix(), s.RealAddr), s.BytesRx, s.BytesTx, now)
+		out = append(out, ns)
 	}
 	peers, err := a.Inventory.WireGuardPeers()
 	if err != nil {
@@ -546,7 +560,6 @@ func (a *API) sessions(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, out)
 		return
 	}
-	now := a.Now()
 	for _, iface := range antizapret.WGInterfaces {
 		list, err := a.WGShow(r.Context(), iface)
 		if err != nil {
@@ -559,10 +572,13 @@ func (a *API) sessions(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			hs := p.LatestHandshake.UTC()
-			out = append(out, nodeapi.Session{
+			ns := nodeapi.Session{
 				Kind: nodeapi.KindWireGuard, Instance: iface, Name: name, Addr: p.Endpoint,
 				RxBytes: p.RxBytes, TxBytes: p.TxBytes, LastHandshake: &hs,
-			})
+				VPNAddr: strings.TrimSuffix(strings.Split(p.AllowedIPs, ",")[0], "/32"), Proto: "udp", Port: p.ListenPort,
+			}
+			ns.RxRate, ns.TxRate, ns.RateOK = a.rate("w|"+iface+"|"+p.PublicKey, p.RxBytes, p.TxBytes, now)
+			out = append(out, ns)
 		}
 	}
 	writeJSON(w, http.StatusOK, out)

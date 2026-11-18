@@ -431,3 +431,15 @@ fieldset:has(input[name=web_https]:not(:checked)) .web-domain{display:none}
 
 /* имя для подтверждения удаления: щелчок выделяет целиком, удобно скопировать */
 .confirm-name { user-select: all; font-family: ui-monospace, monospace; word-break: break-all; }
+
+/* таблицы сеансов и истории: панель переключателей, скрытые адреса */
+.table-tools { display: flex; flex-wrap: wrap; gap: .5rem 1.25rem; align-items: center; margin: .5rem 0; }
+.table-tools .grow { flex: 1 1 auto; }
+.hide-ip .ip { filter: blur(5px); user-select: none; }
+table.sessions td, table.sessions th { white-space: nowrap; }
+table.sessions small { font-size: .8em; }
+.pager { display: flex; flex-wrap: wrap; gap: .35rem; margin: .75rem 0; }
+.pager a, .pager b { padding: .15rem .55rem; border-radius: .35rem; }
+.pager b { background: var(--accent); color: var(--accent-fg); }
+.chart-box { max-width: 900px; }
+.table-tools input[type=search] { width: auto; flex: 0 1 22rem; }

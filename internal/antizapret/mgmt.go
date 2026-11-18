@@ -19,6 +19,7 @@ type Session struct {
 	Instance       string
 	CommonName     string
 	RealAddr       string
+	VirtAddr       string // адрес клиента в VPN
 	BytesRx        int64
 	BytesTx        int64
 	ConnectedSince time.Time
@@ -88,6 +89,7 @@ func ParseStatus3(instance string, r io.Reader) ([]Session, error) {
 			Instance:       instance,
 			CommonName:     f[1],
 			RealAddr:       NormalizeAddr(f[2]),
+			VirtAddr:       f[3],
 			BytesRx:        rx,
 			BytesTx:        tx,
 			ConnectedSince: time.Unix(since, 0),

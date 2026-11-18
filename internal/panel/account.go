@@ -33,7 +33,7 @@ const (
 	genDigits       = "23456789"
 )
 
-var loginRe = regexp.MustCompile(`^[a-z0-9_.-]{3,32}$`)
+var loginRe = regexp.MustCompile(`^[a-z0-9_][a-z0-9_.-]{2,31}$`) // не с «-» и «.»: «--help» — не логин
 
 // validPassword — правила пароля: от 10 символов, буквы и цифры, не логин.
 func validPassword(login, pw string) error {

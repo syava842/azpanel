@@ -26,7 +26,9 @@
 	// остаётся в конце и показывает новые строки.
 	var scrollKey = "azpanel-scroll:" + location.pathname + location.search;
 	function autoRefresh() {
-		return !!document.querySelector('meta[http-equiv="refresh"]');
+		if (document.querySelector('meta[http-equiv="refresh"]')) return true;
+		var box = document.querySelector("[data-autorefresh]");
+		return !!(box && box.checked);
 	}
 	function saveScroll() {
 		if (!autoRefresh()) return;
@@ -95,5 +97,56 @@
 				if (toggle) toggle.focus();
 			}
 		});
+
+		localTimes();
+		tableToggles();
 	});
+
+	function getPref(k) {
+		try { return localStorage.getItem(k); } catch (e) { return null; }
+	}
+	function setPref(k, v) {
+		try { localStorage.setItem(k, v); } catch (e) { /* без хранилища — до перезагрузки */ }
+	}
+
+	// <time datetime="…" data-local> — время в часовом поясе браузера; без
+	// скриптов остаётся текст в UTC.
+	function localTimes() {
+		var els = document.querySelectorAll("time[data-local]");
+		for (var i = 0; i < els.length; i++) {
+			var d = new Date(els[i].getAttribute("datetime"));
+			if (isNaN(d.getTime())) continue;
+			els[i].textContent = d.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+			els[i].title = d.toISOString().replace("T", " ").replace(".000Z", " UTC");
+		}
+	}
+
+	// «Показать IP» (скрыть адреса, например для снимка экрана) и
+	// «Автообновление» таблиц: выбор запоминается в браузере.
+	function tableToggles() {
+		var ipBox = document.querySelector("[data-toggle-ip]");
+		if (ipBox) {
+			ipBox.checked = getPref("azpanel-hide-ip") !== "1";
+			root.classList.toggle("hide-ip", !ipBox.checked);
+			ipBox.addEventListener("change", function () {
+				root.classList.toggle("hide-ip", !ipBox.checked);
+				setPref("azpanel-hide-ip", ipBox.checked ? "0" : "1");
+			});
+		}
+		var arBox = document.querySelector("[data-autorefresh]");
+		if (arBox) {
+			var sec = parseInt(arBox.getAttribute("data-autorefresh"), 10) || 15;
+			var timer = null;
+			var arm = function () {
+				if (timer) window.clearTimeout(timer);
+				timer = arBox.checked ? window.setTimeout(function () { location.reload(); }, sec * 1000) : null;
+			};
+			arBox.checked = getPref("azpanel-autorefresh") !== "0";
+			arm();
+			arBox.addEventListener("change", function () {
+				setPref("azpanel-autorefresh", arBox.checked ? "1" : "0");
+				arm();
+			});
+		}
+	}
 })();

@@ -281,6 +281,7 @@ func (s *Server) Handler() http.Handler {
 		s.route(mux, "GET "+sec.Base, s.vpnSessions(sec))
 		s.route(mux, "GET "+sec.Base+"/clients", s.vpnClients(sec))
 		s.route(mux, "GET "+sec.Base+"/stats", s.vpnStats(sec))
+		s.route(mux, "GET "+sec.Base+"/history", s.vpnHistory(sec))
 	}
 	s.route(mux, "GET /audit", s.auditPage)
 	s.route(mux, "GET /clients/new", s.newForm)

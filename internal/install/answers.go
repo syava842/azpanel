@@ -257,7 +257,7 @@ func (a *Answers) set(key, v string) (err error) {
 }
 
 var (
-	loginRe  = regexp.MustCompile(`^[a-z0-9_.-]{3,32}$`)
+	loginRe  = regexp.MustCompile(`^[a-z0-9_][a-z0-9_.-]{2,31}$`) // не с «-» и «.»: «--help» — не логин
 	domainRe = regexp.MustCompile(`^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$`)
 )
 
