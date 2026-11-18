@@ -44,6 +44,10 @@ type Client struct {
 	CertExpires *time.Time `json:"cert_expires,omitempty"`
 	Limit       int        `json:"limit"` // 0 — без ограничения
 	Blocked     bool       `json:"blocked"`
+	// NoCert — сертификата нет в pki/issued, а клиент подключается по
+	// OpenVPN (CA тот же, index.txt неполный): client.sh его не знает —
+	// ни продлить, ни удалить, ни выдать профиль нельзя.
+	NoCert bool `json:"no_cert,omitempty"`
 }
 
 type Session struct {

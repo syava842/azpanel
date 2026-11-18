@@ -86,6 +86,29 @@ func (s NginxServer) SSL() bool {
 	return false
 }
 
+// SSLOn — блок слушает порт с ssl.
+func (s NginxServer) SSLOn(port int) bool {
+	for _, l := range s.Listen {
+		fields := strings.Fields(l)
+		if len(fields) == 0 {
+			continue
+		}
+		addr := fields[0]
+		if i := strings.LastIndex(addr, ":"); i >= 0 {
+			addr = addr[i+1:]
+		}
+		if p, err := strconv.Atoi(addr); err != nil || p != port {
+			continue
+		}
+		for _, w := range fields[1:] {
+			if w == "ssl" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // defaultServer — блок помечен default_server на порту.
 func (s NginxServer) defaultServer(port int) bool {
 	for _, l := range s.Listen {

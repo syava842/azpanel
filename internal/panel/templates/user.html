@@ -97,8 +97,8 @@
 <h2>Удаление</h2>
 <form method="post" action="{{url .Href "/delete"}}" class="card narrow">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
-  <label>Чтобы удалить пользователя, впишите его логин
-    <input type="text" name="confirm" autocomplete="off" required>
+  <label>Чтобы удалить пользователя, впишите его логин <b class="confirm-name">{{.U.Login}}</b>
+    <input type="text" name="confirm" autocomplete="off" required placeholder="{{.U.Login}}" spellcheck="false">
   </label>
   <button type="submit" class="danger">Удалить</button>
 </form>

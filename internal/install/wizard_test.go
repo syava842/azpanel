@@ -146,14 +146,14 @@ func TestWizardDefaultsApplyOrder(t *testing.T) {
 	if e.admin.login != "admin" || e.admin.pw != fakePassword {
 		t.Fatalf("администратор: %+v", e.admin)
 	}
-	if e.written.Panel.BasePath != "/azpanel/" || e.written.Panel.PublicURL != "https://203.0.113.7" {
+	if e.written.Panel.BasePath != "/azpanel/" || e.written.Panel.PublicURL != "https://203.0.113.7:8443" {
 		t.Fatalf("конфиг: %+v", e.written.Panel)
 	}
 	block := string(e.fs.files[path.Join(e.w.Nginx.dir(), "sites-available", "azpanel")])
-	if !strings.Contains(block, "listen 443 ssl;") || !strings.Contains(block, "azpanel.crt") {
+	if !strings.Contains(block, "listen 8443 ssl;") || !strings.Contains(block, "azpanel.crt") {
 		t.Fatalf("свой сайт:\n%s", block)
 	}
-	if !strings.Contains(e.out.String(), "https://203.0.113.7/azpanel/") || !strings.Contains(e.out.String(), "Откройте TCP 443") {
+	if !strings.Contains(e.out.String(), "https://203.0.113.7:8443/azpanel/") || !strings.Contains(e.out.String(), "Откройте TCP 8443") {
 		t.Fatalf("итог:\n%s", e.out)
 	}
 	if n := strings.Count(e.out.String(), fakePassword); n < 2 {
@@ -215,7 +215,7 @@ func TestWizardNonInteractiveMissingList(t *testing.T) {
 	if err := e.w.Run(); err != nil {
 		t.Fatalf("без ответов: %v\n%s", err, e.out)
 	}
-	if e.written.Panel.PublicURL != "https://203.0.113.7" || e.written.Panel.BasePath != "/azpanel/" {
+	if e.written.Panel.PublicURL != "https://203.0.113.7:8443" || e.written.Panel.BasePath != "/azpanel/" {
 		t.Fatalf("умолчания: %+v", e.written.Panel)
 	}
 	// Свой сертификат — только с путями к файлам.
@@ -795,7 +795,7 @@ func TestWizardDomainElsewhereAskedAgain(t *testing.T) {
 	if !strings.Contains(out, "указывает на 198.51.100.9, а не на этот сервер") || strings.Count(out, "2. Домен") != 2 {
 		t.Fatalf("домен не переспрошен:\n%s", out)
 	}
-	if !strings.Contains(out, "https://203.0.113.7/azpanel/") {
+	if !strings.Contains(out, "https://203.0.113.7:8443/azpanel/") {
 		t.Fatalf("после пустого ответа — по IP:\n%s", out)
 	}
 }

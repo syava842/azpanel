@@ -428,3 +428,6 @@ legend { padding: 0 .35rem; font-weight: 600; }
 .warp-install:has(select[name=wg_conf] option[value=""]:not(:checked)) .wg-manual,
 .warp-install:has(select[name=ovpn_file] option[value=""]:not(:checked)) .ovpn-path,
 fieldset:has(input[name=web_https]:not(:checked)) .web-domain{display:none}
+
+/* имя для подтверждения удаления: щелчок выделяет целиком, удобно скопировать */
+.confirm-name { user-select: all; font-family: ui-monospace, monospace; word-break: break-all; }

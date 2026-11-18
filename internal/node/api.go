@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -171,14 +172,48 @@ func (a *API) clients(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := make([]nodeapi.Client, 0, len(list))
+	idx := map[string]int{}
 	for _, c := range list {
 		nc := nodeapi.Client{Name: c.Name, OpenVPN: c.OpenVPN, WireGuard: c.WireGuard, Limit: lim.Limits[c.Name], Blocked: lim.Blocked[c.Name]}
 		if !c.CertExpires.IsZero() {
 			t := c.CertExpires
 			nc.CertExpires = &t
 		}
+		idx[c.Name] = len(out)
 		out = append(out, nc)
 	}
+	// Сертификата нет в pki/issued, а клиент подключается: CA сервера его
+	// подписал, но index.txt утрачен или восстановлен не целиком. client.sh
+	// такого не знает, OpenVPN пускает. Показываем его по живому сеансу и по
+	// limits.json: заблокированный отключён, но из списка пропасть не должен.
+	// session — имя из живого сеанса OpenVPN: у известного клиента (например,
+	// только WireGuard по client.sh) это значит, что OpenVPN у него тоже есть.
+	// Запись limits.json такого не значит: блокируют и клиентов WireGuard.
+	orphan := func(name string, session bool) {
+		if !limits.ValidName(name) {
+			return
+		}
+		if i, ok := idx[name]; ok {
+			if session && !out[i].OpenVPN {
+				out[i].OpenVPN, out[i].NoCert = true, true
+			}
+			return
+		}
+		idx[name] = len(out)
+		out = append(out, nodeapi.Client{Name: name, OpenVPN: true, NoCert: true, Limit: lim.Limits[name], Blocked: lim.Blocked[name]})
+	}
+	if a.Tracker != nil {
+		for _, s := range a.Tracker.Sessions() {
+			orphan(s.CommonName, true)
+		}
+	}
+	for name := range lim.Blocked {
+		orphan(name, false)
+	}
+	for name := range lim.Limits {
+		orphan(name, false)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	writeJSON(w, http.StatusOK, out)
 }
 

@@ -31,6 +31,7 @@ type clientRow struct {
 	WG       bool
 	Cert     string
 	CertSoon bool
+	NoCert   bool // подключается, но сертификата нет в pki/issued
 	Online   int
 	Limit    string
 	Blocked  bool
@@ -156,6 +157,9 @@ func (s *Server) clientsPage(w http.ResponseWriter, r *http.Request, sec *vpnSec
 		row := clientRow{Name: c.Name, Href: clientHref(c.Name), OpenVPN: c.OpenVPN, WG: c.WireGuard,
 			Online: online[c.Name], Limit: "—", Blocked: c.Blocked}
 		row.Cert, row.CertSoon = certText(c.CertExpires)
+		if c.NoCert {
+			row.Cert, row.NoCert = "сертификата нет на сервере", true
+		}
 		if c.Limit > 0 {
 			row.Limit = strconv.Itoa(c.Limit)
 		}
@@ -404,6 +408,9 @@ func (s *Server) card(w http.ResponseWriter, r *http.Request, c nodeapi.Client, 
 		s.addOwner(r, c, data)
 	}
 	data["Cert"], data["CertSoon"] = certText(c.CertExpires)
+	if c.NoCert {
+		data["Cert"] = "сертификата нет на сервере"
+	}
 	data["Limit"] = "—"
 	if c.Limit > 0 {
 		data["Limit"] = strconv.Itoa(c.Limit)

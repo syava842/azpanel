@@ -5,7 +5,7 @@
 </div>
 <dl class="stats">
   <div><dt>Тип</dt><dd>{{if .Client.OpenVPN}}OpenVPN{{end}}{{if and .Client.OpenVPN .Client.WireGuard}} / {{end}}{{if .Client.WireGuard}}WireGuard{{end}}</dd></div>
-  <div><dt>Сертификат</dt><dd>{{if .CertSoon}}<span class="warn">{{.Cert}}</span>{{else}}{{.Cert}}{{end}}</dd></div>
+  <div><dt>Сертификат</dt><dd>{{if .Client.NoCert}}<span class="warn">{{.Cert}}</span>{{else if .CertSoon}}<span class="warn">{{.Cert}}</span>{{else}}{{.Cert}}{{end}}</dd></div>
   <div><dt>Лимит</dt><dd>{{.Limit}}</dd></div>
   {{if .HasStore}}<div><dt>Действует до</dt><dd>{{.EffUntil}}</dd></div>{{end}}
 </dl>
@@ -159,7 +159,9 @@
 {{if and .CanManage (not .Replica)}}
 <h2>Действия</h2>
 <div class="card actions">
-  {{if .Client.OpenVPN}}
+  {{if .Client.NoCert}}
+  <p class="muted">Сертификата OpenVPN нет на сервере (в pki/issued), а клиент подключается: сертификат подписан CA этого сервера, но index.txt неполный. client.sh AntiZapret такого клиента не знает — продлить, удалить или выдать профиль нельзя. Лимит и блокировка работают. Чтобы навести порядок, выпустите клиенту новый профиль под другим именем и заблокируйте этот.</p>
+  {{else if .Client.OpenVPN}}
   <form method="post" action="{{url .Href "/renew"}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <label>Продлить сертификат на, дней
@@ -184,15 +186,15 @@
   </form>
 </div>
 
-{{if or .Client.OpenVPN .Client.WireGuard}}
+{{if or (and .Client.OpenVPN (not .Client.NoCert)) .Client.WireGuard}}
 <h2>Удаление</h2>
 <div class="card actions danger-zone">
-  {{if .Client.OpenVPN}}
+  {{if and .Client.OpenVPN (not .Client.NoCert)}}
   <form method="post" action="{{url .Href "/delete"}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <input type="hidden" name="kind" value="openvpn">
-    <label>Чтобы удалить OpenVPN, впишите имя клиента
-      <input type="text" name="confirm" autocomplete="off" required>
+    <label>Чтобы удалить OpenVPN, впишите имя клиента <b class="confirm-name">{{$.Name}}</b>
+      <input type="text" name="confirm" autocomplete="off" required placeholder="{{$.Name}}" spellcheck="false">
     </label>
     <button type="submit" class="danger">Удалить OpenVPN</button>
   </form>
@@ -201,8 +203,8 @@
   <form method="post" action="{{url .Href "/delete"}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <input type="hidden" name="kind" value="wireguard">
-    <label>Чтобы удалить WireGuard, впишите имя клиента
-      <input type="text" name="confirm" autocomplete="off" required>
+    <label>Чтобы удалить WireGuard, впишите имя клиента <b class="confirm-name">{{$.Name}}</b>
+      <input type="text" name="confirm" autocomplete="off" required placeholder="{{$.Name}}" spellcheck="false">
     </label>
     <button type="submit" class="danger">Удалить WireGuard</button>
   </form>
