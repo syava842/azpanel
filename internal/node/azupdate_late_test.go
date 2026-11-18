@@ -84,7 +84,7 @@ func TestAZRetryRunsSameSetupWithSavedBackup(t *testing.T) {
 		t.Error("повтор не должен снимать новый бэкап: client.sh 8 снял бы копию с разрушенного узла")
 	}
 	in, _ := os.ReadFile(filepath.Join(e.data, "azupdate", "stdin"))
-	if string(in) != "1380\nvpn.example.com\n\n" {
+	if string(in) != "1380\n\nvpn.example.com\n\n" {
 		t.Fatalf("ответы повтора: %q", in)
 	}
 	// Идёт — вторым повтором и новым обновлением не занять.

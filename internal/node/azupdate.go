@@ -763,11 +763,11 @@ func (u *AZUpdater) begin(st azFile, kind string, argv []string, opts StartOpts)
 }
 
 // expectedSetup — что должно оказаться в setup после установки: ответы на
-// вопросы setup.sh и ключи, которые он не перезаписывает жёстко и должен
-// сохранить (RECONNECT_WARP, CLEAR_HOSTS, TXQUEUELEN — setup.sh их сбрасывает).
+// вопросы setup.sh и ключи, которых он не знает и потому не сохранит
+// (TXQUEUELEN): их сброс сверка покажет.
 func expectedSetup(setup map[string]string, plan antizapret.SetupShPlan) map[string]string {
 	exp := map[string]string{}
-	for _, k := range []string{"RECONNECT_WARP", "CLEAR_HOSTS", "TXQUEUELEN"} {
+	for _, k := range []string{"TXQUEUELEN"} {
 		if v, ok := setup[k]; ok {
 			exp[k] = v
 		}
@@ -777,7 +777,7 @@ func expectedSetup(setup map[string]string, plan antizapret.SetupShPlan) map[str
 		exp[k] = v
 	}
 	lines := strings.Split(strings.TrimRight(plan.Stdin, "\n"), "\n")
-	for i, k := range []string{"MTU", "OPENVPN_HOST", "WIREGUARD_HOST"} {
+	for i, k := range antizapret.SetupShStdinKeys {
 		if i < len(lines) {
 			exp[k] = lines[i]
 		}

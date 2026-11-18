@@ -5,6 +5,18 @@
 # https://github.com/GubernievS/AntiZapret-VPN
 #
 export LC_ALL=C
+export DEBIAN_FRONTEND=noninteractive
+
+# Завершим выполнение скрипта при ошибке
+set -e
+
+# Обработка ошибок
+handle_error() {
+	echo "$(lsb_release -ds) $(uname -r) $(date --iso-8601=seconds)"
+	echo -e "\e[1;31mError at line $2: $3 (exit code $1)\e[0m"
+	exit 1
+}
+trap 'handle_error $? $LINENO "$BASH_COMMAND"' ERR
 
 # Проверка необходимости перезагрузить
 if [[ -f /var/run/reboot-required ]] || pidof apt apt-get dpkg unattended-upgrades &>/dev/null; then
@@ -13,11 +25,11 @@ if [[ -f /var/run/reboot-required ]] || pidof apt apt-get dpkg unattended-upgrad
 fi
 
 # Остановим фоновые обновления системы
-systemctl stop apt-daily.timer 2>/dev/null
-systemctl stop apt-daily-upgrade.timer 2>/dev/null
-systemctl stop apt-daily 2>/dev/null
-systemctl stop apt-daily-upgrade 2>/dev/null
-systemctl stop unattended-upgrades 2>/dev/null
+systemctl stop apt-daily.timer 2>/dev/null || true
+systemctl stop apt-daily-upgrade.timer 2>/dev/null || true
+systemctl stop apt-daily 2>/dev/null || true
+systemctl stop apt-daily-upgrade 2>/dev/null || true
+systemctl stop unattended-upgrades 2>/dev/null || true
 
 # Проверка прав root
 if [[ "$EUID" -ne 0 ]]; then
@@ -59,12 +71,9 @@ echo 'Cleaning disk, please wait...'
 journalctl --vacuum-size=1B -q
 find /var/log -name "*.gz" -delete
 find /var/log -name "*.1" -delete
-find /var/log -type f -exec truncate -s 0 {} +
-[[ -d /etc/openvpn/server/logs ]] && find /etc/openvpn/server/logs -type f -exec truncate -s 0 {} +
-dpkg --configure -a >/dev/null
-apt-get install -f -y >/dev/null
+find /var/log -type f -exec truncate -s 0 {} + || true
+[[ -d /etc/openvpn/server/logs ]] && find /etc/openvpn/server/logs -type f -exec truncate -s 0 {} + || true
 apt-get clean >/dev/null
-apt-get autoremove --purge -y >/dev/null
 
 # Проверка свободного места (минимум 2Гб)
 if [[ $(df --output=avail / | tail -n 1) -lt $((2 * 1024 * 1024)) ]]; then
@@ -73,13 +82,13 @@ if [[ $(df --output=avail / | tail -n 1) -lt $((2 * 1024 * 1024)) ]]; then
 fi
 
 # Проверка наличия сетевого интерфейса и IPv4-адреса
-DEFAULT_INTERFACE="$(ip route get 1.2.3.4 2>/dev/null | grep -oP 'dev \K\S+')"
+DEFAULT_INTERFACE="$(ip route get 1.2.3.4 2>/dev/null | grep -oP 'dev \K\S+')" || true
 if [[ -z "$DEFAULT_INTERFACE" ]]; then
 	echo 'Default network interface not found!'
 	exit 9
 fi
 
-DEFAULT_IP="$(ip route get 1.2.3.4 2>/dev/null | grep -oP 'src \K\S+')"
+DEFAULT_IP="$(ip route get 1.2.3.4 2>/dev/null | grep -oP 'src \K\S+')" || true
 if [[ -z "$DEFAULT_IP" ]]; then
 	echo 'Default IPv4 address not found!'
 	exit 10
@@ -165,6 +174,12 @@ until [[ "$WARP_PROTECTION" =~ (y|n) ]]; do
 	read -rp 'Enable WARP protection? [y/n]: ' -e -i y WARP_PROTECTION
 done
 echo
+echo 'Enter empty to set default endpoint'
+read -rp 'Custom Cloudflare WARP endpoint (host:port): ' -e -i "162.159.192.$((RANDOM % 254 + 1)):500" WARP_ENDPOINT
+until [[ -z "$WARP_ENDPOINT" || "$WARP_ENDPOINT" =~ ^[^:]+:[0-9]+$ ]]; do
+	read -rp 'Custom Cloudflare WARP endpoint (host:port): ' -e -i "162.159.192.$((RANDOM % 254 + 1)):500" WARP_ENDPOINT
+done
+echo
 echo -e 'Choose DNS resolvers for \e[1;32mAntiZapret VPN\e[0m (antizapret-*):'
 echo '    1) MSK-IX+NSDI      - DNS resolvers optimized for users located in Russia, recommended by default'
 echo '       +BI.ZONE+TransTeleCom'
@@ -175,13 +190,12 @@ echo '       +ControlD+UltraDNS'
 echo '    3) Yandex *         - Use if previous choice fails to resolve domains'
 echo '    4) Google *         - Use if previous choice fails to resolve domains'
 echo '    5) AdGuard *        - Use for blocking ads, trackers, malware and phishing websites'
-echo '    6) Comss **         - More details: https://comss.ru/page.php?id=7315'
-echo '    7) GeoHide **       - More details: https://geohide.ru'
+echo '    6) GeoHide **       - More details: https://geohide.ru'
 echo '  * - DNS resolvers support EDNS Client Subnet'
 echo ' ** - Enable additional proxying and hide this server IP on some internet resources'
 echo '      Use only if this server is geolocated in Russia or problems accessing some internet resources'
-until [[ "$ANTIZAPRET_DNS" =~ ^[1-7]$ ]]; do
-	read -rp 'DNS choice [1-7]: ' -e -i 1 ANTIZAPRET_DNS
+until [[ "$ANTIZAPRET_DNS" =~ ^[1-6]$ ]]; do
+	read -rp 'DNS choice [1-6]: ' -e -i 1 ANTIZAPRET_DNS
 done
 echo
 echo -e 'Choose DNS resolvers for \e[1;32mfull VPN\e[0m (vpn-*):'
@@ -252,6 +266,11 @@ until [[ "$SCAN_PROTECTION" =~ (y|n) ]]; do
 	read -rp 'Enable network scan protection? [y/n]: ' -e -i y SCAN_PROTECTION
 done
 echo
+echo 'Warning! Flood protection limits new connections and DNS queries per VPN client!'
+until [[ "$FLOOD_PROTECTION" =~ (y|n) ]]; do
+	read -rp 'Enable VPN client flood protection? [y/n]: ' -e -i y FLOOD_PROTECTION
+done
+echo
 echo 'Warning! Torrent guard blocks VPN traffic for 1 minute on torrent detection!'
 until [[ "$TORRENT_GUARD" =~ (y|n) ]]; do
 	read -rp $'Enable torrent guard for \001\e[1;32m\002full VPN\001\e[0m\002? [y/n]: ' -e -i y TORRENT_GUARD
@@ -275,6 +294,18 @@ while read -rp 'Enter valid domain name for this WireGuard/AmneziaWG server or p
 do
 	[[ -z "$WIREGUARD_HOST" ]] && break
 	[[ -n $(getent ahostsv4 "$WIREGUARD_HOST") ]] && break
+done
+echo
+until [[ "$RECONNECT_WARP" =~ (y|n) ]]; do
+	read -rp 'Reconnect all WARP connections after parse.sh/doall.sh and every night? [y/n]: ' -e -i y RECONNECT_WARP
+done
+echo
+until [[ "$CLEAR_DNS_CACHE" =~ (y|n) ]]; do
+	read -rp 'Clear Knot Resolver DNS cache after parse.sh/doall.sh and every night? [y/n]: ' -e -i y CLEAR_DNS_CACHE
+done
+echo
+until [[ "$CLEAR_HOSTS" =~ (y|n) ]]; do
+	read -rp $'Remove spam domains (casino, bookmaker, etc) from \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i y CLEAR_HOSTS
 done
 echo
 until [[ "$ROUTE_ALL" =~ (y|n) ]]; do
@@ -328,18 +359,26 @@ echo
 echo 'Installation, please wait...'
 
 # Остановим и выключим обновляемые службы
-systemctl disable --now kresd@1
-systemctl disable --now kresd@2
-systemctl disable --now kresd@3
-systemctl disable --now antizapret
-systemctl disable --now antizapret-update.timer
-systemctl disable --now antizapret-update
-systemctl disable --now openvpn-server@antizapret-udp
-systemctl disable --now openvpn-server@vpn-udp
-systemctl disable --now openvpn-server@antizapret-tcp
-systemctl disable --now openvpn-server@vpn-tcp
-systemctl disable --now wg-quick@antizapret
-systemctl disable --now wg-quick@vpn
+systemctl disable --now kresd@1 || true
+systemctl disable --now kresd@2 || true
+systemctl disable --now kresd@3 || true
+systemctl disable --now antizapret || true
+systemctl disable --now antizapret-update.timer || true
+systemctl disable --now antizapret-update || true
+systemctl disable --now openvpn-server@antizapret-udp || true
+systemctl disable --now openvpn-server@vpn-udp || true
+systemctl disable --now openvpn-server@antizapret-tcp || true
+systemctl disable --now openvpn-server@vpn-tcp || true
+systemctl disable --now wg-quick@antizapret || true
+systemctl disable --now wg-quick@vpn || true
+
+# Починим сломанные пакеты
+rm -rf /etc/apt/sources.list.d/cznic-labs-knot-resolver.list
+rm -rf /etc/apt/sources.list.d/openvpn-aptrepo.list
+rm -rf /etc/apt/sources.list.d/backports.list
+dpkg --configure -a --force-confdef --force-confold
+apt-get update
+apt-get install -f -y
 
 # Удалим ненужные службы
 dpkg -s ufw &>/dev/null && apt-get purge -y ufw
@@ -352,7 +391,6 @@ dpkg -s upower &>/dev/null && apt-get purge -y upower
 dpkg -s multipath-tools &>/dev/null && apt-get purge -y multipath-tools
 dpkg -s rsyslog &>/dev/null && apt-get purge -y rsyslog
 dpkg -s udisks2 &>/dev/null && apt-get purge -y udisks2
-dpkg -s qemu-guest-agent &>/dev/null && apt-get purge -y qemu-guest-agent
 dpkg -s tuned &>/dev/null && apt-get purge -y tuned
 dpkg -s sysstat &>/dev/null && apt-get purge -y sysstat
 dpkg -s acpid &>/dev/null && apt-get purge -y acpid
@@ -399,13 +437,21 @@ dpkg -s ubuntu-advantage-tools &>/dev/null && apt-get purge -y ubuntu-advantage-
 dpkg -s ubuntu-pro-client &>/dev/null && apt-get purge -y ubuntu-pro-client
 dpkg -s pollinate &>/dev/null && apt-get purge -y pollinate
 dpkg -s secureboot-db &>/dev/null && apt-get purge -y secureboot-db
+dpkg -s telnet &>/dev/null && apt-get purge -y telnet
+dpkg -s inetutils-telnet &>/dev/null && apt-get purge -y inetutils-telnet
+dpkg -s ftp &>/dev/null && apt-get purge -y ftp
+dpkg -s tnftp &>/dev/null && apt-get purge -y tnftp
+dpkg -s lxd-installer &>/dev/null && apt-get purge -y lxd-installer
+dpkg -s lxd-agent-loader &>/dev/null && apt-get purge -y lxd-agent-loader
+dpkg -s openvpn-dco-dkms &>/dev/null && apt-get purge -y openvpn-dco-dkms
 #dpkg -s pastebinit &>/dev/null && apt-get purge -y pastebinit
 
 # Отключим ненужные службы
-systemctl disable --now ifupdown-wait-online
-systemctl disable --now setvtrgb
-systemctl disable --now e2scrub_reap
-systemctl disable --now systemd-pstore
+systemctl disable --now ifupdown-wait-online || true
+systemctl disable --now setvtrgb || true
+systemctl disable --now e2scrub_reap || true
+systemctl disable --now systemd-pstore || true
+systemctl disable --now motd-news.timer || true
 #systemctl disable --now networkd-dispatcher
 #systemctl disable --now secureboot-db
 
@@ -426,13 +472,15 @@ rm -rf /etc/openvpn/client/*
 rm -rf /etc/wireguard/templates/*
 
 # Удаляем скомпилированный патченный OpenVPN
-make -C /usr/local/src/openvpn uninstall
-rm -rf /usr/local/src/openvpn
+if [[ -d /usr/local/src/openvpn ]]; then
+	make -C /usr/local/src/openvpn uninstall || true
+	rm -rf /usr/local/src/openvpn
+fi
 
 # Отключим IPv6
-sysctl -w net.ipv6.conf.all.disable_ipv6=1
-sysctl -w net.ipv6.conf.default.disable_ipv6=1
-sysctl -w net.ipv6.conf.lo.disable_ipv6=1
+sysctl -w net.ipv6.conf.all.disable_ipv6=1 || true
+sysctl -w net.ipv6.conf.default.disable_ipv6=1 || true
+sysctl -w net.ipv6.conf.lo.disable_ipv6=1 || true
 
 # Удаляем переопределённые параметры ядра
 [[ -f /etc/sysctl.conf ]] && sed -i '/^$/!{/^#/!d}' /etc/sysctl.conf
@@ -440,24 +488,11 @@ sysctl -w net.ipv6.conf.lo.disable_ipv6=1
 # Принудительная загрузка модуля nf_conntrack
 echo 'nf_conntrack' > /etc/modules-load.d/nf_conntrack.conf
 
-# Завершим выполнение скрипта при ошибке
-set -e
-
-# Обработка ошибок
-handle_error() {
-	echo "$(lsb_release -ds) $(uname -r) $(date --iso-8601=seconds)"
-	echo -e "\e[1;31mError at line $1: $2\e[0m"
-	exit 1
-}
-trap 'handle_error $LINENO "$BASH_COMMAND"' ERR
-
 # Обновляем систему
-rm -rf /etc/apt/sources.list.d/cznic-labs-knot-resolver.list
-rm -rf /etc/apt/sources.list.d/openvpn-aptrepo.list
-rm -rf /etc/apt/sources.list.d/backports.list
-export DEBIAN_FRONTEND=noninteractive
+dpkg --configure -a --force-confdef --force-confold
 apt-get update
-apt-get dist-upgrade -y --fix-missing
+apt-get install -f -y
+apt-get dist-upgrade -y --fix-missing -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold
 apt-get install -y curl gpg
 
 # Папка для ключей
@@ -557,6 +592,7 @@ DNS_WARP_PRIVATE_KEY=
 DNS_WARP_PUBLIC_KEY=
 DNS_WARP_ENDPOINT=
 DNS_WARP_ADDRESS=
+WARP_ENDPOINT=$WARP_ENDPOINT
 WARP_PROTECTION=$WARP_PROTECTION
 ANTIZAPRET_DNS=$ANTIZAPRET_DNS
 VPN_DNS=$VPN_DNS
@@ -572,11 +608,15 @@ OPENVPN_LOG=$OPENVPN_LOG
 SSH_PROTECTION=$SSH_PROTECTION
 ATTACK_PROTECTION=$ATTACK_PROTECTION
 SCAN_PROTECTION=$SCAN_PROTECTION
+FLOOD_PROTECTION=$FLOOD_PROTECTION
 TORRENT_GUARD=$TORRENT_GUARD
 RESTRICT_FORWARD=$RESTRICT_FORWARD
 CLIENT_ISOLATION=$CLIENT_ISOLATION
 OPENVPN_HOST=$OPENVPN_HOST
 WIREGUARD_HOST=$WIREGUARD_HOST
+RECONNECT_WARP=$RECONNECT_WARP
+CLEAR_DNS_CACHE=$CLEAR_DNS_CACHE
+CLEAR_HOSTS=$CLEAR_HOSTS
 ROUTE_ALL=$ROUTE_ALL
 DISCORD_INCLUDE=$DISCORD_INCLUDE
 CLOUDFLARE_INCLUDE=$CLOUDFLARE_INCLUDE
@@ -589,9 +629,6 @@ DIGITALOCEAN_INCLUDE=$DIGITALOCEAN_INCLUDE
 OVH_INCLUDE=$OVH_INCLUDE
 GOOGLE_INCLUDE=$GOOGLE_INCLUDE
 AKAMAI_INCLUDE=$AKAMAI_INCLUDE
-RECONNECT_WARP=n
-CLEAR_HOSTS=y
-TXQUEUELEN=10000
 DEFAULT_INTERFACE=
 DEFAULT_IP=
 ANTIZAPRET_OUT_INTERFACE=
@@ -669,7 +706,7 @@ sed -i '/function policy\.PASS(state, _)/,/^end$/s/return state/return nil/' /us
 sed -i -z -E 's/policy\.DENY_MSG\([^)]*kres\.extended_error\.NOTSUP[^)]*\)/policy.DENY/g' /usr/lib/knot-resolver/kres_modules/policy.lua
 
 # Загружаем и создаем списки исключений
-/root/antizapret/doall.sh noclear
+/root/antizapret/doall.sh
 
 # Настраиваем сервера OpenVPN и WireGuard/AmneziaWG для первого запуска
 # Пересоздаем для всех существующих пользователей файлы подключений

@@ -3,20 +3,22 @@ package antizapret
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 )
 
-// Как работает setup.sh (testdata/setup.sh — main от 02.11.2026) и что из
-// этого берёт агент:
+// Как работает setup.sh (testdata/setup.sh — коммит 4923aac от 17.11.2026) и
+// что из этого берёт агент:
 //
 //   - Первый вопрос — MTU OpenVPN/WireGuard: «read … MTU» стоит БЕЗ проверки
 //     переменной окружения, спрашивается всегда, значение берётся из
-//     стандартного ввода. Так же всегда спрашиваются адреса серверов
+//     стандартного ввода. Так же всегда спрашиваются адрес WARP
+//     (WARP_ENDPOINT, пустая строка — по умолчанию) и адреса серверов
 //     OPENVPN_HOST и WIREGUARD_HOST (по строке на каждый, пустая строка —
-//     «пропустить»). Поэтому на стандартный ввод идут три строки: MTU,
-//     OPENVPN_HOST, WIREGUARD_HOST — в этом порядке.
+//     «пропустить»). Поэтому на стандартный ввод идут четыре строки: MTU,
+//     WARP_ENDPOINT, OPENVPN_HOST, WIREGUARD_HOST — в этом порядке.
 //   - Все остальные вопросы устроены как «until [[ "$KEY" =~ шаблон ]]; do read …»:
 //     если переменная окружения подходит под шаблон, вопрос пропускается.
 //   - Опасность: стандартный ввод закончился (EOF), а переменная не подошла —
@@ -27,9 +29,9 @@ import (
 //     DIGITALOCEAN_INCLUDE, OVH_INCLUDE, GOOGLE_INCLUDE, AKAMAI_INCLUDE в
 //     setup.sh не спрашиваются (вопросы закомментированы), но значение берётся
 //     из окружения и записывается в setup — поэтому они передаются как есть.
-//   - setup.sh сам жёстко записывает RECONNECT_WARP=n, CLEAR_HOSTS=y,
-//     TXQUEUELEN=10000 и пустые ключи WARP/интерфейсов: окружением это не
-//     изменить, после установки агент сверяет и сообщает о сбросе.
+//   - setup.sh сам записывает пустые ключи аккаунтов WARP (их заводит up.sh)
+//     и не переносит ключи, которых не знает (например, TXQUEUELEN): после
+//     установки агент сверяет и сообщает о сбросе.
 //   - setup.sh не берёт файлы из архива, в котором лежит: он сам делает
 //     «git clone --depth 1 …/AntiZapret-VPN.git» (main на момент запуска).
 //     Архив нужного коммита нужен только ради самого setup.sh.
@@ -83,7 +85,8 @@ var shPrompts = []shPrompt{
 	withLegacy(digitsPrompt("ANTIZAPRET_WARP", '1', '4', "4"), map[string]string{"n": "1"}),
 	withLegacy(digitsPrompt("VPN_WARP", '1', '3', "2"), map[string]string{"n": "1"}),
 	ynPrompt("WARP_PROTECTION", "y"),
-	digitsPrompt("ANTIZAPRET_DNS", '1', '7', "1"),
+	// 17.11.2026 из меню убран Comss (6), GeoHide переехал с 7 на 6.
+	withLegacy(digitsPrompt("ANTIZAPRET_DNS", '1', '6', "1"), map[string]string{"7": "6"}),
 	digitsPrompt("VPN_DNS", '1', '2', "1"),
 	ynPrompt("DNS_WARP", "n"),
 	ynPrompt("ANTIZAPRET_ADBLOCK", "y"),
@@ -98,9 +101,13 @@ var shPrompts = []shPrompt{
 	ynPrompt("SSH_PROTECTION", "y"),
 	ynPrompt("ATTACK_PROTECTION", "y"),
 	ynPrompt("SCAN_PROTECTION", "y"),
+	ynPrompt("FLOOD_PROTECTION", "y"),
 	ynPrompt("TORRENT_GUARD", "y"),
 	ynPrompt("RESTRICT_FORWARD", "y"),
 	ynPrompt("CLIENT_ISOLATION", "y"),
+	ynPrompt("RECONNECT_WARP", "y"),
+	ynPrompt("CLEAR_DNS_CACHE", "y"),
+	ynPrompt("CLEAR_HOSTS", "y"),
 	ynPrompt("ROUTE_ALL", "n"),
 	ynPrompt("CLOUDFLARE_INCLUDE", "y"),
 	ynPrompt("TELEGRAM_INCLUDE", "y"),
@@ -121,16 +128,25 @@ var shPassthrough = []string{
 // Ключи, спрашиваемые через стандартный ввод.
 const (
 	shKeyMTU           = "MTU"
+	shKeyWarpEndpoint  = "WARP_ENDPOINT"
 	shKeyOpenVPNHost   = "OPENVPN_HOST"
 	shKeyWireGuardHost = "WIREGUARD_HOST"
 )
+
+// SetupShStdinKeys — ключи, ответы на которые идут стандартным вводом, по
+// строке в этом порядке.
+var SetupShStdinKeys = []string{shKeyMTU, shKeyWarpEndpoint, shKeyOpenVPNHost, shKeyWireGuardHost}
+
+// warpEndpointRe — адрес WARP «хост:порт»: setup.sh пишет его в setup,
+// который подключается через «source», поэтому только безопасные знаки.
+var warpEndpointRe = regexp.MustCompile(`^[A-Za-z0-9.-]{1,253}:[0-9]{1,5}$`)
 
 // SetupShPlan — как запускать setup.sh: окружение, ввод и пояснения.
 type SetupShPlan struct {
 	// Env — пары KEY=VALUE для окружения, по алфавиту. Без SETUP_DATE, без
 	// ключей с секретами и без MTU/адресов (они идут вводом).
 	Env []string
-	// Stdin — MTU, OPENVPN_HOST, WIREGUARD_HOST — по строке.
+	// Stdin — MTU, WARP_ENDPOINT, OPENVPN_HOST, WIREGUARD_HOST — по строке.
 	Stdin string
 	// Notes — какие ключи взяты по умолчанию setup.sh.
 	Notes []string
@@ -192,7 +208,13 @@ func PlanSetupSh(setup, overrides map[string]string) SetupShPlan {
 		}
 		hosts[i] = h
 	}
-	p.Stdin = mtu + "\n" + hosts[0] + "\n" + hosts[1] + "\n"
+	// WARP_ENDPOINT: пусто — адрес по умолчанию (выдаёт регистрация WARP).
+	warp := values[shKeyWarpEndpoint]
+	if warp != "" && !warpEndpointRe.MatchString(warp) {
+		p.Problems = append(p.Problems, fmt.Sprintf("%s=%q: нужен вид хост:порт (латиница, цифры, точка, дефис) или пусто", shKeyWarpEndpoint, warp))
+		warp = ""
+	}
+	p.Stdin = mtu + "\n" + warp + "\n" + hosts[0] + "\n" + hosts[1] + "\n"
 
 	env := map[string]string{}
 	for _, q := range shPrompts {
@@ -282,7 +304,7 @@ func (q shPrompt) describe() string {
 // данные аккаунтов WARP — он пишет сам.
 func SetupShTakes(key string) bool {
 	switch key {
-	case shKeyMTU, shKeyOpenVPNHost, shKeyWireGuardHost:
+	case shKeyMTU, shKeyWarpEndpoint, shKeyOpenVPNHost, shKeyWireGuardHost:
 		return true
 	}
 	for _, q := range shPrompts {

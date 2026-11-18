@@ -36,6 +36,8 @@ func fullSetup() map[string]string {
 		"DISCORD_INCLUDE": "y", "AMAZON_INCLUDE": "y",
 		"ANTIZAPRET_WARP_PRIVATE_KEY": "СЕКРЕТ", "ANTIZAPRET_WARP_PUBLIC_KEY": "pub",
 		"RECONNECT_WARP": "y", "TXQUEUELEN": "5000",
+		"FLOOD_PROTECTION": "n", "CLEAR_DNS_CACHE": "n", "CLEAR_HOSTS": "n",
+		"WARP_ENDPOINT": "162.159.192.7:500",
 	}
 	return m
 }
@@ -75,7 +77,7 @@ func TestPlanSetupShEnvAndStdin(t *testing.T) {
 	if env["MTU"] != "" || env["OPENVPN_HOST"] != "" {
 		t.Fatal("MTU и адреса идут вводом, не окружением")
 	}
-	if p.Stdin != "1380\nvpn.example.com\nwg.example.com\n" {
+	if p.Stdin != "1380\n162.159.192.7:500\nvpn.example.com\nwg.example.com\n" {
 		t.Fatalf("ввод: %q", p.Stdin)
 	}
 	if !sort.StringsAreSorted(p.Env) {
@@ -148,7 +150,7 @@ func TestPlanSetupShOverrides(t *testing.T) {
 		t.Fatal(p.Problems)
 	}
 	env := envMap(p.Env)
-	if env["CLIENT_ISOLATION"] != "y" || env["OPENVPN_PATCH"] != "1" || !strings.HasPrefix(p.Stdin, "1400\nnew.example.com\n") {
+	if env["CLIENT_ISOLATION"] != "y" || env["OPENVPN_PATCH"] != "1" || !strings.HasPrefix(p.Stdin, "1400\n162.159.192.7:500\nnew.example.com\n") {
 		t.Fatalf("правки не применены: %v %q", env, p.Stdin)
 	}
 	for _, key := range []string{"SETUP_DATE", "ANTIZAPRET_WARP_PRIVATE_KEY", "TXQUEUELEN", "PATH"} {
@@ -299,5 +301,28 @@ func TestPlanSetupShEmptyPassthrough(t *testing.T) {
 	m["DISCORD_INCLUDE"] = "$(id)"
 	if p := PlanSetupSh(m, nil); len(p.Problems) == 0 {
 		t.Fatal("значение с подстановкой оболочки должно отвергаться")
+	}
+}
+
+// 17.11.2026: GeoHide переехал с 7 на 6; адрес WARP — строкой ввода, пустой
+// или «хост:порт» без знаков оболочки.
+func TestPlanSetupShDNSAndWarpEndpoint(t *testing.T) {
+	m := fullSetup()
+	m["ANTIZAPRET_DNS"] = "7"
+	p := PlanSetupSh(m, nil)
+	if len(p.Problems) != 0 || envMap(p.Env)["ANTIZAPRET_DNS"] != "6" {
+		t.Fatalf("7 -> 6: %v %v", p.Problems, p.Env)
+	}
+	m = fullSetup()
+	delete(m, "WARP_ENDPOINT")
+	if p := PlanSetupSh(m, nil); len(p.Problems) != 0 || p.Stdin != "1380\n\nvpn.example.com\nwg.example.com\n" {
+		t.Fatalf("без адреса WARP: %v %q", p.Problems, p.Stdin)
+	}
+	for _, bad := range []string{"$(id):500", "a b:1", "host", "host:port", "x:1\ny"} {
+		m := fullSetup()
+		m["WARP_ENDPOINT"] = bad
+		if p := PlanSetupSh(m, nil); len(p.Problems) == 0 || strings.Contains(p.Stdin, bad) {
+			t.Errorf("WARP_ENDPOINT=%q принят: %q", bad, p.Stdin)
+		}
 	}
 }

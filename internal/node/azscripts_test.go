@@ -91,7 +91,7 @@ func (e *scriptEnv) run(argv []string, timeout time.Duration) (string, int) {
 
 func (e *scriptEnv) answers() string {
 	p := filepath.Join(e.work, "stdin")
-	e.write(p, "1380\nvpn.example.com\n\n")
+	e.write(p, "1380\n\nvpn.example.com\n\n")
 	return p
 }
 

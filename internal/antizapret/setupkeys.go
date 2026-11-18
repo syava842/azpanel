@@ -76,8 +76,13 @@ var setupKeys = map[string]SetupKey{
 	"DNS_WARP": yn("WARP для DNS-резолвера", onlyRes),
 	// up.sh:49 — WARP_MTU по умолчанию 1280, пишется в warp-*.conf.
 	"WARP_MTU": {Kind: SetupInt, Min: 1280, Max: 1500, Apply: onlyRes, Editable: true, Title: "MTU интерфейсов WARP"},
-	// parse.sh:409 — переподключение warp-* после обновления списков.
+	// parse.sh:339 — переподключение warp-* после обновления списков и ночью.
 	"RECONNECT_WARP": yn("Переподключать WARP после обновления списков", onlyDo),
+	// parse.sh:328 — сброс кэша Knot Resolver после обновления списков и ночью.
+	"CLEAR_DNS_CACHE": yn("Сбрасывать кэш DNS после обновления списков", onlyDo),
+	// up.sh:273 — адрес WARP берётся при регистрации аккаунта (ключи WARP
+	// пусты), поэтому меняется только переустановкой; пусто — по умолчанию.
+	"WARP_ENDPOINT": fixed("Адрес Cloudflare WARP (хост:порт)"),
 
 	// update.sh:140-153 и parse.sh:82-99 — списки и правила блокировки рекламы.
 	"ANTIZAPRET_ADBLOCK": yn("Блокировка рекламы в режиме AntiZapret", onlyDo),
@@ -105,6 +110,7 @@ var setupKeys = map[string]SetupKey{
 	// up.sh: каждый ключ — блок правил iptables, сравнение только с 'y'.
 	"SSH_PROTECTION":     yn("Защита SSH от перебора", onlyRes),                    // up.sh:286
 	"SCAN_PROTECTION":    yn("Защита от сканирования", onlyRes),                    // up.sh:320
+	"FLOOD_PROTECTION":   yn("Защита от флуда клиентов VPN", onlyRes),              // up.sh:86, 160
 	"TORRENT_GUARD":      yn("Блокировка торрентов", onlyRes),                      // up.sh:244
 	"RESTRICT_FORWARD":   yn("Ограничить пересылку списками", onlyRes),             // up.sh:253, 403
 	"CLIENT_ISOLATION":   yn("Изоляция клиентов друг от друга", onlyRes),           // up.sh:279

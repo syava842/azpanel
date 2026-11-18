@@ -470,7 +470,7 @@ func TestAZStartBuildsTaskWithEnvAndStdin(t *testing.T) {
 		}
 	}
 	in, err := os.ReadFile(filepath.Join(e.data, "azupdate", "stdin"))
-	if err != nil || string(in) != "1380\nvpn.example.com\n\n" {
+	if err != nil || string(in) != "1380\n\nvpn.example.com\n\n" {
 		t.Fatalf("ввод setup.sh: %q %v", in, err)
 	}
 	setupSh, _ := os.ReadFile(filepath.Join(e.data, "azupdate", "setup.sh"))

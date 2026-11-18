@@ -11,6 +11,9 @@ var (
 	shUntilRe = regexp.MustCompile(`^until \[\[ "\$([A-Z_]+)" =~ (.+?) \]\]`)
 	shReadRe  = regexp.MustCompile(`-e -i (\S+) ([A-Z_]+)$`)
 	shSavedRe = regexp.MustCompile(`(?m)^([A-Z_]+)=\$([A-Z_]+)$`)
+	// shTopReadRe — read без отступа (не внутри until/while-повтора): такой
+	// вопрос задаётся всегда и читает стандартный ввод.
+	shTopReadRe = regexp.MustCompile(`^(?:while )?read -rp .* ([A-Z_]+)$`)
 )
 
 // CheckSetupShQuestions сверяет вопросы скачанного setup.sh с таблицей
@@ -19,8 +22,8 @@ var (
 // ответа оставил бы `until … read` крутиться на конце ввода, а установка
 // стояла бы с остановленными службами.
 //
-// Проверяется: набор, шаблоны и умолчания вопросов с «until … =~»; порядок
-// трёх вопросов с вводом (MTU, OPENVPN_HOST, WIREGUARD_HOST); набор ключей,
+// Проверяется: набор, шаблоны и умолчания вопросов с «until … =~»; набор и
+// порядок вопросов, читающих ввод всегда (SetupShStdinKeys); набор ключей,
 // которые скрипт записывает в setup из окружения.
 func CheckSetupShQuestions(text string) []string {
 	var problems []string
@@ -58,17 +61,24 @@ func CheckSetupShQuestions(text string) []string {
 		}
 	}
 
-	// Порядок вопросов, ответ на которые идёт стандартным вводом.
-	iMTU := strings.Index(text, "-i \"$MTU\" MTU")
-	iWarp := strings.Index(text, "WARP_MTU")
-	iOvpn := strings.Index(text, "OPENVPN_HOST\ndo")
-	iWG := strings.Index(text, "WIREGUARD_HOST\ndo")
-	if iMTU < 0 || iWarp < 0 || iOvpn < 0 || iWG < 0 || !(iMTU < iWarp && iOvpn < iWG) {
-		problems = append(problems, "порядок вопросов ввода (MTU, OPENVPN_HOST, WIREGUARD_HOST) изменился")
+	// Вопросы без «until» читают стандартный ввод всегда — по строке в
+	// порядке появления. Их набор и порядок обязаны совпасть с
+	// SetupShStdinKeys: лишний или переставленный сдвинул бы все ответы.
+	var stdin []string
+	for _, l := range lines {
+		if m := shTopReadRe.FindStringSubmatch(strings.TrimRight(l, "")); m != nil {
+			stdin = append(stdin, m[1])
+		}
+	}
+	if strings.Join(stdin, ",") != strings.Join(SetupShStdinKeys, ",") {
+		problems = append(problems, fmt.Sprintf("вопросы ввода: в setup.sh %s, у агента %s", strings.Join(stdin, ", "), strings.Join(SetupShStdinKeys, ", ")))
 	}
 
 	// Ключи, которые скрипт переносит из окружения в setup.
-	wantSaved := map[string]bool{shKeyMTU: true, shKeyOpenVPNHost: true, shKeyWireGuardHost: true}
+	wantSaved := map[string]bool{}
+	for _, k := range SetupShStdinKeys {
+		wantSaved[k] = true
+	}
 	for _, p := range shPrompts {
 		wantSaved[p.key] = true
 	}
