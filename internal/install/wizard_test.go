@@ -126,7 +126,7 @@ func TestWizardDefaultsNothingBeforeConfirm(t *testing.T) {
 }
 
 func TestWizardDefaultsApplyOrder(t *testing.T) {
-	// Сайтов в nginx нет: по имени — свой сайт azpanel на 443 с самоподписанным
+	// Умолчания: по порту 5000, свой сайт azpanel с самоподписанным
 	// сертификатом на IP.
 	e := newWizEnv(t, defaultScript+"y\n", true, nil)
 	if err := e.w.Run(); err != nil {
@@ -135,7 +135,7 @@ func TestWizardDefaultsApplyOrder(t *testing.T) {
 	joined := strings.Join(e.mut, "|")
 	for _, step := range []string{"layout", "binary", "config", "node-token", "unit azpanel-node.service", "unit azpanel-panel.service", "hook",
 		"nginx -t", "admin", "install.env", "systemctl restart azpanel-node", "wait-agent", "systemctl restart azpanel-panel",
-		"wait-panel http://127.0.0.1:8080/azpanel/healthz"} {
+		"wait-panel http://127.0.0.1:8080/healthz"} {
 		if !strings.Contains(joined, step) {
 			t.Errorf("нет шага %q в %s", step, joined)
 		}
@@ -146,14 +146,14 @@ func TestWizardDefaultsApplyOrder(t *testing.T) {
 	if e.admin.login != "admin" || e.admin.pw != fakePassword {
 		t.Fatalf("администратор: %+v", e.admin)
 	}
-	if e.written.Panel.BasePath != "/azpanel/" || e.written.Panel.PublicURL != "https://203.0.113.7:8443" {
+	if e.written.Panel.BasePath != "" || e.written.Panel.PublicURL != "https://203.0.113.7:5000" {
 		t.Fatalf("конфиг: %+v", e.written.Panel)
 	}
 	block := string(e.fs.files[path.Join(e.w.Nginx.dir(), "sites-available", "azpanel")])
-	if !strings.Contains(block, "listen 8443 ssl;") || !strings.Contains(block, "azpanel.crt") {
+	if !strings.Contains(block, "listen 5000 ssl;") || !strings.Contains(block, "azpanel.crt") || strings.Contains(block, "/azpanel/") {
 		t.Fatalf("свой сайт:\n%s", block)
 	}
-	if !strings.Contains(e.out.String(), "https://203.0.113.7:8443/azpanel/") || !strings.Contains(e.out.String(), "Откройте TCP 8443") {
+	if !strings.Contains(e.out.String(), "https://203.0.113.7:5000/") || !strings.Contains(e.out.String(), "Откройте TCP 5000") {
 		t.Fatalf("итог:\n%s", e.out)
 	}
 	if n := strings.Count(e.out.String(), fakePassword); n < 2 {
@@ -163,7 +163,7 @@ func TestWizardDefaultsApplyOrder(t *testing.T) {
 	if strings.Contains(env, fakePassword) || strings.Contains(env, "PASSWORD") {
 		t.Fatalf("секрет попал в install.env:\n%s", env)
 	}
-	for _, want := range []string{"MODE=panel+node", "ACCESS=path", "HTTPS=y", "PORT=8443"} {
+	for _, want := range []string{"MODE=panel+node", "ACCESS=port", "HTTPS=y", "PORT=5000"} {
 		if !strings.Contains(env, want) {
 			t.Fatalf("install.env без %s:\n%s", want, env)
 		}
@@ -210,12 +210,12 @@ func TestWizardNotYetModes(t *testing.T) {
 }
 
 func TestWizardNonInteractiveMissingList(t *testing.T) {
-	// Без ответов — умолчания: по имени, HTTPS, по IP.
+	// Без ответов — умолчания: по порту 5000, HTTPS, по IP.
 	e := newWizEnv(t, "", false, nil)
 	if err := e.w.Run(); err != nil {
 		t.Fatalf("без ответов: %v\n%s", err, e.out)
 	}
-	if e.written.Panel.PublicURL != "https://203.0.113.7:8443" || e.written.Panel.BasePath != "/azpanel/" {
+	if e.written.Panel.PublicURL != "https://203.0.113.7:5000" || e.written.Panel.BasePath != "" {
 		t.Fatalf("умолчания: %+v", e.written.Panel)
 	}
 	// Свой сертификат — только с путями к файлам.
@@ -278,16 +278,16 @@ func TestWizardNonInteractivePathInNginx(t *testing.T) {
 }
 
 func TestWizardPathNoServerIsRefusedBeforeChanges(t *testing.T) {
-	// Сайта с этим доменом в nginx нет: azpanel заводит свой сайт на 443 с
-	// Let's Encrypt; до подтверждения ничего не меняется.
-	e := newWizEnv(t, "\nnowhere.example.org\n\n\n\n\nn\n", true, nil)
+	// Сайта с этим доменом в nginx нет: по пути некуда, остаётся по порту —
+	// свой сайт на 5000 с Let's Encrypt; до подтверждения ничего не меняется.
+	e := newWizEnv(t, "nowhere.example.org\n\n\n\n\n\nn\n", true, nil)
 	e.useRealNginx()
 	err := e.w.Run()
 	if err == nil || !strings.Contains(err.Error(), "отменена") || len(e.mut) != 0 {
 		t.Fatalf("%v %v", err, e.mut)
 	}
 	out := e.out.String()
-	for _, want := range []string{"azpanel заведёт в nginx свой сайт", "свой сайт azpanel на порту 443", "Let's Encrypt для nowhere.example.org", "https://nowhere.example.org/azpanel/"} {
+	for _, want := range []string{"По пути (/azpanel/) — некуда", "свой сайт azpanel на порту 5000", "Let's Encrypt для nowhere.example.org", "https://nowhere.example.org:5000/"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("нет %q:\n%s", want, out)
 		}
@@ -300,11 +300,11 @@ func TestWizardOwnPortSelfSigned(t *testing.T) {
 	if err := e.w.Run(); err != nil {
 		t.Fatalf("%v\n%s", err, e.out)
 	}
-	if e.written.Panel.PublicURL != "https://203.0.113.7:8443" || e.written.Panel.BasePath != "" {
+	if e.written.Panel.PublicURL != "https://203.0.113.7:5000" || e.written.Panel.BasePath != "" {
 		t.Fatalf("конфиг: %+v", e.written.Panel)
 	}
 	block := string(e.fs.files[testNginxDir+"/sites-available/azpanel"])
-	if !strings.Contains(block, "listen 8443 ssl;") || !strings.Contains(block, "azpanel.crt") {
+	if !strings.Contains(block, "listen 5000 ssl;") || !strings.Contains(block, "azpanel.crt") {
 		t.Fatalf("блок:\n%s", block)
 	}
 	if got := string(e.fs.files[filepath.Join("testdata", "nginx", "sites-enabled", "vpn.test")]); strings.Contains(got, "# azpanel") {
@@ -512,8 +512,8 @@ func TestGeneratePassword(t *testing.T) {
 }
 
 func TestWizardInteractiveDefaultsToFoundNginx(t *testing.T) {
-	// Порт, домен vpn.test, HTTPS, по имени (Enter) — сайт найден; логин, пароль, подтверждение.
-	e := newWizEnv(t, "\nvpn.test\n\n\n\n\ny\n", true, nil)
+	// Домен vpn.test, HTTPS, по пути — второй пункт (сайт vpn.test); логин, пароль, подтверждение.
+	e := newWizEnv(t, "vpn.test\n\n2\n\n\ny\n", true, nil)
 	e.useRealNginx()
 	if err := e.w.Run(); err != nil {
 		t.Fatalf("%v\n%s", err, e.out)
@@ -649,8 +649,8 @@ func TestWizardBakFilesWarnedNotMovedNonInteractive(t *testing.T) {
 }
 
 func TestWizardBakFilesMovedOnAnswerYes(t *testing.T) {
-	// Четыре вопроса по умолчанию, вопрос о копиях (Enter = да), логин, пароль, подтверждение.
-	e, bak := bakEnv(t, "\n\n\n\n\n\n\ny\n", true)
+	// Домен, HTTPS, по пути (умолчание при ACCESS=path), вопрос о копиях (Enter = да), логин, пароль, подтверждение.
+	e, bak := bakEnv(t, "\n\n\n\n\n\ny\n", true)
 	if err := e.w.Run(); err != nil {
 		t.Fatalf("%v\n%s", err, e.out)
 	}
@@ -666,7 +666,7 @@ func TestWizardBakFilesMovedOnAnswerYes(t *testing.T) {
 }
 
 func TestWizardBakFilesKeptOnAnswerNo(t *testing.T) {
-	e, bak := bakEnv(t, "\n\n\n\nn\n\n\ny\n", true)
+	e, bak := bakEnv(t, "\n\n\nn\n\n\ny\n", true)
 	_ = e.w.Run()
 	if !strings.Contains(e.out.String(), "Перенести их в") {
 		t.Fatalf("вопроса нет:\n%s", e.out)
@@ -753,7 +753,8 @@ func TestWizardWarnsDomainElsewhere(t *testing.T) {
 
 // Без HTTPS по имени: раздел в сайте nginx на 80 (default_server), адрес http.
 func TestWizardNoHTTPSPathUsesPort80Site(t *testing.T) {
-	e := newWizEnv(t, "\n\nn\n\n\n\ny\n", true, nil)
+	// Без домена, без HTTPS, по пути — второй пункт (сайт default на 80).
+	e := newWizEnv(t, "\nn\n2\n\n\ny\n", true, nil)
 	e.useRealNginx()
 	if err := e.w.Run(); err != nil {
 		t.Fatalf("%v\n%s", err, e.out)
@@ -788,21 +789,23 @@ func TestWizardNoHTTPSOwnPort(t *testing.T) {
 // Домен, указывающий на другой сервер, в диалоге не принимается: спрашивается
 // снова; пустой ответ — по IP.
 func TestWizardDomainElsewhereAskedAgain(t *testing.T) {
-	e := newWizEnv(t, "\nother.example.org\n\n"+"\n\n\n\nn\n", true, nil)
+	// Домен на чужой сервер, затем пусто; HTTPS, по порту, порт, логин, пароль, отказ.
+	e := newWizEnv(t, "other.example.org\n\n"+"\n\n\n\n\nn\n", true, nil)
 	e.w.Host.Resolve = func(string) ([]string, error) { return []string{"198.51.100.9"}, nil }
 	_ = e.w.Run()
 	out := e.out.String()
-	if !strings.Contains(out, "указывает на 198.51.100.9, а не на этот сервер") || strings.Count(out, "2. Домен") != 2 {
+	if !strings.Contains(out, "указывает на 198.51.100.9, а не на этот сервер") || strings.Count(out, "1. Домен") != 2 {
 		t.Fatalf("домен не переспрошен:\n%s", out)
 	}
-	if !strings.Contains(out, "https://203.0.113.7:8443/azpanel/") {
+	if !strings.Contains(out, "https://203.0.113.7:5000/") {
 		t.Fatalf("после пустого ответа — по IP:\n%s", out)
 	}
 }
 
 // Занятый порт в вопросе 1 не принимается.
 func TestWizardBusyPortAskedAgain(t *testing.T) {
-	e := newWizEnv(t, "9443\n9444\n\n\n\n\n\nn\n", true, nil)
+	// Домен, HTTPS, по порту; порт 9443 занят — переспрашивается.
+	e := newWizEnv(t, "\n\n\n9443\n9444\n\n\nn\n", true, nil)
 	e.w.Host.PortBusy = func(p int) bool { return p == 9443 }
 	_ = e.w.Run()
 	if !strings.Contains(e.out.String(), "порт 9443 занят") || !strings.Contains(e.out.String(), ":9444/") {

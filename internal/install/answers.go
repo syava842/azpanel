@@ -23,7 +23,7 @@ const (
 	ModePanel     = "panel"
 )
 
-// Как открывать azpanel: по имени (раздел /azpanel/ в nginx) или по порту.
+// Как открывать azpanel: по порту (свой сайт) или по пути (раздел /azpanel/ вашего сайта nginx) — одно из двух.
 // local — только 127.0.0.1, задаётся только AZPANEL_ACCESS.
 const (
 	AccessPath  = "path"
@@ -44,7 +44,7 @@ const (
 const (
 	// DefaultBasePath — префикс панели в чужом nginx.
 	DefaultBasePath = "/azpanel/"
-	DefaultPort     = 8443
+	DefaultPort     = 5000
 	defaultAdmin    = "admin"
 )
 
@@ -117,7 +117,7 @@ func EnvName(key string) string { return "AZPANEL_" + key }
 // DefaultAnswers — умолчания мастера.
 func DefaultAnswers(backupDir string) Answers {
 	return Answers{
-		Mode: ModePanelNode, Access: AccessPath, Port: DefaultPort, HTTPS: true,
+		Mode: ModePanelNode, Access: AccessPort, Port: DefaultPort, HTTPS: true,
 		Admin: defaultAdmin, MustChange: true,
 		BackupDir: backupDir, BackupEveryDays: 1, BackupKeep: 14,
 	}

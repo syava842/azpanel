@@ -193,6 +193,7 @@
   <form method="post" action="{{url .Href "/delete"}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <input type="hidden" name="kind" value="openvpn">
+    {{with .Back}}<input type="hidden" name="back" value="{{.}}">{{end}}
     <label>Чтобы удалить OpenVPN, впишите имя клиента <b class="confirm-name">{{$.Name}}</b>
       <input type="text" name="confirm" autocomplete="off" required placeholder="{{$.Name}}" spellcheck="false">
     </label>
@@ -203,6 +204,7 @@
   <form method="post" action="{{url .Href "/delete"}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <input type="hidden" name="kind" value="wireguard">
+    {{with .Back}}<input type="hidden" name="back" value="{{.}}">{{end}}
     <label>Чтобы удалить WireGuard, впишите имя клиента <b class="confirm-name">{{$.Name}}</b>
       <input type="text" name="confirm" autocomplete="off" required placeholder="{{$.Name}}" spellcheck="false">
     </label>

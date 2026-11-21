@@ -12,7 +12,6 @@ import (
 	"net/netip"
 	"path"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -65,10 +64,6 @@ type Host struct {
 
 // Wizard — мастер установки (azpanel install).
 type Wizard struct {
-	// portAuto — порт взят умолчанием defaultPort, а не задан: после ответа
-	// про HTTPS умолчание пересчитывается.
-	portAuto bool
-
 	In          *bufio.Reader
 	Out         io.Writer
 	Interactive bool
@@ -137,10 +132,6 @@ func (w *Wizard) Run() error {
 		return err
 	}
 	servers, _ := FindServers(w.Nginx.dir())
-	if !slices.Contains(set, KeyPort) {
-		a.Port = defaultPort(servers, a)
-		w.portAuto = true
-	}
 	if a.Address == "" {
 		if ip, err := ExternalIP(w.Host.Fetch); err == nil {
 			a.Address = ip
@@ -158,7 +149,7 @@ func (w *Wizard) Run() error {
 				return err
 			}
 		}
-		for _, ask := range []func(*Answers) error{w.askPort, w.askDomain, w.askHTTPS} {
+		for _, ask := range []func(*Answers) error{w.askDomain, w.askHTTPS} {
 			if err := ask(&a); err != nil {
 				return err
 			}
@@ -438,16 +429,16 @@ func (w *Wizard) secret(label string) (string, error) {
 	return w.readLine()
 }
 
-// Вопросы мастера: порт, домен, HTTPS, как открывать, администратор. Всё
-// остальное — умолчания: они видны в итоге и меняются потом в «Настройках»
-// или переменными AZPANEL_*.
+// Вопросы мастера: домен, HTTPS, как открывать (по порту — и порт),
+// администратор. Всё остальное — умолчания: они видны в итоге и меняются
+// потом в «Настройках» или переменными AZPANEL_*.
 
-// askPort — вопрос 1: порт, на котором открывается azpanel, и по имени, и по
-// порту. Порт, который слушает nginx, принимается: по имени azpanel встанет
-// разделом в сайт на нём.
+// askPort — порт своего сайта azpanel (только «по порту»). Занятый порт не
+// принимается: на нём уже чей-то сайт или служба; свой сайт azpanel от
+// прошлой установки не в счёт.
 func (w *Wizard) askPort(a *Answers) error {
 	for {
-		v, err := w.ask("1. Порт azpanel", strconv.Itoa(a.Port))
+		v, err := w.ask("   Порт azpanel", strconv.Itoa(a.Port))
 		if err != nil {
 			return err
 		}
@@ -456,47 +447,13 @@ func (w *Wizard) askPort(a *Answers) error {
 			w.printf("  %v\n", err)
 			continue
 		}
-		if w.Host.PortBusy(n) && !w.ownSiteOn(n) && !w.nginxOn(n) {
+		if w.Host.PortBusy(n) && !w.ownSiteOn(n) {
 			w.printf("  порт %d занят, выберите другой\n", n)
 			continue
-		}
-		if n != a.Port {
-			w.portAuto = false
 		}
 		a.Port = n
 		return nil
 	}
-}
-
-// defaultPort — порт по умолчанию: стандартный порт схемы (443, без HTTPS —
-// 80), если на нём уже есть ваш сайт в nginx, — azpanel встанет в него
-// разделом; иначе DefaultPort. Сайты на нестандартных портах в умолчание не
-// идут: это чаще всего страницы других сервисов.
-func defaultPort(servers []NginxServer, a Answers) int {
-	if a.Access == AccessPort {
-		return DefaultPort // свой сайт: на порту чужого сайта ему места нет
-	}
-	std := 80
-	if a.HTTPS {
-		std = 443
-	}
-	for _, s := range servers {
-		if !isOwnSite(s) && s.ListensOn(std) && s.SSLOn(std) == a.HTTPS {
-			return std
-		}
-	}
-	return DefaultPort
-}
-
-// nginxOn — порт слушает чей-то сайт в nginx (не свой azpanel).
-func (w *Wizard) nginxOn(port int) bool {
-	servers, _ := FindServers(w.Nginx.dir())
-	for _, s := range servers {
-		if !isOwnSite(s) && s.ListensOn(port) {
-			return true
-		}
-	}
-	return false
 }
 
 // ownSiteOn — порт занят своим же сайтом azpanel от прошлой установки.
@@ -518,12 +475,12 @@ func isOwnSite(s NginxServer) bool {
 	return path.Base(filepath.ToSlash(s.File)) == path.Base(ownPortFile)
 }
 
-// askDomain — вопрос 2. Домен, указывающий на другой сервер, не принимается:
+// askDomain — вопрос 1. Домен, указывающий на другой сервер, не принимается:
 // ссылки по нему сюда не попадут.
 func (w *Wizard) askDomain(a *Answers) error {
-	label := "2. Домен (пусто — по IP)"
+	label := "1. Домен (пусто — по IP)"
 	if a.Address != "" {
-		label = "2. Домен (пусто — по IP " + a.Address + ")"
+		label = "1. Домен (пусто — по IP " + a.Address + ")"
 	}
 	if a.Domain != "" {
 		label += ", «-» — без домена"
@@ -553,18 +510,11 @@ func (w *Wizard) askDomain(a *Answers) error {
 	}
 }
 
-// askHTTPS — вопрос 3.
+// askHTTPS — вопрос 2.
 func (w *Wizard) askHTTPS(a *Answers) error {
 	var err error
-	if a.HTTPS, err = w.yesno("3. Включить HTTPS", a.HTTPS); err != nil {
+	if a.HTTPS, err = w.yesno("2. Включить HTTPS", a.HTTPS); err != nil {
 		return err
-	}
-	if w.portAuto {
-		servers, _ := FindServers(w.Nginx.dir())
-		if n := defaultPort(servers, *a); n != a.Port {
-			a.Port = n
-			w.printf("  Порт azpanel по умолчанию для %s: %d\n", a.scheme(), n)
-		}
 	}
 	if !a.HTTPS {
 		w.printf("  Без HTTPS логин и пароль идут по сети открытым текстом, браузер пометит страницу «Не защищено».\n")
@@ -588,28 +538,58 @@ func (a Answers) host() string {
 	return a.Address
 }
 
-// siteFor — сайт в nginx, в который встраивается раздел /azpanel/: слушает
-// порт azpanel (вопрос 1), с ssl на нём для HTTPS и без — для HTTP; с
-// доменом — с этим доменом. Сайты на других портах не берутся: там могут
-// быть страницы других сервисов. Свой сайт azpanel от прошлой установки не в
-// счёт. Из нескольких — default_server.
-func siteFor(servers []NginxServer, a Answers) (NginxServer, bool) {
-	best, score := NginxServer{}, -1
+// siteCandidates — сайты nginx, в которые можно встроить раздел /azpanel/:
+// не свой сайт azpanel; для HTTPS — с ssl, без — с портом без ssl; с
+// доменом — с этим доменом в server_name.
+func siteCandidates(servers []NginxServer, a Answers) []NginxServer {
+	var out []NginxServer
 	for _, s := range servers {
-		switch {
-		case isOwnSite(s):
-			continue
-		case !s.ListensOn(a.Port):
-			continue
-		case a.HTTPS != s.SSLOn(a.Port):
-			continue
-		case a.Domain != "" && !s.NamedFor(a.Domain):
-			continue
-		case a.NginxFile != "" && s.File != a.NginxFile:
+		if isOwnSite(s) || sitePort(s, a.HTTPS) == 0 || (a.Domain != "" && !s.NamedFor(a.Domain)) {
 			continue
 		}
+		out = append(out, s)
+	}
+	return out
+}
+
+// sitePort — порт сайта, по которому откроется раздел: для HTTPS — с ssl
+// (443, если он есть), без — без ssl (80, если есть); 0 — такого нет.
+func sitePort(s NginxServer, https bool) int {
+	std, found := 80, 0
+	if https {
+		std = 443
+	}
+	for _, p := range s.Ports() {
+		if s.SSLOn(p) != https {
+			continue
+		}
+		if p == std {
+			return p
+		}
+		if found == 0 {
+			found = p
+		}
+	}
+	return found
+}
+
+// siteFor — сайт для раздела /azpanel/: заданный (NGINX_FILE), иначе из
+// подходящих — на стандартном порту, потом default_server.
+func siteFor(servers []NginxServer, a Answers) (NginxServer, bool) {
+	best, score := NginxServer{}, -1
+	for _, s := range siteCandidates(servers, a) {
+		if a.NginxFile != "" {
+			if s.File == a.NginxFile {
+				return s, true
+			}
+			continue
+		}
+		p := sitePort(s, a.HTTPS)
 		n := 0
-		if s.defaultServer(a.Port) {
+		if p == 443 || p == 80 {
+			n += 2
+		}
+		if s.defaultServer(p) {
 			n++
 		}
 		if n > score {
@@ -619,30 +599,45 @@ func siteFor(servers []NginxServer, a Answers) (NginxServer, bool) {
 	return best, score >= 0
 }
 
-// askAccess — вопрос 4: по имени (раздел /azpanel/) или по порту.
+// siteURL — адрес раздела /azpanel/ в сайте s.
+func siteURL(s NginxServer, a Answers) string {
+	return publicURL(a.scheme(), a.host(), sitePort(s, a.HTTPS)) + DefaultBasePath
+}
+
+// askAccess — вопрос 3: либо по порту (свой сайт azpanel, корень адреса),
+// либо по пути — разделом /azpanel/ одного из ваших сайтов nginx. Вместе
+// не бывает. По порту следом спрашивается порт.
 func (w *Wizard) askAccess(a *Answers, servers []NginxServer) error {
-	if a.Access != AccessPath && a.Access != AccessPort {
-		a.Access = AccessPath
-	}
-	byName := publicURL(a.scheme(), a.host(), a.Port) + DefaultBasePath
-	note := fmt.Sprintf("azpanel заведёт в nginx свой сайт на порту %d", a.Port)
-	if s, ok := siteFor(servers, *a); ok {
-		note = "разделом вашего сайта в nginx (" + s.File + ")"
-	}
-	opts := []string{
-		"по имени: " + byName + " — " + note,
-		"по порту: " + publicURL(a.scheme(), a.host(), a.Port) + "/ — ваш сайт в nginx не трогается",
-	}
+	sites := siteCandidates(servers, *a)
+	opts := []string{fmt.Sprintf("по порту: %s://%s:<порт>/ — свой сайт azpanel, порт спрошу следующим (по умолчанию %d)",
+		a.scheme(), bracketHost(a.host()), DefaultPort)}
 	def := 0
-	if a.Access == AccessPort {
-		def = 1
+	for i, s := range sites {
+		opts = append(opts, fmt.Sprintf("по пути: %s — раздел вашего сайта %s", siteURL(s, *a), s.File))
+		if a.Access == AccessPath && (a.NginxFile == s.File || (a.NginxFile == "" && def == 0)) {
+			def = i + 1
+		}
 	}
-	i, err := w.choose("4. Как открывать azpanel", opts, def)
+	if len(sites) == 0 {
+		w.printf("  По пути (/azpanel/) — некуда: в nginx нет сайта%s с %s.\n", forDomain(a.Domain), a.scheme())
+	}
+	i, err := w.choose("3. Как открывать azpanel", opts, def)
 	if err != nil {
 		return err
 	}
-	a.Access = []string{AccessPath, AccessPort}[i]
+	if i == 0 {
+		a.Access, a.NginxFile = AccessPort, ""
+		return w.askPort(a)
+	}
+	a.Access, a.NginxFile = AccessPath, sites[i-1].File
 	return nil
+}
+
+func forDomain(d string) string {
+	if d == "" {
+		return ""
+	}
+	return " с именем " + d
 }
 
 func bracketHost(h string) string {
@@ -740,8 +735,6 @@ func firewallPorts(a Answers, p *plan) []string {
 	switch {
 	case a.Access == AccessPort:
 		return []string{fmt.Sprintf("Откройте TCP %d: по нему открывается azpanel.", a.Port)}
-	case a.Access == AccessPath && p != nil && p.ownSite:
-		return []string{fmt.Sprintf("Откройте TCP %d: по нему открывается azpanel.", p.ownPort)}
 	case a.Access == AccessPath:
 		return []string{"Новых портов открывать не нужно: azpanel — раздел вашего сайта."}
 	}
@@ -791,12 +784,10 @@ type plan struct {
 	// moveBak — перенести их в каталог копий мастера.
 	bakFiles []string
 	moveBak  bool
-	// ownSite — для раздела по имени подходящего сайта в nginx нет: свой сайт
-	// azpanel на ownPort — порту из вопроса 1.
-	ownSite bool
-	ownPort int
-	// dropFile — сайт прошлой установки, в который был вписан раздел, а
-	// теперь azpanel открывается иначе: строка include оттуда убирается.
+	// dropOld — прежняя раскладка в nginx не совпадает с новой: строка
+	// include в прежнем сайте (dropFile) и свой сайт azpanel убираются до
+	// новой.
+	dropOld  bool
 	dropFile string
 	// finishFn достраивает конфиг и шаги по ответам, полученным после plan.
 	finishFn func(a *Answers, p *plan) error
@@ -857,35 +848,23 @@ func (w *Wizard) plan(a *Answers, servers []NginxServer) (*plan, error) {
 	switch a.Access {
 	case AccessPath:
 		cfg.Panel.BasePath = DefaultBasePath
-		std := a.Port
-		if s, ok := siteFor(servers, *a); ok {
-			// Раздел в существующем сайте на порту azpanel: сертификат — его.
-			p.server = s
-			a.NginxFile = s.File
-			a.TLS, a.CertPath, a.KeyPath = "", "", ""
-			cfg.Panel.PublicURL = publicURL(a.scheme(), host, a.Port)
-			p.lines = append(p.lines,
-				fmt.Sprintf("nginx: раздел %s в вашем сайте %s (server_name %s): одна строка include, фрагмент %s; копия файла в %s; после nginx -t — reload",
-					DefaultBasePath, s.File, strings.Join(s.ServerName, " "), SnippetPath, w.Nginx.backupDir()))
-			if a.HTTPS {
-				p.lines = append(p.lines, w.siteCertNotes(s, *a)...)
+		s, ok := siteFor(servers, *a)
+		if !ok {
+			if a.NginxFile != "" {
+				return nil, fmt.Errorf("в nginx нет сайта %s%s с %s для раздела %s: откройте azpanel по порту (AZPANEL_ACCESS=port)", a.NginxFile, forDomain(a.Domain), a.scheme(), DefaultBasePath)
 			}
-		} else {
-			// Подходящего сайта на порту нет — свой сайт azpanel на нём.
-			if w.Host.PortBusy(std) && !w.ownSiteOn(std) {
-				return nil, fmt.Errorf("порт %d занят, а сайта с именем %s и %s на нём в nginx нет: выберите другой порт", std, host, a.scheme())
-			}
-			p.ownSite, p.ownPort = true, std
-			a.NginxFile = ""
-			cfg.Panel.PublicURL = publicURL(a.scheme(), host, std)
-			p.lines = append(p.lines,
-				fmt.Sprintf("nginx: свой сайт azpanel на порту %d (%s, ссылка в sites-enabled), раздел %s; после nginx -t — reload",
-					std, path.Join(w.Nginx.dir(), ownPortFile), DefaultBasePath))
-			if a.HTTPS {
-				if err := w.planCert(a, p, servers); err != nil {
-					return nil, err
-				}
-			}
+			return nil, fmt.Errorf("в nginx нет сайта%s с %s для раздела %s: откройте azpanel по порту (AZPANEL_ACCESS=port)", forDomain(a.Domain), a.scheme(), DefaultBasePath)
+		}
+		// Раздел в существующем сайте: сертификат и порт — его.
+		p.server = s
+		a.NginxFile = s.File
+		a.TLS, a.CertPath, a.KeyPath = "", "", ""
+		cfg.Panel.PublicURL = publicURL(a.scheme(), host, sitePort(s, a.HTTPS))
+		p.lines = append(p.lines,
+			fmt.Sprintf("nginx: раздел %s в вашем сайте %s (server_name %s): одна строка include, фрагмент %s; копия файла в %s; после nginx -t — reload",
+				DefaultBasePath, s.File, strings.Join(s.ServerName, " "), SnippetPath, w.Nginx.backupDir()))
+		if a.HTTPS {
+			p.lines = append(p.lines, w.siteCertNotes(s, *a)...)
 		}
 		p.url = cfg.Panel.PublicURL + DefaultBasePath
 	case AccessPort:
@@ -930,8 +909,14 @@ func (w *Wizard) plan(a *Answers, servers []NginxServer) (*plan, error) {
 		}
 	}
 	if _, err := w.Nginx.ReadFile(prevFile); err == nil && prevFile != "" && prevFile != a.NginxFile {
-		p.dropFile = prevFile
+		p.dropOld, p.dropFile = true, prevFile
 		p.lines = append(p.lines, fmt.Sprintf("nginx: раздел %s убирается из прежнего сайта %s (строка include)", DefaultBasePath, prevFile))
+	}
+	// По пути свой сайт azpanel не нужен: прежний (в том числе с разделом
+	// /azpanel/ на своём порту от старых версий) снимается.
+	if _, err := w.Host.Stat(path.Join(w.Nginx.dir(), ownPortLink)); err == nil && a.Access == AccessPath {
+		p.dropOld = true
+		p.lines = append(p.lines, "nginx: свой сайт azpanel от прошлой установки убирается — теперь azpanel раздел вашего сайта")
 	}
 	p.cfg = cfg
 	p.adminExists = w.Host.AdminExists(a.Admin)
@@ -1054,17 +1039,13 @@ func (w *Wizard) buildSteps(a *Answers, p *plan) error {
 	if p.needCert {
 		add("сертификат", func() error { return w.issueCert(a, p) })
 	}
-	if p.dropFile != "" {
-		add("nginx: прежний сайт", func() error { return w.Nginx.Disable(p.dropFile) })
+	if p.dropOld {
+		add("nginx: прежняя раскладка", func() error { return w.Nginx.Disable(p.dropFile) })
 	}
 	if p.moveBak {
 		add("перенос копий .bak из sites-enabled", func() error { return w.Nginx.MoveBackups(p.bakFiles) })
 	}
 	switch {
-	case a.Access == AccessPath && p.ownSite:
-		add("nginx", func() error {
-			return w.Nginx.EnableOwnPort(p.ownPort, a.CertPath, a.KeyPath, a.Domain, DefaultBasePath, p.listen)
-		})
 	case a.Access == AccessPath:
 		add("nginx", func() error { return w.Nginx.Enable(p.server, DefaultBasePath, p.listen) })
 	case a.Access == AccessPort:

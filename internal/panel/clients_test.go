@@ -316,8 +316,33 @@ func TestDelete(t *testing.T) {
 	}
 	rec := post(e, c, "/clients/bob/delete", url.Values{"csrf": {s.CSRF}, "kind": {"openvpn"}, "confirm": {"bob"}})
 	loc, _ := url.QueryUnescape(rec.Header().Get("Location"))
-	if rec.Code != 303 || loc != "/?msg=deleted" || gotKind != "openvpn" || gotName != "bob" {
+	if rec.Code != 303 || loc != "/openvpn/clients?msg=deleted" || gotKind != "openvpn" || gotName != "bob" {
 		t.Fatalf("%d %q %s %s", rec.Code, loc, gotKind, gotName)
+	}
+	// Возврат туда, откуда пришли; чужой адрес — список раздела.
+	for back, want := range map[string]string{
+		"/clients?q=bo&sort=name": "/clients?q=bo&sort=name&msg=deleted",
+		"/users/3":                "/users/3?msg=deleted",
+		"https://evil.example/":   "/openvpn/clients?msg=deleted",
+		"//evil.example/clients":  "/openvpn/clients?msg=deleted",
+		"/settings":               "/openvpn/clients?msg=deleted",
+	} {
+		rec := post(e, c, "/clients/bob/delete", url.Values{"csrf": {s.CSRF}, "kind": {"openvpn"}, "confirm": {"bob"}, "back": {back}})
+		if loc, _ := url.QueryUnescape(rec.Header().Get("Location")); loc != want {
+			t.Errorf("back=%q: %q, ждали %q", back, loc, want)
+		}
+	}
+}
+
+// Страница клиента запоминает, откуда на неё пришли, — для возврата после удаления.
+func TestClientPageKeepsBack(t *testing.T) {
+	e, c, _ := clientsEnv(t)
+	req := httptest.NewRequest("GET", "/clients/bob", nil)
+	req.AddCookie(c)
+	req.Header.Set("Referer", "http://"+req.Host+"/wireguard/clients?q=b")
+	rec := e.do(req)
+	if !strings.Contains(rec.Body.String(), `name="back" value="/wireguard/clients?q=b"`) {
+		t.Fatalf("нет адреса возврата: %s", rec.Body)
 	}
 }
 

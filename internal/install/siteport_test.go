@@ -6,51 +6,55 @@ import (
 	"testing"
 )
 
-// Сайт другого сервиса на нестандартном порту (StatusOpenVPN на 1234 с тем же
-// доменом) не берётся ни для раздела, ни в умолчание порта: azpanel заводит
-// свой сайт на порту из вопроса 1.
-func TestSiteForOnlyOnAzpanelPort(t *testing.T) {
+// По пути — только разделом существующего сайта: подходящие сайты с портом,
+// по которому раздел откроется; по порту из них ничего не берётся.
+func TestSiteCandidatesAndPort(t *testing.T) {
 	status := NginxServer{File: "statusopenvpn", Listen: []string{"1234 ssl http2"}, ServerName: []string{"peshkovvv.ru"}}
-	main := NginxServer{File: "default", Listen: []string{"443 ssl"}, ServerName: []string{"peshkovvv.ru"}}
-	a := Answers{Access: AccessPath, HTTPS: true, Domain: "peshkovvv.ru", Port: 8443}
+	main := NginxServer{File: "default", Listen: []string{"80", "443 ssl"}, ServerName: []string{"peshkovvv.ru"}}
+	other := NginxServer{File: "other", Listen: []string{"443 ssl"}, ServerName: []string{"other.example"}}
+	a := Answers{Access: AccessPath, HTTPS: true, Domain: "peshkovvv.ru", Address: "203.0.113.7"}
 
-	if p := defaultPort([]NginxServer{status}, a); p != DefaultPort {
-		t.Fatalf("умолчание порта при сайте на 1234: %d", p)
+	c := siteCandidates([]NginxServer{status, main, other}, a)
+	if len(c) != 2 || c[0].File != "statusopenvpn" || c[1].File != "default" {
+		t.Fatalf("кандидаты: %+v", c)
+	}
+	if s, ok := siteFor([]NginxServer{status, main}, a); !ok || s.File != "default" {
+		t.Fatalf("умолчание — сайт на 443: %q %v", s.File, ok)
+	}
+	if got := siteURL(status, a); got != "https://peshkovvv.ru:1234/azpanel/" {
+		t.Fatalf("адрес раздела: %s", got)
+	}
+	a.NginxFile = "statusopenvpn"
+	if s, ok := siteFor([]NginxServer{status, main}, a); !ok || s.File != "statusopenvpn" {
+		t.Fatalf("заданный сайт: %q %v", s.File, ok)
+	}
+	// Без HTTPS — порт без ssl.
+	a.HTTPS, a.NginxFile = false, ""
+	if s, ok := siteFor([]NginxServer{status, main}, a); !ok || sitePort(s, false) != 80 {
+		t.Fatalf("без HTTPS: %q %v", s.File, ok)
 	}
 	if _, ok := siteFor([]NginxServer{status}, a); ok {
-		t.Fatal("раздел встал в сайт на чужом порту")
-	}
-	if p := defaultPort([]NginxServer{status, main}, a); p != 443 {
-		t.Fatalf("умолчание порта при сайте на 443: %d", p)
-	}
-	a.Port = 443
-	if s, ok := siteFor([]NginxServer{status, main}, a); !ok || s.File != "default" {
-		t.Fatalf("на 443 выбран %q, %v", s.File, ok)
-	}
-	// Порт явно 1234 — встраивание в этот сайт по желанию человека.
-	a.Port = 1234
-	if s, ok := siteFor([]NginxServer{status, main}, a); !ok || s.File != "statusopenvpn" {
-		t.Fatalf("на 1234 выбран %q, %v", s.File, ok)
-	}
-	// HTTP-сайт на 443 для HTTPS не годится, и наоборот.
-	a.Port, a.HTTPS = 443, false
-	if _, ok := siteFor([]NginxServer{main}, a); ok {
-		t.Fatal("для HTTP взят сайт с ssl")
-	}
-	// Режим по порту в умолчание чужой порт не берёт.
-	a.Access, a.HTTPS = AccessPort, true
-	if p := defaultPort([]NginxServer{main}, a); p != DefaultPort {
-		t.Fatalf("по порту умолчание %d", p)
+		t.Fatal("без HTTPS взят сайт только с ssl")
 	}
 }
 
-// Переустановка там, где прошлая вписала раздел в сайт другого сервиса на
-// другом порту (как StatusOpenVPN на :1234): свой сайт на порту azpanel, а
-// строка include из прежнего сайта убирается.
-func TestWizardDropsIncludeFromPreviousSite(t *testing.T) {
+// По пути без подходящего сайта — отказ до изменений, а не свой сайт с
+// разделом: способы не смешиваются.
+func TestWizardPathWithoutSiteRefused(t *testing.T) {
+	e := newWizEnv(t, "", false, map[string]string{"AZPANEL_ACCESS": "path", "AZPANEL_DOMAIN": "nosite.example", "AZPANEL_ADMIN": "boss"})
+	e.useRealNginx()
+	err := e.w.Run()
+	if err == nil || !strings.Contains(err.Error(), "откройте azpanel по порту") || len(e.mut) != 0 {
+		t.Fatalf("ошибка %v, изменения %v", err, e.mut)
+	}
+}
+
+// По порту — свой сайт на 5000 без раздела /azpanel/; прежняя строка include
+// в сайте другого сервиса убирается.
+func TestWizardPortDropsPreviousInclude(t *testing.T) {
 	prev := filepath.Join(testNginxDir, "sites-enabled", "warper-web")
-	e := newWizEnv(t, "", false, map[string]string{"AZPANEL_ACCESS": "path", "AZPANEL_ADMIN": "boss"})
-	e.files["install.env"] = "MODE=panel+node\nACCESS=path\nPORT=8443\nHTTPS=y\nNGINX_FILE=" + prev + "\nADMIN=boss\n"
+	e := newWizEnv(t, "", false, map[string]string{"AZPANEL_ADMIN": "boss"})
+	e.files["install.env"] = "MODE=panel+node\nACCESS=port\nHTTPS=y\nNGINX_FILE=" + prev + "\nADMIN=boss\n"
 	e.useRealNginx()
 	if err := e.w.Run(); err != nil {
 		t.Fatalf("%v\n%s", err, e.out)
@@ -58,10 +62,11 @@ func TestWizardDropsIncludeFromPreviousSite(t *testing.T) {
 	if !strings.Contains(e.out.String(), "убирается из прежнего сайта "+prev) {
 		t.Fatalf("нет строки об уборке:\n%s", e.out)
 	}
-	if e.written.Panel.PublicURL != "https://203.0.113.7:8443" {
-		t.Fatalf("адрес: %s", e.written.Panel.PublicURL)
+	if e.written.Panel.PublicURL != "https://203.0.113.7:5000" || e.written.Panel.BasePath != "" {
+		t.Fatalf("адрес: %+v", e.written.Panel)
 	}
-	if !strings.Contains(string(e.fs.files[testNginxDir+"/sites-available/azpanel"]), "listen 8443 ssl;") {
-		t.Fatal("свой сайт не на 8443")
+	block := string(e.fs.files[testNginxDir+"/sites-available/azpanel"])
+	if !strings.Contains(block, "listen 5000 ssl;") || strings.Contains(block, "/azpanel/") {
+		t.Fatalf("свой сайт:\n%s", block)
 	}
 }

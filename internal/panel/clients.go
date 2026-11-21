@@ -401,7 +401,7 @@ func flashText(r *http.Request) string {
 // card показывает карточку клиента; сбой сессий или профилей карточку не
 // роняет, а выводится на ней текстом. errText — ошибка действия, если была.
 func (s *Server) card(w http.ResponseWriter, r *http.Request, c nodeapi.Client, status int, errText string) {
-	data := map[string]any{"Client": c, "Name": c.Name, "Href": clientHref(c.Name)}
+	data := map[string]any{"Client": c, "Name": c.Name, "Href": clientHref(c.Name), "Back": s.backFrom(r)}
 	sess, _ := session(r)
 	data["CanManage"] = sess.IsAdmin()
 	if sess.IsAdmin() {
@@ -632,7 +632,16 @@ func (s *Server) deleteClient(w http.ResponseWriter, r *http.Request) {
 	s.Log.Info("действие", "user", s.user(r), "op", "delete", "client", c.Name, "detail", kind)
 	s.audit(r, "delete", c.Name, kind, "удалён")
 	s.dropDeletedRecords(r.Context(), c, kind)
-	s.redirectMsg(w, r, "/", "deleted")
+	// Обратно туда, откуда пришли на страницу клиента; не известно — список
+	// клиентов этого вида.
+	to := cleanBack(r.PostForm.Get("back"))
+	if to == "" {
+		to = sectionOpenVPN.Base + "/clients"
+		if kind == nodeapi.KindWireGuard {
+			to = sectionWireGuard.Base + "/clients"
+		}
+	}
+	s.redirect(w, r, withMsg(to, "deleted"), http.StatusSeeOther)
 }
 
 // dropDeletedRecords: карточка, ссылка портала и одноразовые ссылки уходят вместе с клиентом;
