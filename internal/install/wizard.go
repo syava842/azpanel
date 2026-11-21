@@ -654,10 +654,10 @@ func (w *Wizard) generatePassword() (string, error) {
 	return GeneratePassword()
 }
 
-// askAdmin — вопрос 5. Сгенерированный пароль панель попросит сменить при
+// askAdmin — вопрос 4. Сгенерированный пароль панель попросит сменить при
 // первом входе, свой — нет.
 func (w *Wizard) askAdmin(a *Answers, p *plan) error {
-	w.printf("5. Администратор\n")
+	w.printf("4. Администратор\n")
 	if err := w.askKey(a, KeyAdmin, "Логин", a.Admin); err != nil {
 		return err
 	}
