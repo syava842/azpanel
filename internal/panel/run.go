@@ -77,8 +77,8 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		Log:         log,
 	}
 	tgToken := sec[secrets.TelegramBotToken]
-	// Отложенное (бот, уведомления, проверка обновлений azpanel, сверка групп)
-	// работает только при panel.experimental.
+	// Отложенное (бот, уведомления, проверка обновлений azpanel) работает только
+	// при panel.experimental; таймер групп синхронизации — всегда.
 	exp := cfg.Panel.Experimental
 	botOn := exp && cfg.Telegram.Enabled && tgToken != ""
 	if botOn {
@@ -167,10 +167,11 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		colDone.Add(1)
 		go func() { defer colDone.Done(); wt.Run(cctx) }()
 	}
+	// Таймер групп синхронизации: сверка и копирование на реплики (после
+	// запуска бота: уведомления берут его настройки).
+	colDone.Add(1)
+	go func() { defer colDone.Done(); s.RunGroupWatch(cctx) }()
 	if exp {
-		// Сверка групп синхронизации (после запуска бота: уведомления берут его настройки).
-		colDone.Add(1)
-		go func() { defer colDone.Done(); s.RunGroupWatch(cctx) }()
 		if update.IsDev(version) {
 			log.Info("проверка обновлений выключена: сборка без версии (dev)")
 		} else if s.UpdateToken() == "" {

@@ -32,12 +32,9 @@ func (s *Server) nav(path string, admin, wg bool) []navGroup {
 	}
 	vpn = append(vpn,
 		navItem{Href: "/routing", Label: "Маршрутизация", Icon: "route"},
-		navItem{Href: "/proxy", Label: "Прокси", Icon: "globe"})
-	if s.Experimental {
-		vpn = append(vpn,
-			navItem{Href: "/nodes", Label: "Узлы", Icon: "server"},
-			navItem{Href: "/groups", Label: "Группы", Icon: "layers"})
-	}
+		navItem{Href: "/proxy", Label: "Прокси", Icon: "globe"},
+		navItem{Href: "/nodes", Label: "Узлы", Icon: "server"},
+		navItem{Href: "/groups", Label: "Группы", Icon: "layers"})
 	services := []navItem{
 		{Href: "/settings/antizapret", Label: "AntiZapret", Icon: "shield"},
 		{Href: "/antizapret/update", Label: "Обновление AZ", Icon: "rotate"},

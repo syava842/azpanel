@@ -185,9 +185,10 @@ var routes = map[string]access{
 	"/dl/":                                                  accPortal,
 }
 
-// experimentalRoutes — маршруты отложенных возможностей (узлы, группы
-// синхронизации, Telegram-бот, самообновление azpanel): регистрируются, только
-// когда включён panel.experimental. Они остаются и в таблице прав.
+// experimentalRoutes — маршруты отложенных возможностей (Telegram-бот, виды
+// профилей клиента, самообновление azpanel): регистрируются, только когда
+// включён panel.experimental. Они остаются и в таблице прав. Узлы и группы
+// синхронизации (/nodes*, /groups*) нужны боевым панелям — не под флагом.
 var experimentalRoutes = func() map[string]bool {
 	m := map[string]bool{}
 	for p := range routes {
@@ -196,8 +197,7 @@ var experimentalRoutes = func() map[string]bool {
 			continue
 		}
 		switch {
-		case strings.HasPrefix(path, "/nodes"), strings.HasPrefix(path, "/groups"),
-			strings.HasPrefix(path, "/users/telegram"), strings.HasPrefix(path, "/account/telegram"),
+		case strings.HasPrefix(path, "/users/telegram"), strings.HasPrefix(path, "/account/telegram"),
 			path == "/users/{id}/telegram/unlink", path == "/clients/{name}/kinds",
 			path == "/update", strings.HasPrefix(path, "/update/"):
 			m[p] = true
