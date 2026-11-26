@@ -2,6 +2,7 @@ package panel
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"strconv"
 	"strings"
@@ -539,5 +540,128 @@ func TestGroupWatchCopiesClientNamedServer(t *testing.T) {
 	}
 	if n := outboxLen(t, g.testEnv); n != before {
 		t.Fatalf("уведомление: %d → %d", before, n)
+	}
+}
+
+// «Назначить основным» реплику, когда основной — сервер панели: отказ, роли
+// не меняются.
+func TestPromoteRefusesToDemoteLocalNode(t *testing.T) {
+	g, grp := alignedGroup(t)
+	r := g.call(t, gpath(grp, "/promote/"+strconv.FormatInt(g.repID, 10)), nil)
+	if r.Code != 409 || !strings.Contains(r.Body, "Сервер с панелью нельзя сделать репликой") {
+		t.Fatalf("назначение основным: %d %s", r.Code, r.Body)
+	}
+	if n, _, _ := g.st.NodeByID(context.Background(), store.LocalNode); n.Role != store.RolePrimary {
+		t.Fatalf("роль локального узла: %q", n.Role)
+	}
+	if logHas(&g.log, "r1:role=primary") || logHas(&g.log, "p:role=replica") {
+		t.Fatalf("роли на узлах тронуты: %v", g.log)
+	}
+}
+
+// Старая база: сервер панели записан репликой. Копирование на него не идёт,
+// но группа помечается и уведомление одно — не молча.
+func TestLocalReplicaFromOldBaseIsReported(t *testing.T) {
+	g := groupEnv(t)
+	g.enableNotify()
+	g.replica.set(pathLimits, `{"r1":1}`) // r1 — основной, у него свой набор
+	f := url.Values{"csrf": {g.csrf}, "name": {"old"}, "primary": {strconv.FormatInt(g.repID, 10)}}
+	if rec := post(g.testEnv, g.c, "/groups", f); rec.Code != 303 {
+		t.Fatalf("создание группы: %d %s", rec.Code, rec.Body)
+	}
+	gs, _ := g.st.Groups(context.Background())
+	if err := g.st.SetNodeGroup(context.Background(), store.LocalNode, gs[0].ID, store.RoleReplica); err != nil {
+		t.Fatal(err)
+	}
+	g.srv.hubReload()
+	before := outboxLen(t, g.testEnv)
+	g.srv.verifyAllGroups(context.Background())
+	g.srv.verifyAllGroups(context.Background())
+	if logHas(&g.log, "p:apply") {
+		t.Fatalf("писали на сервер панели: %v", g.log)
+	}
+	kinds, texts := outboxTexts(t, g.testEnv)
+	if len(kinds) != before+1 || !strings.Contains(texts[len(texts)-1], "сервер с панелью, а в группе записан репликой") {
+		t.Fatalf("уведомления: %v %v", kinds, texts)
+	}
+	rt := g.srv.runtime(gs[0].ID)
+	g.srv.hub.mu.Lock()
+	mark := rt.mark
+	g.srv.hub.mu.Unlock()
+	if !strings.Contains(mark, "сервер с панелью") {
+		t.Fatalf("группа не помечена: %q", mark)
+	}
+}
+
+// «Выровнять»: занятый основной ждём, а реплика, занятая и после всех
+// попыток сверки, — не ошибка, а предупреждение «сверка отложена».
+func TestAlignWaitsBusyAndDefersVerify(t *testing.T) {
+	g := groupEnv(t)
+	old := syncBusyPause
+	syncBusyPause = time.Millisecond
+	t.Cleanup(func() { syncBusyPause = old })
+	grp := g.makeGroup(t)
+	g.primary.mu.Lock()
+	g.primary.busy = 2
+	g.primary.mu.Unlock()
+	g.replica.ApplyRoutingFn = func(context.Context) (nodeapi.Task, error) {
+		g.replica.note("doall")
+		g.replica.mu.Lock()
+		g.replica.busy = 1000 // служба после doall «занята» навсегда
+		g.replica.mu.Unlock()
+		return nodeapi.Task{ID: "0123456789ab"}, nil
+	}
+	g.call(t, gpath(grp, "/align/"+strconv.FormatInt(g.repID, 10)), nil)
+	rt := g.srv.runtime(grp.ID)
+	g.srv.hub.mu.Lock()
+	job := rt.job.snapshot()
+	mark := rt.mark
+	g.srv.hub.mu.Unlock()
+	if job.Err != "" || mark != "" {
+		t.Fatalf("«Выровнять» провалено: %q %q %+v", job.Err, mark, job.Steps)
+	}
+	last := job.Steps[len(job.Steps)-1]
+	if last.Text != "Сверка" || last.State != "warn" || !strings.Contains(last.Err, "сверка отложена") {
+		t.Fatalf("шаг сверки: %+v", job.Steps)
+	}
+	if v, _ := g.replica.get(pathHosts); v != "a.example\n" {
+		t.Fatalf("набор не записан: %q", v)
+	}
+}
+
+// Остановка по личности одной реплики не прячет ошибку копирования на
+// другую: отметка и уведомление называют обе причины.
+func TestIdentityStopKeepsOtherErrors(t *testing.T) {
+	g, grp := identityGroup(t)
+	r2 := newSyncFake("r2", &g.log)
+	g.fakes["r2"] = r2
+	id2 := g.addNode(t, "r2")
+	f := url.Values{"csrf": {g.csrf}, "node": {strconv.FormatInt(id2, 10)}}
+	if rec := post(g.testEnv, g.c, gpath(grp, "/members"), f); rec.Code != 303 {
+		t.Fatalf("добавление r2: %d %s", rec.Code, rec.Body)
+	}
+	g.call(t, gpath(grp, "/align/"+strconv.FormatInt(id2, 10)), nil)
+	before := outboxLen(t, g.testEnv)
+
+	g.replica.set(pathCA, "CA другого сервера")
+	r2.applyErr = errors.New("реплика отвергла набор")
+	g.primary.set(pathLimits, `{"carol":1}`)
+	g.srv.verifyAllGroups(context.Background())
+	g.srv.verifyAllGroups(context.Background())
+
+	kinds, texts := outboxTexts(t, g.testEnv)
+	if len(kinds) != before+1 {
+		t.Fatalf("уведомлений %d, ждали одно: %v", len(kinds)-before, texts)
+	}
+	last := texts[len(texts)-1]
+	if !strings.Contains(last, "«r1» разные CA/ключи сервера") || !strings.Contains(last, "«r2»: реплика не приняла набор") {
+		t.Fatalf("уведомление без одной из причин: %s", last)
+	}
+	rt := g.srv.runtime(grp.ID)
+	g.srv.hub.mu.Lock()
+	mark := rt.mark
+	g.srv.hub.mu.Unlock()
+	if !strings.Contains(mark, "разные CA") || !strings.Contains(mark, "реплика отвергла набор") {
+		t.Fatalf("отметка без одной из причин: %q", mark)
 	}
 }

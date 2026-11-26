@@ -450,11 +450,30 @@ func TestAlignStopsWhenBackupFails(t *testing.T) {
 	}
 }
 
-func TestPromoteSwapsRoles(t *testing.T) {
+// remoteGroup — группа «far» из двух удалённых узлов: основной r1, реплика
+// r2 (сервер панели в ней не участвует).
+func remoteGroup(t *testing.T) (*groupTest, store.Group, *syncFake, int64) {
+	t.Helper()
 	g := groupEnv(t)
-	grp := g.makeGroup(t)
+	r2 := newSyncFake("r2", &g.log)
+	g.fakes["r2"] = r2
+	id2 := g.addNode(t, "r2")
+	f := url.Values{"csrf": {g.csrf}, "name": {"far"}, "primary": {strconv.FormatInt(g.repID, 10)}}
+	if rec := post(g.testEnv, g.c, "/groups", f); rec.Code != 303 {
+		t.Fatalf("создание группы: %d %s", rec.Code, rec.Body)
+	}
+	gs, _ := g.st.Groups(context.Background())
+	f = url.Values{"csrf": {g.csrf}, "node": {strconv.FormatInt(id2, 10)}}
+	if rec := post(g.testEnv, g.c, gpath(gs[0], "/members"), f); rec.Code != 303 {
+		t.Fatalf("добавление реплики: %d %s", rec.Code, rec.Body)
+	}
+	return g, gs[0], r2, id2
+}
+
+func TestPromoteSwapsRoles(t *testing.T) {
+	g, grp, r2, id2 := remoteGroup(t)
 	g.log = nil
-	if c := g.call(t, gpath(grp, "/promote/"+strconv.FormatInt(g.repID, 10)), nil); c.Code != 303 {
+	if c := g.call(t, gpath(grp, "/promote/"+strconv.FormatInt(id2, 10)), nil); c.Code != 303 {
 		t.Fatalf("promote: %d %s", c.Code, c.Body)
 	}
 	recs, _ := g.st.Nodes(context.Background())
@@ -462,31 +481,30 @@ func TestPromoteSwapsRoles(t *testing.T) {
 	for _, n := range recs {
 		roles[n.Name] = n.Role
 	}
-	if roles["r1"] != store.RolePrimary || roles["local"] != store.RoleReplica {
+	if roles["r2"] != store.RolePrimary || roles["r1"] != store.RoleReplica {
 		t.Fatalf("роли в базе: %v", roles)
 	}
-	if g.replica.role.Role != nodeapi.RolePrimary || g.primary.role.Role != nodeapi.RoleReplica {
-		t.Fatalf("роли на узлах: %q %q", g.replica.role.Role, g.primary.role.Role)
+	if r2.role.Role != nodeapi.RolePrimary || g.replica.role.Role != nodeapi.RoleReplica {
+		t.Fatalf("роли на узлах: %q %q", r2.role.Role, g.replica.role.Role)
 	}
 	// Прежний основной вперёд: двух основных не бывает.
-	if len(g.log) != 2 || g.log[0] != "p:role=replica" {
+	if len(g.log) != 2 || g.log[0] != "r1:role=replica" {
 		t.Fatalf("порядок: %v", g.log)
 	}
 }
 
 func TestPromoteWithUnreachableOldPrimaryRemovesIt(t *testing.T) {
-	g := groupEnv(t)
-	grp := g.makeGroup(t)
-	g.primary.mu.Lock()
-	g.primary.role.Role = "down" // SetSyncRole теперь отказывает
-	g.primary.mu.Unlock()
-	if c := g.call(t, gpath(grp, "/promote/"+strconv.FormatInt(g.repID, 10)), nil); c.Code != 303 {
+	g, grp, _, id2 := remoteGroup(t)
+	g.replica.mu.Lock()
+	g.replica.role.Role = "down" // SetSyncRole теперь отказывает
+	g.replica.mu.Unlock()
+	if c := g.call(t, gpath(grp, "/promote/"+strconv.FormatInt(id2, 10)), nil); c.Code != 303 {
 		t.Fatalf("promote: %d %s", c.Code, c.Body)
 	}
-	local, _, _ := g.st.NodeByID(context.Background(), store.LocalNode)
-	rep, _, _ := g.st.NodeByID(context.Background(), g.repID)
-	if local.GroupID != 0 || rep.Role != store.RolePrimary {
-		t.Fatalf("local %+v, r1 %+v", local, rep)
+	old, _, _ := g.st.NodeByID(context.Background(), g.repID)
+	rep, _, _ := g.st.NodeByID(context.Background(), id2)
+	if old.GroupID != 0 || rep.Role != store.RolePrimary {
+		t.Fatalf("r1 %+v, r2 %+v", old, rep)
 	}
 }
 

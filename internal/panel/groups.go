@@ -36,7 +36,7 @@ func init() {
 // --- ход длинных операций группы ---
 
 type jobStep struct {
-	Text, State, Err string // State: run | ok | fail
+	Text, State, Err string // State: run | ok | warn | fail
 }
 
 type groupJob struct {
@@ -65,6 +65,13 @@ func (j *groupJob) end(i int, err error) error {
 	}
 	j.Steps[i].State = "ok"
 	return nil
+}
+
+// warn завершает шаг i предупреждением: шаг не провален, но сделан не до конца.
+func (j *groupJob) warn(i int, text string) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.Steps[i].State, j.Steps[i].Err = "warn", text
 }
 
 // step выполняет шаг f с записью в ход операции.
@@ -171,7 +178,13 @@ func (s *Server) pushReplicas(ctx context.Context, g store.Group, only map[int64
 		return out
 	}
 	for _, m := range replicas {
-		if m.id == store.LocalNode || (only != nil && !only[m.id]) {
+		if only != nil && !only[m.id] {
+			continue
+		}
+		if m.id == store.LocalNode {
+			// Старая база: сервер панели записан репликой. Копирование
+			// заменило бы ему CA и ключи — не копируем, но и не молчим.
+			out.errs = append(out.errs, fmt.Errorf("«%s» — сервер с панелью, а в группе записан репликой: копирование на него не выполняется; выведите его из группы", m.name))
 			continue
 		}
 		if m.err != nil {
@@ -564,13 +577,20 @@ func (s *Server) alignReplica(ctx context.Context, j *groupJob, g store.Group, r
 	}); err != nil {
 		return err
 	}
+	deferred := false
 	if err := j.step("Замена набора файлов реплики набором основного", func() error {
-		_, err := pushToReplica(ctx, primary.c, rc, pushOpts{full: true, force: force})
+		res, err := pushToReplica(ctx, primary.c, rc, pushOpts{full: true, force: force})
+		deferred = res.VerifyDeferred
 		return err
 	}); err != nil {
 		return err
 	}
-	return j.step("Сверка", func() error {
+	i := j.begin("Сверка")
+	if deferred {
+		j.warn(i, verifyDeferredText)
+		return nil
+	}
+	err = func() error {
 		pm, err := manifestWhenFree(ctx, primary.c.syncerMust())
 		if err != nil {
 			return err
@@ -583,8 +603,16 @@ func (s *Server) alignReplica(ctx context.Context, j *groupJob, g store.Group, r
 			return fmt.Errorf("остались расхождения: %s", diffs[0].Text())
 		}
 		return nil
-	})
+	}()
+	if errors.Is(err, nodeapi.ErrBusy) {
+		j.warn(i, verifyDeferredText)
+		return nil
+	}
+	return j.end(i, err)
 }
+
+// verifyDeferredText — предупреждение шага «Сверка», когда узел занят.
+const verifyDeferredText = "записано; сверка отложена — узел занят задачей или скриптом AntiZapret, таймер групп проверит"
 
 func (c *conn) syncerMust() SyncNode {
 	s, _ := c.syncer()
@@ -618,6 +646,12 @@ func (s *Server) groupPromote(w http.ResponseWriter, r *http.Request) {
 		if recs[i].GroupID == g.ID && recs[i].Role == store.RolePrimary && recs[i].Kind == store.KindNode {
 			old = &recs[i]
 		}
+	}
+	if old != nil && old.ID == store.LocalNode {
+		// Прежний основной стал бы репликой, а копирование с нового
+		// основного заменило бы серверу панели CA и ключи.
+		s.groupView(w, r, http.StatusConflict, g, "Сервер с панелью нельзя сделать репликой — оставьте основным его или перенесите панель на другой сервер.")
+		return
 	}
 	nc, err := s.connect(rec)
 	if err != nil {

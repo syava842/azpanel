@@ -8,7 +8,7 @@
 <div class="card">
   <p>{{if .Job.Running}}<b>идёт</b>{{else if .Job.Err}}<span class="bad">не удалось: {{.Job.Err}}</span>{{else}}<span class="ok">выполнено</span>{{end}}</p>
   <ol>
-  {{range .Job.Steps}}<li class="{{if eq .State "fail"}}bad{{else if eq .State "ok"}}ok{{end}}">{{.Text}} — {{if eq .State "run"}}идёт{{else if eq .State "ok"}}готово{{else}}ошибка: {{.Err}}{{end}}</li>{{end}}
+  {{range .Job.Steps}}<li class="{{if eq .State "fail"}}bad{{else if eq .State "ok"}}ok{{end}}">{{.Text}} — {{if eq .State "run"}}идёт{{else if eq .State "ok"}}готово{{else if eq .State "warn"}}предупреждение: {{.Err}}{{else}}ошибка: {{.Err}}{{end}}</li>{{end}}
   </ol>
 </div>
 {{end}}

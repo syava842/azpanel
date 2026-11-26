@@ -412,6 +412,9 @@ func needsDoall(p string) bool {
 type pushResult struct {
 	Files   int
 	Removed int
+	// VerifyDeferred — набор записан, но сверка после записи не сделана:
+	// реплика занята (только «Выровнять»).
+	VerifyDeferred bool
 }
 
 // pushOpts — как копировать набор на реплику.
@@ -464,11 +467,19 @@ func pushToReplica(ctx context.Context, primary, replica *conn, o pushOpts) (pus
 	if !ok || !ok2 {
 		return pushResult{}, errors.New("агент не умеет синхронизацию: обновите его")
 	}
-	pm, err := ps.SyncManifest(ctx)
+	// «Выровнять» (full) запущено человеком: занятый узел ждём, а не
+	// отказываем; автокопирование пропускает проход (ErrBusy).
+	manifest := func(n SyncNode) (nodeapi.SyncManifest, error) {
+		if o.full {
+			return manifestWhenFree(ctx, n)
+		}
+		return n.SyncManifest(ctx)
+	}
+	pm, err := manifest(ps)
 	if err != nil {
 		return pushResult{}, fmt.Errorf("манифест основного: %w", err)
 	}
-	rm, err := rs.SyncManifest(ctx)
+	rm, err := manifest(rs)
 	if err != nil {
 		return pushResult{}, fmt.Errorf("манифест реплики: %w", err)
 	}
@@ -543,6 +554,10 @@ func pushToReplica(ctx context.Context, primary, replica *conn, o pushOpts) (pus
 	}
 	// Сверка после записи: набор обязан совпасть.
 	rm2, err := manifestWhenFree(ctx, rs)
+	if err != nil && o.full && errors.Is(err, nodeapi.ErrBusy) {
+		// Записано; реплика так и не освободилась — сверку сделает таймер.
+		return pushResult{Files: len(entries), Removed: len(removals), VerifyDeferred: true}, nil
+	}
 	if err != nil {
 		return pushResult{}, fmt.Errorf("сверка после записи: %w", err)
 	}
@@ -603,13 +618,18 @@ func (s *Server) propagate(ctx context.Context, gid int64, tries int) {
 // таймер); иначе отметка снимается.
 func (s *Server) afterChange(ctx context.Context, g store.Group, out pushOutcome) {
 	switch {
-	case len(out.identity) > 0:
-		s.identityStop(ctx, g, out.identity)
-	case len(out.errs) > 0:
-		err := errors.Join(out.errs...)
-		s.Log.Warn("копирование на реплики не удалось", "group", g.Name, "err", err)
-		s.markGroup(g.ID, "Копирование изменений на реплики не удалось: "+err.Error())
-		s.notifySyncMismatch(ctx, g, "Копирование изменений основного узла на реплики не удалось: "+err.Error())
+	case len(out.identity) > 0 || len(out.errs) > 0:
+		var r stopReason
+		if len(out.errs) > 0 {
+			err := errors.Join(out.errs...)
+			s.Log.Warn("копирование на реплики не удалось", "group", g.Name, "err", err)
+			r = stopReason{
+				mark:   "Копирование изменений на реплики не удалось: " + err.Error(),
+				notice: "Копирование изменений основного узла на реплики не удалось: " + err.Error(),
+			}
+			r.sig = r.notice
+		}
+		s.stopGroup(ctx, g, out.identity, r)
 	case out.busy:
 		s.Log.Info("узел группы занят, копирование оставлено таймеру", "group", g.Name)
 	default:
@@ -617,12 +637,28 @@ func (s *Server) afterChange(ctx context.Context, g store.Group, out pushOutcome
 	}
 }
 
-// identityStop: у реплик names другие CA или ключи сервера — копирование на
-// них остановлено. Отметка группы и одно уведомление на этот состав реплик.
-func (s *Server) identityStop(ctx context.Context, g store.Group, names []string) {
-	text := identityText(names)
-	s.markGroup(g.ID, text)
-	s.notifyOnce(ctx, bot.KindSyncMismatch, "sync_mismatch:"+groupKey(g.ID), "identity:"+strings.Join(names, ","), "Группа «"+g.Name+"»: "+text)
+// stopReason — ошибка копирования для отметки группы (mark), уведомления
+// (notice) и его подписи (sig); пусто — ошибок нет.
+type stopReason struct{ mark, notice, sig string }
+
+// stopGroup — отметка группы и одно уведомление о причинах остановки
+// копирования: у реплик identity другие CA или ключи сервера и (или) ошибка
+// копирования на другие реплики. Причины складываются: остановка по
+// личности одной реплики не прячет ошибку другой.
+func (s *Server) stopGroup(ctx context.Context, g store.Group, identity []string, r stopReason) {
+	var marks, notices, sigs []string
+	if len(identity) > 0 {
+		t := identityText(identity)
+		marks, notices, sigs = append(marks, t), append(notices, t), append(sigs, "identity:"+strings.Join(identity, ","))
+	}
+	if r.mark != "" {
+		marks, notices, sigs = append(marks, r.mark), append(notices, r.notice), append(sigs, r.sig)
+	}
+	if len(marks) == 0 {
+		return
+	}
+	s.markGroup(g.ID, strings.Join(marks, " "))
+	s.notifyOnce(ctx, bot.KindSyncMismatch, "sync_mismatch:"+groupKey(g.ID), strings.Join(sigs, "|"), "Группа «"+g.Name+"»: "+strings.Join(notices, " "))
 }
 
 // groupPrimary: узел — основной группы (изменения на нём уходят на реплики).
@@ -934,17 +970,19 @@ func (s *Server) watchGroup(ctx context.Context, g store.Group) error {
 		}
 	}
 	switch {
-	case len(out.identity) > 0:
+	case len(out.identity) > 0 || len(errs) > 0:
 		s.keepReport(g.ID, again)
-		s.identityStop(ctx, g, out.identity)
-	case len(errs) > 0:
-		serr := errors.Join(errs...)
-		s.Log.Warn("копирование на реплики по таймеру не удалось", "group", g.Name, "err", serr)
-		s.markGroup(g.ID, "Копирование на реплики по таймеру не удалось: "+serr.Error())
-		s.keepReport(g.ID, again)
-		key := "sync_mismatch:" + groupKey(g.ID)
-		s.notifyOnce(ctx, bot.KindSyncMismatch, key, "copy:"+serr.Error(),
-			"Группа «"+g.Name+"»: копирование изменений основного на реплики не удалось: "+serr.Error()+". Откройте раздел «Группы».")
+		var r stopReason
+		if len(errs) > 0 {
+			serr := errors.Join(errs...)
+			s.Log.Warn("копирование на реплики по таймеру не удалось", "group", g.Name, "err", serr)
+			r = stopReason{
+				mark:   "Копирование на реплики по таймеру не удалось: " + serr.Error(),
+				notice: "копирование изменений основного на реплики не удалось: " + serr.Error() + ". Откройте раздел «Группы».",
+				sig:    "copy:" + serr.Error(),
+			}
+		}
+		s.stopGroup(ctx, g, out.identity, r)
 	default:
 		s.markGroup(g.ID, "")
 		s.reportAndNotify(ctx, g, again)
