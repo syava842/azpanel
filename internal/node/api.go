@@ -67,7 +67,7 @@ type API struct {
 	RestartDelay time.Duration
 	// ScriptRunning — имя запущенного скрипта AntiZapret (doall.sh, client.sh…)
 	// или ""; nil — не проверяется. Пока скрипт идёт, манифест синхронизации
-	// отвечает 423 (ProcScripts по /proc).
+	// отвечает 423 (azScriptRunning: /proc и каталог установки AntiZapret).
 	ScriptRunning func() string
 
 	// ops сериализует операции над клиентами: поиск + client.sh + уборка
