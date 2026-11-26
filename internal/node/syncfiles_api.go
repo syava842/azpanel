@@ -103,8 +103,11 @@ func (a *API) syncReady(w http.ResponseWriter) bool {
 	return true
 }
 
+// syncManifest — набор файлов с отпечатками. Пока набор меняется (задача
+// агента, обновление AntiZapret, скрипт AntiZapret), ответ — 423: панель не
+// должна копировать на реплики промежуточное состояние.
 func (a *API) syncManifest(w http.ResponseWriter, r *http.Request) {
-	if !a.syncReady(w) {
+	if !a.syncReady(w) || a.syncBusyReply(w) {
 		return
 	}
 	files, err := a.Sync.Set.Manifest()

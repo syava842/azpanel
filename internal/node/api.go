@@ -65,6 +65,10 @@ type API struct {
 	// перезапуск по API недоступен. RestartDelay — пауза после ответа, 0 — restartDelay.
 	Exit         func()
 	RestartDelay time.Duration
+	// ScriptRunning — имя запущенного скрипта AntiZapret (doall.sh, client.sh…)
+	// или ""; nil — не проверяется. Пока скрипт идёт, манифест синхронизации
+	// отвечает 423 (ProcScripts по /proc).
+	ScriptRunning func() string
 
 	// ops сериализует операции над клиентами: поиск + client.sh + уборка
 	// лимитов, а также правки лимита и блокировки. Порядок захвата всегда

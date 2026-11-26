@@ -203,6 +203,39 @@ func TestNodePagesWithNodeParam(t *testing.T) {
 	}
 }
 
+// Cookie выбора, указывающая на неподключённый или удалённый узел, не даёт
+// 502 на каждой странице: страница открывается как с локальным узлом.
+func TestStaleNodeCookieFallsBackToLocal(t *testing.T) {
+	e, c, _ := nodesEnv(t)
+	e.node.ClientsFn = func(context.Context) ([]nodeapi.Client, error) {
+		return []nodeapi.Client{{Name: "local-client", OpenVPN: true}}, nil
+	}
+	e.node.SessionsFn = func(context.Context) ([]nodeapi.Session, error) { return nil, nil }
+	// Узел заведён ключом, но ещё не подключён: нет адреса и отпечатка.
+	sealed, err := e.srv.sealToken(testAgentToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := e.st.AddNode(context.Background(), store.NodeRec{Name: "wait", Token: sealed, Created: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.srv.hubReload()
+	for _, id := range []int64{pending, 999} {
+		r := httptest.NewRequest("GET", "/clients", nil)
+		r.AddCookie(c)
+		r.AddCookie(&http.Cookie{Name: nodeCookie, Value: strconv.FormatInt(id, 10)})
+		rec := e.do(r)
+		if rec.Code != 200 || !strings.Contains(rec.Body.String(), "local-client") {
+			t.Fatalf("cookie на узел %d: %d %s", id, rec.Code, rec.Body)
+		}
+	}
+	// Явный ?node= на неподключённый узел — по-прежнему ошибка, а не подмена.
+	if rec := get(e, c, "/clients?node="+strconv.FormatInt(pending, 10)); rec.Code == 200 {
+		t.Fatalf("?node= неподключённого узла: %d", rec.Code)
+	}
+}
+
 func TestOutdatedAgentGetsNoCommands(t *testing.T) {
 	e, c, _ := nodesEnv(t)
 	old := panelProto

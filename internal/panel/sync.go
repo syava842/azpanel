@@ -53,6 +53,15 @@ var (
 	// groupWatchMax — предел одного прохода по группе: копирование с doall
 	// бывает долгим.
 	groupWatchMax = 30 * time.Minute
+	// syncBusyPause и syncBusyTries — ожидание узла, занятого задачей или
+	// скриптом AntiZapret (nodeapi.ErrBusy): сверка после записи и
+	// копирование после задачи повторяют попытку столько раз.
+	syncBusyPause = 30 * time.Second
+	syncBusyTries = 4
+	// pushBackoffMax — сколько таймер не пишет на реплику, у которой после
+	// записи осталось то же расхождение (одно уведомление вместо записи и
+	// doall каждые 5 минут).
+	pushBackoffMax = 6 * time.Hour
 )
 
 func (c *conn) syncer() (SyncNode, bool) {
@@ -65,6 +74,7 @@ type member struct {
 	c    *conn
 	err  error // подключение не собрано
 	name string
+	id   int64
 }
 
 // groupMembers: основной и реплики группы. Основной один; нет основного —
@@ -79,7 +89,7 @@ func (s *Server) groupMembers(ctx context.Context, gid int64) (primary member, r
 		if rec.Kind != store.KindNode || rec.GroupID != gid {
 			continue
 		}
-		m := member{name: rec.Name}
+		m := member{name: rec.Name, id: rec.ID}
 		m.c, m.err = s.connect(rec)
 		switch rec.Role {
 		case store.RolePrimary:
@@ -98,6 +108,8 @@ func (s *Server) groupMembers(ctx context.Context, gid int64) (primary member, r
 type fileDiff struct {
 	Path string
 	Kind string // differs | missing | extra
+	// Want, Have — отпечатки у основного и у реплики (пусто — файла нет).
+	Want, Have string
 }
 
 func (d fileDiff) Text() string {
@@ -123,14 +135,14 @@ func diffManifests(primary, replica nodeapi.SyncManifest) (push []nodeapi.SyncEn
 		r, ok := have[e.Path]
 		switch {
 		case !ok:
-			push, diffs = append(push, e), append(diffs, fileDiff{e.Path, "missing"})
+			push, diffs = append(push, e), append(diffs, fileDiff{Path: e.Path, Kind: "missing", Want: e.SHA256})
 		case r.SHA256 != e.SHA256 || r.Size != e.Size:
-			push, diffs = append(push, e), append(diffs, fileDiff{e.Path, "differs"})
+			push, diffs = append(push, e), append(diffs, fileDiff{Path: e.Path, Kind: "differs", Want: e.SHA256, Have: r.SHA256})
 		}
 	}
 	for _, e := range replica.Files {
 		if !seen[e.Path] {
-			diffs = append(diffs, fileDiff{e.Path, "extra"})
+			diffs = append(diffs, fileDiff{Path: e.Path, Kind: "extra", Have: e.SHA256})
 		}
 	}
 	sort.SliceStable(diffs, func(i, j int) bool { return diffs[i].Path < diffs[j].Path })
@@ -142,6 +154,7 @@ type replicaReport struct {
 	Name  string
 	ID    int64
 	Err   string
+	Busy  bool // узел занят (nodeapi.ErrBusy): набор сейчас меняется
 	Diffs []fileDiff
 	// ClientsMissing — клиенты основного, которых нет на реплике; ClientsExtra — наоборот.
 	ClientsMissing, ClientsExtra []string
@@ -154,9 +167,25 @@ func (r replicaReport) InSync() bool {
 
 // groupReport — итог сверки группы.
 type groupReport struct {
-	At         time.Time
-	PrimaryErr string
-	Replicas   []replicaReport
+	At          time.Time
+	PrimaryErr  string
+	PrimaryBusy bool // основной занят (nodeapi.ErrBusy)
+	Replicas    []replicaReport
+}
+
+// busy: основной или реплика заняты задачей или скриптом AntiZapret — набор
+// в промежуточном состоянии, сравнивать и копировать нечего до следующего
+// прохода.
+func (g groupReport) busy() bool {
+	if g.PrimaryBusy {
+		return true
+	}
+	for _, r := range g.Replicas {
+		if r.Busy {
+			return true
+		}
+	}
+	return false
 }
 
 func (g groupReport) InSync() bool {
@@ -231,6 +260,7 @@ func (s *Server) verifyGroup(ctx context.Context, g store.Group) (groupReport, e
 	pm, err := ps.SyncManifest(ctx)
 	if err != nil {
 		rep.PrimaryErr = "основной «" + primary.name + "»: " + connErrText(err)
+		rep.PrimaryBusy = errors.Is(err, nodeapi.ErrBusy)
 		return rep, nil
 	}
 	var pclients map[string]bool
@@ -251,7 +281,7 @@ func (s *Server) verifyGroup(ctx context.Context, g store.Group) (groupReport, e
 			}
 			rm, err := rs.SyncManifest(ctx)
 			if err != nil {
-				rr.Err = connErrText(err)
+				rr.Err, rr.Busy = connErrText(err), errors.Is(err, nodeapi.ErrBusy)
 				return
 			}
 			_, rr.Diffs = diffManifests(pm, rm)
@@ -365,10 +395,51 @@ type pushResult struct {
 	Removed int
 }
 
-// pushToReplica копирует расхождения с основного на реплику. full — заменить
-// набор целиком (с удалением лишнего); иначе только изменившиеся файлы, а
-// лишние на реплике (удалённые на основном клиенты) удаляются списком в архиве.
-func pushToReplica(ctx context.Context, primary, replica *conn, full, force bool) (pushResult, error) {
+// pushOpts — как копировать набор на реплику.
+type pushOpts struct {
+	// full — заменить набор целиком (с удалением лишнего), «Выровнять»;
+	// иначе только изменившиеся файлы.
+	full bool
+	// force — разрешить удаление ключевых файлов (только «Выровнять»).
+	force bool
+	// guard — автоматическое копирование: если у реплики другие CA или ключи
+	// сервера (identityDiffs), ничего не записывать и вернуть *identityError.
+	guard bool
+}
+
+// identityError — у основного и реплики разная «личность» сервера; Paths —
+// файлы, по которым это видно (пути, не содержимое).
+type identityError struct{ Paths []string }
+
+func (e *identityError) Error() string {
+	return "у основного и реплики разные CA/ключи сервера: " + strings.Join(e.Paths, ", ")
+}
+
+// errLeftover — после записи у реплики остались расхождения.
+var errLeftover = errors.New("после записи остались расхождения")
+
+// manifestWhenFree — манифест узла; занятый узел (nodeapi.ErrBusy) ждём до
+// syncBusyTries раз по syncBusyPause: задача записи на реплике кончилась, а
+// перезапущенная служба ещё может гнать doall.
+func manifestWhenFree(ctx context.Context, n SyncNode) (nodeapi.SyncManifest, error) {
+	for i := 1; ; i++ {
+		m, err := n.SyncManifest(ctx)
+		if err == nil || !errors.Is(err, nodeapi.ErrBusy) || i >= syncBusyTries {
+			return m, err
+		}
+		select {
+		case <-ctx.Done():
+			return m, ctx.Err()
+		case <-time.After(syncBusyPause):
+		}
+	}
+}
+
+// pushToReplica копирует расхождения с основного на реплику (pushOpts);
+// лишние на реплике файлы (удалённые на основном клиенты) удаляются списком в
+// архиве. Основной или реплика заняты — ошибка с nodeapi.ErrBusy, ничего не
+// записано.
+func pushToReplica(ctx context.Context, primary, replica *conn, o pushOpts) (pushResult, error) {
 	ps, ok := primary.syncer()
 	rs, ok2 := replica.syncer()
 	if !ok || !ok2 {
@@ -382,23 +453,32 @@ func pushToReplica(ctx context.Context, primary, replica *conn, full, force bool
 	if err != nil {
 		return pushResult{}, fmt.Errorf("манифест реплики: %w", err)
 	}
-	push, _ := diffManifests(pm, rm)
+	push, diffs := diffManifests(pm, rm)
+	if o.guard {
+		paths, err := identityDiffs(ctx, ps, rs, diffs)
+		if err != nil {
+			return pushResult{}, fmt.Errorf("проверка CA и ключей сервера: %w", err)
+		}
+		if len(paths) > 0 {
+			return pushResult{}, &identityError{Paths: paths}
+		}
+	}
 	var removals []string
 	for _, p := range nodeapi.SyncRemovals(pm, rm) {
 		if path.Base(p) != "setup" { // setup агент не удаляет
 			removals = append(removals, p)
 		}
 	}
-	if len(push) == 0 && len(removals) == 0 && !full {
+	if len(push) == 0 && len(removals) == 0 && !o.full {
 		return pushResult{}, nil
 	}
 	entries := push
-	if full {
+	if o.full {
 		entries = pm.Files
 	}
 	pr, pw := io.Pipe()
 	go func() { pw.CloseWithError(buildArchive(ctx, ps, entries, removals, pw)) }()
-	task, err := rs.SyncApply(ctx, pr, nodeapi.SyncApplyOpts{Force: force})
+	task, err := rs.SyncApply(ctx, pr, nodeapi.SyncApplyOpts{Force: o.force})
 	pr.CloseWithError(errors.New("приём завершён"))
 	if err != nil {
 		var ne *nodeapi.Error
@@ -417,7 +497,7 @@ func pushToReplica(ctx context.Context, primary, replica *conn, full, force bool
 	for _, p := range removals { // удалённый список маршрутизации — тоже doall
 		doall = doall || needsDoall(p)
 	}
-	if full {
+	if o.full {
 		doall = true
 	}
 	if doall {
@@ -429,7 +509,7 @@ func pushToReplica(ctx context.Context, primary, replica *conn, full, force bool
 			return pushResult{}, fmt.Errorf("применение списков на реплике: %w", err)
 		}
 	}
-	restart := full
+	restart := o.full
 	for _, e := range push {
 		restart = restart || path.Base(e.Path) == "setup"
 	}
@@ -443,22 +523,22 @@ func pushToReplica(ctx context.Context, primary, replica *conn, full, force bool
 		}
 	}
 	// Сверка после записи: набор обязан совпасть.
-	rm2, err := rs.SyncManifest(ctx)
+	rm2, err := manifestWhenFree(ctx, rs)
 	if err != nil {
 		return pushResult{}, fmt.Errorf("сверка после записи: %w", err)
 	}
 	if _, left := diffManifests(pm, rm2); len(left) > 0 {
-		return pushResult{}, fmt.Errorf("после записи остались расхождения: %s", left[0].Text())
+		return pushResult{}, fmt.Errorf("%w: %s", errLeftover, left[0].Text())
 	}
 	return pushResult{Files: len(entries), Removed: len(removals)}, nil
 }
 
 // syncGroup копирует изменения основного на все реплики; ошибки по репликам
 // собираются, остановки на первой нет. Группа блокируется на время работы.
-func (s *Server) syncGroup(ctx context.Context, g store.Group) error {
+func (s *Server) syncGroup(ctx context.Context, g store.Group) pushOutcome {
 	unlock := s.hub.groupMu.Lock(groupKey(g.ID))
 	defer unlock()
-	return s.syncGroupLocked(ctx, g)
+	return s.pushReplicas(ctx, g, nil)
 }
 
 func groupKey(id int64) string { return fmt.Sprintf("g%d", id) }
@@ -473,18 +553,57 @@ func (s *Server) syncAfterChange(c *conn, who string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 		defer cancel()
-		g, ok, err := s.Store.GroupByID(ctx, gid)
-		if err != nil || !ok {
-			return
-		}
-		if err := s.syncGroup(ctx, g); err != nil {
-			s.Log.Warn("копирование на реплики не удалось", "group", g.Name, "err", err)
-			s.markGroup(g.ID, "Копирование изменений на реплики не удалось: "+err.Error())
-			s.notifySyncMismatch(ctx, g, "Копирование изменений основного узла на реплики не удалось: "+err.Error())
-			return
-		}
-		s.markGroup(g.ID, "")
+		s.propagate(ctx, gid, 1)
 	}()
+}
+
+// propagate копирует изменения основного группы gid на реплики и разбирает
+// итог (afterChange). Узел занят (nodeapi.ErrBusy) — до tries попыток через
+// syncBusyPause; не дождались — молча: расхождение скопирует таймер групп.
+func (s *Server) propagate(ctx context.Context, gid int64, tries int) {
+	g, ok, err := s.Store.GroupByID(ctx, gid)
+	if err != nil || !ok {
+		return
+	}
+	for i := 1; ; i++ {
+		out := s.syncGroup(ctx, g)
+		if !out.busy || len(out.errs) > 0 || len(out.identity) > 0 || i >= tries {
+			s.afterChange(ctx, g, out)
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(syncBusyPause):
+		}
+	}
+}
+
+// afterChange — итог копирования по событию: другая личность реплики или
+// ошибка — отметка группы и уведомление; узел занят — молча (повторит
+// таймер); иначе отметка снимается.
+func (s *Server) afterChange(ctx context.Context, g store.Group, out pushOutcome) {
+	switch {
+	case len(out.identity) > 0:
+		s.identityStop(ctx, g, out.identity)
+	case len(out.errs) > 0:
+		err := errors.Join(out.errs...)
+		s.Log.Warn("копирование на реплики не удалось", "group", g.Name, "err", err)
+		s.markGroup(g.ID, "Копирование изменений на реплики не удалось: "+err.Error())
+		s.notifySyncMismatch(ctx, g, "Копирование изменений основного узла на реплики не удалось: "+err.Error())
+	case out.busy:
+		s.Log.Info("узел группы занят, копирование оставлено таймеру", "group", g.Name)
+	default:
+		s.markGroup(g.ID, "")
+	}
+}
+
+// identityStop: у реплик names другие CA или ключи сервера — копирование на
+// них остановлено. Отметка группы и одно уведомление на этот состав реплик.
+func (s *Server) identityStop(ctx context.Context, g store.Group, names []string) {
+	text := identityText(names)
+	s.markGroup(g.ID, text)
+	s.notifyOnce(ctx, bot.KindSyncMismatch, "sync_mismatch:"+groupKey(g.ID), "identity:"+strings.Join(names, ","), "Группа «"+g.Name+"»: "+text)
 }
 
 // groupPrimary: узел — основной группы (изменения на нём уходят на реплики).
@@ -496,19 +615,22 @@ func (s *Server) groupPrimary(c *conn) bool {
 // профилей) меняет файлы набора по ходу работы, поэтому копирование — после
 // её успешного завершения, а не после запуска: иначе на реплику уходит
 // промежуточный config/*.txt. Неуспешная задача не копируется — расхождение
-// найдёт таймер групп.
+// найдёт таймер групп. Узел после задачи ещё занят (служба, перезапущенная
+// задачей, гонит doall) — до syncBusyTries попыток через syncBusyPause, потом
+// копирование остаётся таймеру.
 func (s *Server) syncAfterTask(c *conn, id string) {
 	if !s.groupPrimary(c) || id == "" {
 		return
 	}
+	gid := c.rec.GroupID
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), taskWaitMax+time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), taskWaitMax+30*time.Minute)
 		defer cancel()
 		if err := waitTask(ctx, c.node, id); err != nil {
 			s.Log.Warn("задача на основном не завершилась успешно, копирование на реплики не запущено", "task", id, "err", err)
 			return
 		}
-		s.syncAfterChange(c, "задача")
+		s.propagate(ctx, gid, syncBusyTries)
 	}()
 }
 
@@ -569,6 +691,14 @@ type groupRuntime struct {
 	report *groupReport
 	mark   string
 	job    *groupJob
+	// backoff — реплики, у которых после записи по таймеру осталось
+	// расхождение: подпись отличий и время записи.
+	backoff map[int64]pushBackoff
+}
+
+type pushBackoff struct {
+	sig string
+	at  time.Time
 }
 
 func (s *Server) runtime(gid int64) *groupRuntime {
@@ -646,24 +776,59 @@ func (s *Server) keepReport(gid int64, rep groupReport) {
 	s.hub.mu.Unlock()
 }
 
-// fileDiffReplicas — реплики, у которых разошёлся набор файлов (доступные).
-func (g groupReport) fileDiffReplicas() map[int64]bool {
-	out := map[int64]bool{}
-	for _, r := range g.Replicas {
-		if r.Err == "" && len(r.Diffs) > 0 {
-			out[r.ID] = true
+// diffSig — подпись набора отличий одной реплики: пути, виды и отпечатки с
+// обеих сторон. Новое изменение на основном её меняет.
+func diffSig(diffs []fileDiff) string {
+	var b strings.Builder
+	for _, d := range diffs {
+		b.WriteString(d.Kind + "\x00" + d.Path + "\x00" + d.Want + "\x00" + d.Have + "\n")
+	}
+	sum := sha256.Sum256([]byte(b.String()))
+	return hex.EncodeToString(sum[:8])
+}
+
+// backedOff: на реплику r по таймеру уже писали, и осталось то же
+// расхождение — не писать снова, пока подпись отличий та же и не прошло
+// pushBackoffMax.
+func (s *Server) backedOff(gid int64, r replicaReport) bool {
+	rt := s.runtime(gid)
+	now := s.now()
+	s.hub.mu.Lock()
+	defer s.hub.mu.Unlock()
+	b, ok := rt.backoff[r.ID]
+	return ok && b.sig == diffSig(r.Diffs) && now.Sub(b.at) < pushBackoffMax
+}
+
+// noteBackoff запоминает реплики, на которые писали, а расхождение осталось;
+// совпавшие — забывает.
+func (s *Server) noteBackoff(gid int64, written map[int64]bool, after groupReport) {
+	rt := s.runtime(gid)
+	now := s.now()
+	s.hub.mu.Lock()
+	defer s.hub.mu.Unlock()
+	if rt.backoff == nil {
+		rt.backoff = map[int64]pushBackoff{}
+	}
+	for _, r := range after.Replicas {
+		switch {
+		case r.Err == "" && len(r.Diffs) == 0:
+			delete(rt.backoff, r.ID)
+		case written[r.ID] && r.Err == "":
+			rt.backoff[r.ID] = pushBackoff{sig: diffSig(r.Diffs), at: now}
 		}
 	}
-	return out
 }
 
 // watchGroup — проход таймера по группе. Сверка; разошёлся набор файлов —
 // копирование расхождений с основного на эти реплики тем же путём, что после
 // изменения в панели (без force: защита от удаления ключевых файлов и
-// массового удаления остаётся), и повторная сверка. Уведомление — только о
-// том, что осталось после копирования, или об отказе копирования; одна и та
-// же причина — одно уведомление. Группа занята операцией или копированием —
-// проход пропускается: итог проверит следующий.
+// массового удаления остаётся; реплика с другими CA или ключами сервера не
+// трогается), и повторная сверка. Уведомление — только о том, что осталось
+// после копирования, или об отказе копирования; одна и та же причина — одно
+// уведомление. Группа занята операцией или копированием, узел занят задачей
+// или скриптом AntiZapret — проход пропускается молча: итог проверит
+// следующий. Реплика, на которую уже писали, а расхождение осталось то же, —
+// не пишется снова до смены расхождения или pushBackoffMax.
 func (s *Server) watchGroup(ctx context.Context, g store.Group) error {
 	unlock, ok := s.hub.groupMu.TryLock(groupKey(g.ID))
 	if !ok {
@@ -674,28 +839,55 @@ func (s *Server) watchGroup(ctx context.Context, g store.Group) error {
 	if err != nil {
 		return err
 	}
-	only := rep.fileDiffReplicas()
+	if rep.busy() {
+		s.Log.Info("узел группы занят, проход таймера пропущен", "group", g.Name)
+		return nil
+	}
+	only := map[int64]bool{}
+	for _, r := range rep.Replicas {
+		if r.Err == "" && len(r.Diffs) > 0 && !s.backedOff(g.ID, r) {
+			only[r.ID] = true
+		}
+	}
 	if rep.PrimaryErr != "" || len(only) == 0 {
 		s.reportAndNotify(ctx, g, rep)
 		return nil
 	}
-	if serr := s.pushReplicas(ctx, g, only); serr != nil {
+	out := s.pushReplicas(ctx, g, only)
+	if out.busy && len(out.errs) == 0 && len(out.identity) == 0 {
+		s.Log.Info("узел группы занят, копирование по таймеру отложено", "group", g.Name)
+		return nil
+	}
+	again, err := s.verifyGroup(ctx, g)
+	if err != nil {
+		return err
+	}
+	s.noteBackoff(g.ID, out.written, again)
+	// Остаток после записи — не ошибка копирования: о нём скажет сверка
+	// (reportAndNotify), и та же картина на следующем проходе (запись
+	// отложена отступом) нового уведомления не даст.
+	var errs []error
+	for _, e := range out.errs {
+		if !errors.Is(e, errLeftover) {
+			errs = append(errs, e)
+		}
+	}
+	switch {
+	case len(out.identity) > 0:
+		s.keepReport(g.ID, again)
+		s.identityStop(ctx, g, out.identity)
+	case len(errs) > 0:
+		serr := errors.Join(errs...)
 		s.Log.Warn("копирование на реплики по таймеру не удалось", "group", g.Name, "err", serr)
 		s.markGroup(g.ID, "Копирование на реплики по таймеру не удалось: "+serr.Error())
-		if again, err := s.verifyGroup(ctx, g); err == nil {
-			rep = again
-		}
-		s.keepReport(g.ID, rep)
+		s.keepReport(g.ID, again)
 		key := "sync_mismatch:" + groupKey(g.ID)
 		s.notifyOnce(ctx, bot.KindSyncMismatch, key, "copy:"+serr.Error(),
 			"Группа «"+g.Name+"»: копирование изменений основного на реплики не удалось: "+serr.Error()+". Откройте раздел «Группы».")
-		return nil
+	default:
+		s.markGroup(g.ID, "")
+		s.reportAndNotify(ctx, g, again)
 	}
-	s.markGroup(g.ID, "")
-	if rep, err = s.verifyGroup(ctx, g); err != nil {
-		return err
-	}
-	s.reportAndNotify(ctx, g, rep)
 	return nil
 }
 

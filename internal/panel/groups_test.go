@@ -41,6 +41,10 @@ type syncFake struct {
 	removed  []string
 	applyErr error
 	azErr    error
+	// busy — столько ближайших запросов манифеста ответят 423 (узел занят).
+	busy int
+	// drop — путь, запись которого реплика молча не выполняет.
+	drop string
 }
 
 func newSyncFake(name string, log *[]string) *syncFake {
@@ -117,6 +121,10 @@ func (f *syncFake) get(path string) (string, bool) {
 func (f *syncFake) SyncManifest(context.Context) (nodeapi.SyncManifest, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.busy > 0 {
+		f.busy--
+		return nodeapi.SyncManifest{}, &nodeapi.Error{Status: 423, Message: "набор файлов сейчас меняется (запущен doall.sh AntiZapret)"}
+	}
 	var m nodeapi.SyncManifest
 	for p, b := range f.files {
 		sum := sha256.Sum256(b)
@@ -167,7 +175,9 @@ func (f *syncFake) SyncApply(_ context.Context, r io.Reader, _ nodeapi.SyncApply
 	}
 	f.mu.Lock()
 	for p, b := range files {
-		f.files[p] = b
+		if p != f.drop {
+			f.files[p] = b
+		}
 	}
 	for _, p := range rm {
 		delete(f.files, p)

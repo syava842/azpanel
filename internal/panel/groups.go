@@ -118,35 +118,83 @@ func (s *Server) startJob(g store.Group, title string, fn func(ctx context.Conte
 	return nil
 }
 
-// syncGroupLocked — копирование на реплики для вызова под замком группы.
+// syncGroupLocked — копирование на реплики для вызова под замком группы
+// (ручные операции группы: домен). Итог — одной ошибкой.
 func (s *Server) syncGroupLocked(ctx context.Context, g store.Group) error {
-	return s.pushReplicas(ctx, g, nil)
+	return s.pushReplicas(ctx, g, nil).err()
+}
+
+// pushOutcome — итог копирования расхождений на реплики группы.
+type pushOutcome struct {
+	// identity — реплики, у которых CA или ключи сервера не те, что у
+	// основного: на них ничего не записано.
+	identity []string
+	// busy — основной или реплика заняты (идёт задача или скрипт AntiZapret):
+	// копирование отложено до следующего прохода.
+	busy bool
+	// errs — прочие ошибки, с именем реплики.
+	errs []error
+	// written — реплики, на которые набор записан (для отступа таймера).
+	written map[int64]bool
+}
+
+// identityText — уведомление и отметка группы об остановленном копировании.
+func identityText(names []string) string {
+	return "У основного и реплики «" + strings.Join(names, "», «") + "» разные CA/ключи сервера — автокопирование остановлено; проверьте и выполните «Выровнять»."
+}
+
+// err сводит итог к одной ошибке (для ручных операций группы).
+func (o pushOutcome) err() error {
+	errs := o.errs
+	if len(o.identity) > 0 {
+		errs = append(errs, errors.New(identityText(o.identity)))
+	}
+	if o.busy && len(errs) == 0 {
+		return fmt.Errorf("копирование на реплики отложено: %w", nodeapi.ErrBusy)
+	}
+	return errors.Join(errs...)
 }
 
 // pushReplicas копирует расхождения основного на реплики группы (only —
-// только эти по id; nil — все), без force. Вызывается под замком группы.
-func (s *Server) pushReplicas(ctx context.Context, g store.Group, only map[int64]bool) error {
+// только эти по id; nil — все), без force и с проверкой личности сервера
+// (identityDiffs). Локальный узел (сервер панели) репликой не бывает и
+// пропускается. Вызывается под замком группы.
+func (s *Server) pushReplicas(ctx context.Context, g store.Group, only map[int64]bool) pushOutcome {
+	out := pushOutcome{written: map[int64]bool{}}
 	primary, replicas, err := s.groupMembers(ctx, g.ID)
 	if err != nil {
-		return err
+		out.errs = append(out.errs, err)
+		return out
 	}
 	if primary.err != nil {
-		return primary.err
+		out.errs = append(out.errs, primary.err)
+		return out
 	}
-	var errs []error
 	for _, m := range replicas {
-		if only != nil && !only[m.c.recID()] {
+		if m.id == store.LocalNode || (only != nil && !only[m.id]) {
 			continue
 		}
 		if m.err != nil {
-			errs = append(errs, fmt.Errorf("«%s»: %w", m.name, m.err))
+			out.errs = append(out.errs, fmt.Errorf("«%s»: %w", m.name, m.err))
 			continue
 		}
-		if _, err := pushToReplica(ctx, primary.c, m.c, false, false); err != nil {
-			errs = append(errs, fmt.Errorf("«%s»: %w", m.name, err))
+		_, err := pushToReplica(ctx, primary.c, m.c, pushOpts{guard: true})
+		if err == nil || errors.Is(err, errLeftover) {
+			out.written[m.id] = true
+		}
+		var ie *identityError
+		switch {
+		case err == nil:
+		case errors.As(err, &ie):
+			s.Log.Warn("реплика с другими CA/ключами сервера: автокопирование остановлено", "group", g.Name, "replica", m.name, "files", strings.Join(ie.Paths, ", "))
+			out.identity = append(out.identity, m.name)
+		case errors.Is(err, nodeapi.ErrBusy):
+			out.busy = true
+		default:
+			out.errs = append(out.errs, fmt.Errorf("«%s»: %w", m.name, err))
 		}
 	}
-	return errors.Join(errs...)
+	return out
 }
 
 // --- страницы ---
@@ -298,7 +346,7 @@ func (s *Server) groupView(w http.ResponseWriter, r *http.Request, status int, g
 		switch {
 		case n.GroupID == g.ID:
 			mine = append(mine, n)
-		case n.GroupID == 0 && n.Connected():
+		case n.GroupID == 0 && n.Connected() && n.ID != store.LocalNode: // сервер панели репликой не бывает
 			free = append(free, n)
 		}
 	}
@@ -385,6 +433,10 @@ func (s *Server) groupAddMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	nid, _ := strconv.ParseInt(r.PostForm.Get("node"), 10, 64)
+	if nid == store.LocalNode {
+		s.groupView(w, r, http.StatusBadRequest, g, "Сервер панели (локальный узел) не может быть репликой: копирование с основного заменило бы его CA и ключи. Реплика — отдельный сервер.")
+		return
+	}
 	rec, ok, _ := s.nodeRec(r.Context(), nid)
 	if !ok || rec.Kind != store.KindNode || !rec.Connected() || rec.GroupID != 0 {
 		s.groupView(w, r, http.StatusBadRequest, g, "Выберите подключённый узел вне групп.")
@@ -513,17 +565,17 @@ func (s *Server) alignReplica(ctx context.Context, j *groupJob, g store.Group, r
 		return err
 	}
 	if err := j.step("Замена набора файлов реплики набором основного", func() error {
-		_, err := pushToReplica(ctx, primary.c, rc, true, force)
+		_, err := pushToReplica(ctx, primary.c, rc, pushOpts{full: true, force: force})
 		return err
 	}); err != nil {
 		return err
 	}
 	return j.step("Сверка", func() error {
-		pm, err := primary.c.syncerMust().SyncManifest(ctx)
+		pm, err := manifestWhenFree(ctx, primary.c.syncerMust())
 		if err != nil {
 			return err
 		}
-		rm, err := rc.syncerMust().SyncManifest(ctx)
+		rm, err := manifestWhenFree(ctx, rc.syncerMust())
 		if err != nil {
 			return err
 		}

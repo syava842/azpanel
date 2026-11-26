@@ -208,6 +208,7 @@ func startAPI(ctx context.Context, exit func(), cfg config.Config, version strin
 		Set: NewSyncSet(n, paths.LimitsFile()), Role: &RoleStore{Path: filepath.Join(paths.Data(), "role.json")},
 		Self: paths.Binary(), ParamsDir: paramsDir, StageDir: filepath.Join(paths.Data(), "sync"),
 	}
+	api.ScriptRunning = func() string { return ProcScripts("/proc") }
 	api.Services = func(ctx context.Context) ([]sysinfo.Service, error) {
 		// systemctl может зависнуть (например, при перегруженном dbus).
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)

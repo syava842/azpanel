@@ -222,3 +222,236 @@ func TestKeyedMutexTryLock(t *testing.T) {
 		t.Fatalf("в карте остались записи: %d", len(k.m))
 	}
 }
+
+const (
+	pathCA     = "/etc/openvpn/easyrsa3/pki/ca.crt"
+	pathIndex  = "/etc/openvpn/easyrsa3/pki/index.txt"
+	pathWGConf = "/etc/wireguard/antizapret.conf"
+)
+
+func wgConf(privKey string, peers ...string) string {
+	s := "[Interface]\nPrivateKey = " + privKey + "\nAddress = 10.29.8.1/24\n"
+	for _, p := range peers {
+		s += "\n[Peer]\n# Client = " + p + "\nPublicKey = pub-" + p + "\n"
+	}
+	return s
+}
+
+// identityGroup — выровненная группа, у основного есть CA, index.txt и
+// конфиг WireGuard с пиром.
+func identityGroup(t *testing.T) (*groupTest, store.Group) {
+	t.Helper()
+	g := groupEnv(t)
+	g.enableNotify()
+	g.primary.set(pathCA, "CA основного")
+	g.primary.set(pathIndex, "V\tbob\n")
+	g.primary.set(pathWGConf, wgConf("KEYA=", "bob"))
+	grp := g.makeGroup(t)
+	g.call(t, gpath(grp, "/align/"+strconv.FormatInt(g.repID, 10)), nil)
+	if rep, err := g.srv.verifyGroup(context.Background(), grp); err != nil || !rep.InSync() {
+		t.Fatalf("после выравнивания: %+v %v", rep, err)
+	}
+	logMu.Lock()
+	g.log = nil
+	logMu.Unlock()
+	return g, grp
+}
+
+// checkIdentityStop: два прохода таймера — на реплику ничего не записано,
+// уведомление одно, группа помечена.
+func checkIdentityStop(t *testing.T, g *groupTest, grp store.Group, before int) {
+	t.Helper()
+	g.srv.verifyAllGroups(context.Background())
+	g.srv.verifyAllGroups(context.Background())
+	if logHas(&g.log, "r1:apply") {
+		t.Fatalf("на реплику с другой личностью писали: %v", g.log)
+	}
+	if v, _ := g.replica.get(pathLimits); v == `{"carol":1}` {
+		t.Fatal("limits.json скопирован на реплику с другой личностью")
+	}
+	kinds, texts := outboxTexts(t, g.testEnv)
+	if len(kinds) != before+1 || !strings.Contains(texts[len(texts)-1], "У основного и реплики «r1» разные CA/ключи сервера — автокопирование остановлено; проверьте и выполните «Выровнять»") {
+		t.Fatalf("уведомления: %v %v", kinds, texts)
+	}
+	if body := get(g.testEnv, g.c, gpath(grp, "")).Body.String(); !strings.Contains(body, "разные CA/ключи сервера") {
+		t.Fatalf("группа не помечена: %s", body)
+	}
+}
+
+// Реплика с другим pki/ca.crt — таймер ничего не пишет, одно уведомление;
+// копирование по событию — тоже стоп; «Выровнять» (ручное) копирует всё.
+func TestGroupWatchStopsOnDifferentCA(t *testing.T) {
+	g, grp := identityGroup(t)
+	before := outboxLen(t, g.testEnv)
+	g.replica.set(pathCA, "CA другого сервера")
+	g.primary.set(pathLimits, `{"carol":1}`)
+	checkIdentityStop(t, g, grp, before)
+
+	if err := g.srv.syncGroup(context.Background(), grp).err(); err == nil || !strings.Contains(err.Error(), "разные CA") {
+		t.Fatalf("копирование по событию: %v", err)
+	}
+	if logHas(&g.log, "r1:apply") {
+		t.Fatal("копирование по событию записало на реплику")
+	}
+
+	g.call(t, gpath(grp, "/align/"+strconv.FormatInt(g.repID, 10)), nil)
+	if v, _ := g.replica.get(pathCA); v != "CA основного" {
+		t.Fatalf("«Выровнять» не заменило CA: %q", v)
+	}
+}
+
+// Другой PrivateKey интерфейса WireGuard — то же самое.
+func TestGroupWatchStopsOnDifferentWGKey(t *testing.T) {
+	g, grp := identityGroup(t)
+	before := outboxLen(t, g.testEnv)
+	g.replica.set(pathWGConf, wgConf("KEYB=", "bob"))
+	g.primary.set(pathLimits, `{"carol":1}`)
+	checkIdentityStop(t, g, grp, before)
+}
+
+// Другие пиры WireGuard при том же ключе интерфейса и новый клиент в
+// index.txt — обычное расхождение: копируются.
+func TestGroupWatchCopiesWGPeers(t *testing.T) {
+	g, _ := identityGroup(t)
+	before := outboxLen(t, g.testEnv)
+	g.primary.set(pathWGConf, wgConf("KEYA=", "bob", "carol"))
+	g.primary.set(pathIndex, "V\tbob\nV\tcarol\n")
+	g.srv.verifyAllGroups(context.Background())
+	if v, _ := g.replica.get(pathWGConf); v != wgConf("KEYA=", "bob", "carol") {
+		t.Fatalf("пиры не скопированы: %q", v)
+	}
+	if v, _ := g.replica.get(pathIndex); v != "V\tbob\nV\tcarol\n" {
+		t.Fatalf("index.txt не скопирован: %q", v)
+	}
+	if n := outboxLen(t, g.testEnv); n != before {
+		t.Fatalf("уведомление при обычном копировании: %d → %d", before, n)
+	}
+}
+
+// Основной занят (задача или скрипт AntiZapret, агент отвечает 423) —
+// проход пропущен: ни записи, ни уведомления, ни отметки; следующий
+// проход копирует.
+func TestGroupWatchSkipsBusyPrimary(t *testing.T) {
+	g, grp := alignedGroup(t)
+	before := outboxLen(t, g.testEnv)
+	g.primary.set(pathLimits, `{"bob":9}`)
+	g.primary.mu.Lock()
+	g.primary.busy = 1
+	g.primary.mu.Unlock()
+	g.srv.verifyAllGroups(context.Background())
+	if logHas(&g.log, "r1:apply") {
+		t.Fatalf("копирование при занятом основном: %v", g.log)
+	}
+	if n := outboxLen(t, g.testEnv); n != before {
+		t.Fatalf("уведомление о занятом основном: %d → %d", before, n)
+	}
+	if body := get(g.testEnv, g.c, gpath(grp, "")).Body.String(); strings.Contains(body, "не удалось") {
+		t.Fatal("группа помечена ошибкой из-за занятого основного")
+	}
+	g.srv.verifyAllGroups(context.Background())
+	if v, _ := g.replica.get(pathLimits); v != `{"bob":9}` {
+		t.Fatalf("следующий проход не скопировал: %q", v)
+	}
+}
+
+// Копирование после задачи ждёт, пока основной освободится (служба после
+// задачи ещё гонит doall), и не шлёт уведомлений.
+func TestTaskSyncWaitsWhileBusy(t *testing.T) {
+	g, _ := alignedGroup(t)
+	old := syncBusyPause
+	syncBusyPause = time.Millisecond
+	t.Cleanup(func() { syncBusyPause = old })
+	before := outboxLen(t, g.testEnv)
+	g.primary.set(pathLimits, `{"bob":11}`)
+	g.primary.mu.Lock()
+	g.primary.busy = 2
+	g.primary.mu.Unlock()
+	if rec := post(g.testEnv, g.c, "/tasks/start", url.Values{"csrf": {g.csrf}, "kind": {"doall"}}); rec.Code != 303 {
+		t.Fatalf("tasks/start: %d %s", rec.Code, rec.Body)
+	}
+	waitFor(t, "копирование после занятого основного", func() bool { v, _ := g.replica.get(pathLimits); return v == `{"bob":11}` })
+	if n := outboxLen(t, g.testEnv); n != before {
+		t.Fatalf("уведомление: %d → %d", before, n)
+	}
+}
+
+// Локальный узел (сервер панели) репликой не добавляется и в форме не
+// предлагается.
+func TestLocalNodeNotAddedAsReplica(t *testing.T) {
+	g := groupEnv(t)
+	f := url.Values{"csrf": {g.csrf}, "name": {"remote"}, "primary": {strconv.FormatInt(g.repID, 10)}}
+	if rec := post(g.testEnv, g.c, "/groups", f); rec.Code != 303 {
+		t.Fatalf("создание группы: %d %s", rec.Code, rec.Body)
+	}
+	gs, _ := g.st.Groups(context.Background())
+	if len(gs) != 1 {
+		t.Fatalf("групп %d", len(gs))
+	}
+	page := get(g.testEnv, g.c, gpath(gs[0], "")).Body.String()
+	if strings.Contains(page, `<option value="1">`) {
+		t.Fatal("локальный узел предложен репликой")
+	}
+	f = url.Values{"csrf": {g.csrf}, "node": {strconv.FormatInt(store.LocalNode, 10)}}
+	rec := post(g.testEnv, g.c, gpath(gs[0], "/members"), f)
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "не может быть репликой") {
+		t.Fatalf("локальный узел репликой: %d %s", rec.Code, rec.Body)
+	}
+	if n, _, _ := g.st.NodeByID(context.Background(), store.LocalNode); n.GroupID != 0 {
+		t.Fatalf("локальный узел попал в группу: %+v", n)
+	}
+}
+
+// Отступ: после записи у реплики осталось то же расхождение — следующий
+// проход не пишет снова и не шлёт второе уведомление; пишет, когда
+// расхождение изменилось или прошло 6 часов.
+func TestGroupWatchBacksOffSameLeftover(t *testing.T) {
+	g, _ := alignedGroup(t)
+	var clock atomic.Int64
+	clock.Store(time.Now().Unix())
+	g.srv.Now = func() time.Time { return time.Unix(clock.Load(), 0) }
+	before := outboxLen(t, g.testEnv)
+	g.replica.mu.Lock()
+	g.replica.drop = pathLimits // реплика «не принимает» limits.json
+	g.replica.mu.Unlock()
+	g.primary.set(pathLimits, `{"bob":3}`)
+
+	applies := func() int {
+		logMu.Lock()
+		defer logMu.Unlock()
+		n := 0
+		for _, l := range g.log {
+			if l == "r1:apply" {
+				n++
+			}
+		}
+		return n
+	}
+	g.srv.verifyAllGroups(context.Background())
+	if applies() != 1 {
+		t.Fatalf("первый проход: записей %d", applies())
+	}
+	g.srv.verifyAllGroups(context.Background())
+	g.srv.verifyAllGroups(context.Background())
+	if applies() != 1 {
+		t.Fatalf("то же расхождение записано снова: %d", applies())
+	}
+	if n := outboxLen(t, g.testEnv); n != before+1 {
+		t.Fatalf("уведомлений %d, ждали одно", n-before)
+	}
+	// Расхождение изменилось — пишем.
+	g.primary.set(pathLimits, `{"bob":4}`)
+	g.srv.verifyAllGroups(context.Background())
+	if applies() != 2 {
+		t.Fatalf("новое расхождение не записано: %d", applies())
+	}
+	// До 6 часов — не пишем; прошло 6 часов — пишем снова.
+	g.srv.verifyAllGroups(context.Background())
+	if applies() != 2 {
+		t.Fatalf("до 6 часов записано снова: %d", applies())
+	}
+	clock.Add(int64(6*time.Hour/time.Second) + 1)
+	g.srv.verifyAllGroups(context.Background())
+	if applies() != 3 {
+		t.Fatalf("после 6 часов не записано: %d", applies())
+	}
+}

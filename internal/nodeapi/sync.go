@@ -44,7 +44,8 @@ type SyncRole struct {
 	Group string `json:"group,omitempty"`
 }
 
-// SyncManifest — набор файлов узла с отпечатками.
+// SyncManifest — набор файлов узла с отпечатками. Узел занят (задача, скрипт
+// AntiZapret; ответ 423) — ошибка, для которой errors.Is(err, ErrBusy).
 func (c *HTTPClient) SyncManifest(ctx context.Context) (SyncManifest, error) {
 	var v SyncManifest
 	return v, c.do(ctx, http.MethodGet, "/v1/sync/manifest", nil, &v)

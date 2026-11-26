@@ -331,7 +331,11 @@ func (s *Server) scoped(pattern string, h http.HandlerFunc) http.HandlerFunc {
 			if pick == nil {
 				pick = &recs[i] // первый узел — по умолчанию
 			}
-			if want != 0 && recs[i].ID == want {
+			// Запомненный выбор (cookie) узла, который ещё не подключён, —
+			// как будто выбора нет: иначе каждая страница отвечала бы 502,
+			// а сменить узел из шапки было бы нечем. Удалённый узел просто
+			// не найдётся. Явный ?node= такой подмены не получает.
+			if want != 0 && recs[i].ID == want && (fromQuery || recs[i].Connected()) {
 				pick = &recs[i]
 				break
 			}

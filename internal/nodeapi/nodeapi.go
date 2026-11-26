@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -148,6 +149,16 @@ type Error struct {
 
 func (e *Error) Error() string {
 	return fmt.Sprintf("агент ответил %d: %s", e.Status, e.Message)
+}
+
+// ErrBusy — узел занят: идёт задача агента или скрипт AntiZapret (doall.sh,
+// client.sh и т. п.), и его набор файлов сейчас в промежуточном состоянии.
+// Агент отвечает так кодом 423 на GET /v1/sync/manifest; повторить позже.
+var ErrBusy = errors.New("узел занят: идёт задача или скрипт AntiZapret")
+
+// Is: ответ 423 — это ErrBusy (errors.Is(err, nodeapi.ErrBusy)).
+func (e *Error) Is(target error) bool {
+	return target == ErrBusy && e.Status == http.StatusLocked
 }
 
 type HTTPClient struct {
