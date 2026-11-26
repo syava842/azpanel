@@ -283,6 +283,11 @@ func loopbackAddr(s string) bool {
 	return err == nil && ap.Addr().IsLoopback() && ap.Port() != 0
 }
 
+// NodeLocalAPIPort — порт петлевого API агента на узле с внешним TLS-портом
+// 9100 (мастер, режим node): 0.0.0.0:9100 и 127.0.0.1:9100 Linux вместе не
+// откроет (address already in use); 9101 — у прокси-агента.
+const NodeLocalAPIPort = 9102
+
 // tlsAddr — «IP:порт» для внешнего порта агента (не обязательно петлевой).
 func tlsAddr(s string) bool {
 	ap, err := netip.ParseAddrPort(s)

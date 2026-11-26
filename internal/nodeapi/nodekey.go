@@ -60,6 +60,25 @@ func ParseNodeKey(s string) (NodeKey, error) {
 // NodeKeyFileEnv — переменная окружения с путём к файлу ключа узла.
 const NodeKeyFileEnv = "AZPANEL_NODE_KEY_FILE"
 
+// NodeKeyEnv — переменная окружения с самим ключом узла. Окружение процесса,
+// в отличие от argv, в ps не видно (только root через /proc/<pid>/environ).
+const NodeKeyEnv = "AZPANEL_NODE_KEY"
+
+// SetupURL — установщик azpanel одной командой (scripts/setup.sh).
+const SetupURL = "https://raw.githubusercontent.com/syava842/azpanel/main/scripts/setup.sh"
+
+// NodeAgentPort — порт TLS-слушателя агента узла: на него по умолчанию
+// стучится панель.
+const NodeAgentPort = 9100
+
+// InstallCommand — команда установки узла по ключу, которую показывает
+// панель: тип установки и ключ — переменными окружения (не аргументами
+// azpanel), установщик — setup.sh, мастер — без вопросов. Ключ состоит из
+// «azn1.» и base64url, кавычки нужны только от случайностей вставки.
+func InstallCommand(key string) string {
+	return "AZPANEL_MODE=node " + NodeKeyEnv + "='" + key + "' bash -c \"$(curl -fsSL " + SetupURL + ")\" -- --non-interactive"
+}
+
 // maxNodeKeyInput — ключ узла короче 200 байт; больше читать незачем.
 const maxNodeKeyInput = 4096
 
@@ -67,7 +86,8 @@ const maxNodeKeyInput = 4096
 // ps и в истории shell). src — что передал оператор:
 //
 //	"-"          ключ со стандартного ввода (stdin);
-//	""           путь к файлу из переменной NodeKeyFileEnv (getenv);
+//	""           ключ из переменной NodeKeyEnv, иначе путь к файлу из
+//	             переменной NodeKeyFileEnv (getenv);
 //	путь         файл с ключом, права не шире 0600 (кроме Windows);
 //	"azn1.…"     отказ: сам ключ в аргументе командной строки не принимается.
 func ReadNodeKey(src string, getenv func(string) string, stdin io.Reader) (NodeKey, error) {
@@ -80,9 +100,12 @@ func ReadNodeKey(src string, getenv func(string) string, stdin io.Reader) (NodeK
 		}
 		return parseNodeKeyBytes(stdin, "стандартный ввод")
 	case src == "":
+		if v := getenv(NodeKeyEnv); v != "" {
+			return parseNodeKeyBytes(strings.NewReader(v), NodeKeyEnv)
+		}
 		src = getenv(NodeKeyFileEnv)
 		if src == "" {
-			return NodeKey{}, errors.New("ключ узла не указан: передайте «-» (stdin), путь к файлу или задайте " + NodeKeyFileEnv)
+			return NodeKey{}, errors.New("ключ узла не указан: задайте " + NodeKeyEnv + " или " + NodeKeyFileEnv + ", передайте «-» (stdin) или путь к файлу")
 		}
 	}
 	f, err := os.Open(src)

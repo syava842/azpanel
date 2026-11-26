@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/syava842/azpanel/internal/agenttls"
 	"github.com/syava842/azpanel/internal/antizapret"
 	"github.com/syava842/azpanel/internal/config"
 	"github.com/syava842/azpanel/internal/fsutil"
@@ -87,6 +88,10 @@ func RealHost(o Options) Host {
 		WaitPanel: waitHealthz,
 		CreateAdmin: func(string, string, bool) error {
 			return errors.New("создание администратора не подключено")
+		},
+		AgentCert: func() (string, error) {
+			_, fp, err := agenttls.LoadOrCreate(filepath.Join(paths.Etc(), "tls"))
+			return fp, err
 		},
 		OpenFirewall: func(port int) error {
 			rule := []string{"INPUT", "-p", "tcp", "--dport", strconv.Itoa(port), "-j", "ACCEPT"}

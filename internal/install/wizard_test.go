@@ -90,6 +90,7 @@ func newWizEnv(t *testing.T, input string, interactive bool, env map[string]stri
 			return nil
 		},
 		OpenFirewall: func(p int) error { mark("firewall"); return nil },
+		AgentCert:    func() (string, error) { mark("agent-cert"); return fakeAgentFP, nil },
 	}
 	e.w = &Wizard{
 		In: bufio.NewReader(strings.NewReader(input)), Out: e.out, Interactive: interactive,
@@ -191,7 +192,7 @@ func TestWizardOwnPasswordRules(t *testing.T) {
 }
 
 func TestWizardNotYetModes(t *testing.T) {
-	for _, mode := range []string{"node", "proxy", "panel"} {
+	for _, mode := range []string{"proxy", "panel"} {
 		e := newWizEnv(t, "", false, map[string]string{"AZPANEL_MODE": mode, "AZPANEL_ACCESS": "local"})
 		err := e.w.Run()
 		if !errors.Is(err, ErrNotYet) {
