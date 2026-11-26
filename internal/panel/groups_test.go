@@ -555,10 +555,11 @@ func TestOvpnRemoteListRewritesDownloadedProfile(t *testing.T) {
 	if rec.Code != 200 || rec.Body.String() != want {
 		t.Fatalf("%d %q", rec.Code, rec.Body)
 	}
-	// Флаг выключен: группа осталась в базе, но профиль отдаётся как есть.
+	// Группы не под флагом: и без panel.experimental профиль несёт адреса группы
+	// — с ним клиент переходит на запасной сервер.
 	g.srv.Experimental = false
 	rec = get(g.testEnv, g.c, "/clients/bob/profiles/openvpn/vpn/bob.ovpn")
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "remote old.example 1194 udp") {
+	if rec.Code != 200 || rec.Body.String() != want {
 		t.Fatalf("без experimental: %d %q", rec.Code, rec.Body)
 	}
 }

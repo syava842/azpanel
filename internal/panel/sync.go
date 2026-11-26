@@ -40,11 +40,19 @@ var (
 )
 
 var (
-	taskPoll       = 2 * time.Second // как часто спрашиваем задачу агента
-	taskWaitMax    = 30 * time.Minute
-	azPoll         = 10 * time.Second
-	azWaitMax      = 45 * time.Minute // обновление AntiZapret с перезагрузкой
-	groupVerifyDur = 10 * time.Minute
+	taskPoll    = 2 * time.Second // как часто спрашиваем задачу агента
+	taskWaitMax = 30 * time.Minute
+	azPoll      = 10 * time.Second
+	azWaitMax   = 45 * time.Minute // обновление AntiZapret с перезагрузкой
+	// groupVerifyDur — проход таймера групп: сверка и копирование расхождений
+	// на реплики. 5 минут — столько живёт на основном изменение, сделанное мимо
+	// страниц панели (client.sh, StatusOpenVPN, cron), прежде чем попасть на
+	// запасной сервер; проход без расхождений — только манифесты и списки
+	// клиентов, без записи и doall.
+	groupVerifyDur = 5 * time.Minute
+	// groupWatchMax — предел одного прохода по группе: копирование с doall
+	// бывает долгим.
+	groupWatchMax = 30 * time.Minute
 )
 
 func (c *conn) syncer() (SyncNode, bool) {
@@ -180,9 +188,17 @@ func (g groupReport) signature() string {
 	return hex.EncodeToString(sum[:8])
 }
 
+// clientNames — имена клиентов для сверки. Клиент без сертификата (NoCert, не
+// WireGuard) в наборе файлов не лежит: он виден по живому сеансу OpenVPN или
+// по limits.json, и на реплику копировать нечего. Такие в сверку не идут —
+// иначе группа вечно «расходится», а подпись уведомления меняется с составом
+// сеансов.
 func clientNames(cs []nodeapi.Client) map[string]bool {
 	out := map[string]bool{}
 	for _, c := range cs {
+		if c.NoCert && !c.WireGuard {
+			continue
+		}
 		out[c.Name] = true
 	}
 	return out
@@ -332,9 +348,15 @@ func buildArchive(ctx context.Context, src SyncNode, entries []nodeapi.SyncEntry
 	return tw.Close()
 }
 
-// needsDoall: изменились файлы, которые подхватывает только doall.
+// needsDoall: изменились файлы, которые подхватывает только doall, — setup и
+// списки config/*.txt (как SyncSet.needsApply агента). Профили, PKI, limits.json
+// и прочее действуют сразу после записи: перезапуск служб для них делает сама
+// задача sync-apply (unitsToRestart).
 func needsDoall(p string) bool {
-	return path.Base(p) == "setup" || strings.Contains(p, "/config/")
+	if path.Base(p) == "setup" {
+		return true
+	}
+	return path.Base(path.Dir(p)) == "config" && strings.HasSuffix(p, ".txt") && !strings.Contains(p, "/client/")
 }
 
 // pushResult — итог копирования на одну реплику.
@@ -392,6 +414,9 @@ func pushToReplica(ctx context.Context, primary, replica *conn, full, force bool
 	for _, e := range push {
 		doall = doall || needsDoall(e.Path)
 	}
+	for _, p := range removals { // удалённый список маршрутизации — тоже doall
+		doall = doall || needsDoall(p)
+	}
 	if full {
 		doall = true
 	}
@@ -440,9 +465,8 @@ func groupKey(id int64) string { return fmt.Sprintf("g%d", id) }
 
 // syncAfterChange: изменение на выбранном узле, если он основной группы с
 // репликами, уходит на реплики в фоне; ошибка помечает группу и шлёт sync_mismatch.
-// Без panel.experimental не идёт: группы скрыты вместе со страницами.
 func (s *Server) syncAfterChange(c *conn, who string) {
-	if c == nil || c.rec.Role != store.RolePrimary || c.rec.GroupID == 0 || s.Store == nil || !s.Experimental {
+	if !s.groupPrimary(c) {
 		return
 	}
 	gid := c.rec.GroupID
@@ -460,6 +484,31 @@ func (s *Server) syncAfterChange(c *conn, who string) {
 			return
 		}
 		s.markGroup(g.ID, "")
+	}()
+}
+
+// groupPrimary: узел — основной группы (изменения на нём уходят на реплики).
+func (s *Server) groupPrimary(c *conn) bool {
+	return c != nil && c.rec.Role == store.RolePrimary && c.rec.GroupID != 0 && s.Store != nil
+}
+
+// syncAfterTask: задача на основном (doall, перезапуск, пересоздание
+// профилей) меняет файлы набора по ходу работы, поэтому копирование — после
+// её успешного завершения, а не после запуска: иначе на реплику уходит
+// промежуточный config/*.txt. Неуспешная задача не копируется — расхождение
+// найдёт таймер групп.
+func (s *Server) syncAfterTask(c *conn, id string) {
+	if !s.groupPrimary(c) || id == "" {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), taskWaitMax+time.Minute)
+		defer cancel()
+		if err := waitTask(ctx, c.node, id); err != nil {
+			s.Log.Warn("задача на основном не завершилась успешно, копирование на реплики не запущено", "task", id, "err", err)
+			return
+		}
+		s.syncAfterChange(c, "задача")
 	}()
 }
 
@@ -484,6 +533,7 @@ func (w *statusRecorder) Write(b []byte) (int, error) {
 }
 
 // mutatingPattern: маршруты, после которых на узле меняются файлы набора.
+// POST /tasks/start здесь нет: задача копируется по завершении (syncAfterTask).
 var mutatingPattern = map[string]bool{
 	"POST /clients":                      true,
 	"POST /clients/{name}/renew":         true,
@@ -496,7 +546,6 @@ var mutatingPattern = map[string]bool{
 	"POST /routing/files/{name}/replace": true,
 	"POST /routing/files/{name}/restore": true,
 	"POST /settings/antizapret":          true,
-	"POST /tasks/start":                  true,
 }
 
 // propagating оборачивает изменяющий маршрут: успешный ответ запускает
@@ -574,17 +623,80 @@ func (s *Server) verifyAndNotify(ctx context.Context, g store.Group) (groupRepor
 	if err != nil {
 		return rep, err
 	}
-	rt := s.runtime(g.ID)
-	s.hub.mu.Lock()
-	rt.report = &rep
-	s.hub.mu.Unlock()
+	s.reportAndNotify(ctx, g, rep)
+	return rep, nil
+}
+
+// reportAndNotify запоминает итог сверки; расхождение — sync_mismatch (одно на
+// одну картину), порядок — метка уведомления снимается.
+func (s *Server) reportAndNotify(ctx context.Context, g store.Group, rep groupReport) {
+	s.keepReport(g.ID, rep)
 	key := "sync_mismatch:" + groupKey(g.ID)
 	if rep.InSync() {
 		_ = s.Store.ClearMeta(ctx, key)
-		return rep, nil
+		return
 	}
 	s.notifyOnce(ctx, bot.KindSyncMismatch, key, rep.signature(), "Группа «"+g.Name+"»: "+rep.summary())
-	return rep, nil
+}
+
+func (s *Server) keepReport(gid int64, rep groupReport) {
+	rt := s.runtime(gid)
+	s.hub.mu.Lock()
+	rt.report = &rep
+	s.hub.mu.Unlock()
+}
+
+// fileDiffReplicas — реплики, у которых разошёлся набор файлов (доступные).
+func (g groupReport) fileDiffReplicas() map[int64]bool {
+	out := map[int64]bool{}
+	for _, r := range g.Replicas {
+		if r.Err == "" && len(r.Diffs) > 0 {
+			out[r.ID] = true
+		}
+	}
+	return out
+}
+
+// watchGroup — проход таймера по группе. Сверка; разошёлся набор файлов —
+// копирование расхождений с основного на эти реплики тем же путём, что после
+// изменения в панели (без force: защита от удаления ключевых файлов и
+// массового удаления остаётся), и повторная сверка. Уведомление — только о
+// том, что осталось после копирования, или об отказе копирования; одна и та
+// же причина — одно уведомление. Группа занята операцией или копированием —
+// проход пропускается: итог проверит следующий.
+func (s *Server) watchGroup(ctx context.Context, g store.Group) error {
+	unlock, ok := s.hub.groupMu.TryLock(groupKey(g.ID))
+	if !ok {
+		return nil
+	}
+	defer unlock()
+	rep, err := s.verifyGroup(ctx, g)
+	if err != nil {
+		return err
+	}
+	only := rep.fileDiffReplicas()
+	if rep.PrimaryErr != "" || len(only) == 0 {
+		s.reportAndNotify(ctx, g, rep)
+		return nil
+	}
+	if serr := s.pushReplicas(ctx, g, only); serr != nil {
+		s.Log.Warn("копирование на реплики по таймеру не удалось", "group", g.Name, "err", serr)
+		s.markGroup(g.ID, "Копирование на реплики по таймеру не удалось: "+serr.Error())
+		if again, err := s.verifyGroup(ctx, g); err == nil {
+			rep = again
+		}
+		s.keepReport(g.ID, rep)
+		key := "sync_mismatch:" + groupKey(g.ID)
+		s.notifyOnce(ctx, bot.KindSyncMismatch, key, "copy:"+serr.Error(),
+			"Группа «"+g.Name+"»: копирование изменений основного на реплики не удалось: "+serr.Error()+". Откройте раздел «Группы».")
+		return nil
+	}
+	s.markGroup(g.ID, "")
+	if rep, err = s.verifyGroup(ctx, g); err != nil {
+		return err
+	}
+	s.reportAndNotify(ctx, g, rep)
+	return nil
 }
 
 // summary — одна фраза о расхождениях для уведомления.
@@ -604,8 +716,8 @@ func (g groupReport) summary() string {
 	return "реплики расходятся с основным: " + strings.Join(parts, "; ") + ". Откройте раздел «Группы» и нажмите «Выровнять»."
 }
 
-// RunGroupWatch сверяет группы раз в groupVerifyDur и шлёт sync_mismatch;
-// блокируется до отмены ctx.
+// RunGroupWatch раз в groupVerifyDur сверяет группы и копирует расхождения
+// на реплики (watchGroup); блокируется до отмены ctx.
 func (s *Server) RunGroupWatch(ctx context.Context) {
 	for {
 		s.verifyAllGroups(ctx)
@@ -629,8 +741,8 @@ func (s *Server) verifyAllGroups(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		vctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		if _, err := s.verifyAndNotify(vctx, g); err != nil {
+		vctx, cancel := context.WithTimeout(ctx, groupWatchMax)
+		if err := s.watchGroup(vctx, g); err != nil {
 			s.Log.Warn("сверка группы не удалась", "group", g.Name, "err", err)
 		}
 		cancel()

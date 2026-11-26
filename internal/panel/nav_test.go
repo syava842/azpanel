@@ -57,8 +57,11 @@ func TestNavRolesAndExperimental(t *testing.T) {
 		}
 		return false
 	}
-	if has(s.nav("/", true, false), "Узлы") || has(s.nav("/", true, false), "Обновление") {
-		t.Fatal("без experimental видны узлы или самообновление")
+	if has(s.nav("/", true, false), "Обновление") {
+		t.Fatal("без experimental видно самообновление")
+	}
+	if !has(s.nav("/", true, false), "Узлы") || !has(s.nav("/", true, false), "Группы") {
+		t.Fatal("без experimental нет узлов или групп — они не под флагом")
 	}
 	s.Experimental = true
 	if !has(s.nav("/", true, false), "Узлы") || !has(s.nav("/", true, false), "Группы") || !has(s.nav("/", true, false), "Обновление") {

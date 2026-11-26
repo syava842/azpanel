@@ -20,7 +20,32 @@ type keyLock struct {
 
 // Lock берёт замок ключа и возвращает функцию, которая его отпускает.
 func (k *keyedMutex) Lock(key string) (unlock func()) {
+	l := k.hold(key)
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		k.release(key, l)
+	}
+}
+
+// TryLock берёт замок ключа, только если он свободен; занят — ok = false,
+// без ожидания.
+func (k *keyedMutex) TryLock(key string) (unlock func(), ok bool) {
+	l := k.hold(key)
+	if !l.mu.TryLock() {
+		k.release(key, l)
+		return nil, false
+	}
+	return func() {
+		l.mu.Unlock()
+		k.release(key, l)
+	}, true
+}
+
+// hold — запись ключа с учётом нового держателя.
+func (k *keyedMutex) hold(key string) *keyLock {
 	k.mu.Lock()
+	defer k.mu.Unlock()
 	if k.m == nil {
 		k.m = map[string]*keyLock{}
 	}
@@ -30,15 +55,15 @@ func (k *keyedMutex) Lock(key string) (unlock func()) {
 		k.m[key] = l
 	}
 	l.n++
-	k.mu.Unlock()
-	l.mu.Lock()
-	return func() {
-		l.mu.Unlock()
-		k.mu.Lock()
-		if l.n--; l.n == 0 {
-			delete(k.m, key)
-		}
-		k.mu.Unlock()
+	return l
+}
+
+// release снимает держателя; последний убирает запись из карты.
+func (k *keyedMutex) release(key string, l *keyLock) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if l.n--; l.n == 0 {
+		delete(k.m, key)
 	}
 }
 

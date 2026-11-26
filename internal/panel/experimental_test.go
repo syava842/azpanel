@@ -25,7 +25,6 @@ func TestExperimentalOffRoutesNotRegistered(t *testing.T) {
 	e, _, _ := offEnv(t)
 	reg := e.srv.registered
 	for _, p := range []string{
-		"GET /nodes", "POST /nodes", "GET /nodes/{id}", "GET /groups", "POST /groups/{id}/update",
 		"GET /users/telegram", "POST /users/telegram/unban", "POST /users/{id}/telegram/unlink",
 		"POST /account/telegram", "POST /account/telegram/unlink", "POST /clients/{name}/kinds",
 		"GET /update", "POST /update", "POST /update/check",
@@ -37,6 +36,8 @@ func TestExperimentalOffRoutesNotRegistered(t *testing.T) {
 	for _, p := range []string{
 		"GET /antizapret/update", "POST /antizapret/update/restore", "GET /telemt", "GET /warp",
 		"GET /routing", "GET /users", "GET /users/{id}", "POST /tasks/start", "GET /account",
+		// узлы и группы нужны боевым панелям — не под флагом
+		"GET /nodes", "POST /nodes", "GET /nodes/{id}", "GET /groups", "POST /groups/{id}/update",
 	} {
 		if !slices.Contains(reg, p) {
 			t.Errorf("маршрут %q пропал", p)
@@ -46,14 +47,19 @@ func TestExperimentalOffRoutesNotRegistered(t *testing.T) {
 
 func TestExperimentalOffPagesAre404(t *testing.T) {
 	e, c, csrf := offEnv(t)
-	for _, p := range []string{"/nodes", "/nodes/new", "/groups", "/users/telegram", "/update"} {
+	for _, p := range []string{"/users/telegram", "/update"} {
 		if code := get(e, c, p).Code; code != http.StatusNotFound {
 			t.Errorf("GET %s: %d, ждали 404", p, code)
 		}
 	}
-	for _, p := range []string{"/account/telegram", "/update", "/update/check", "/groups"} {
+	for _, p := range []string{"/account/telegram", "/update", "/update/check"} {
 		if code := post(e, c, p, url.Values{"csrf": {csrf}}).Code; code != http.StatusNotFound && code != http.StatusMethodNotAllowed {
 			t.Errorf("POST %s: %d, ждали 404/405", p, code)
+		}
+	}
+	for _, p := range []string{"/nodes", "/nodes/new", "/groups"} {
+		if code := get(e, c, p).Code; code != http.StatusOK {
+			t.Errorf("GET %s: %d, ждали 200 — узлы и группы не под флагом", p, code)
 		}
 	}
 }
@@ -61,12 +67,12 @@ func TestExperimentalOffPagesAre404(t *testing.T) {
 func TestExperimentalOffMenuAndPages(t *testing.T) {
 	e, c, _ := offEnv(t)
 	body := get(e, c, "/").Body.String()
-	for _, hidden := range []string{`href="/nodes"`, `href="/groups"`, `href="/update"`} {
+	for _, hidden := range []string{`href="/update"`} {
 		if strings.Contains(body, hidden) {
 			t.Errorf("в меню осталось %s", hidden)
 		}
 	}
-	for _, shown := range []string{`href="/routing"`, `href="/antizapret/update"`, `href="/telemt"`, `href="/warp"`, `href="/proxy"`} {
+	for _, shown := range []string{`href="/routing"`, `href="/antizapret/update"`, `href="/telemt"`, `href="/warp"`, `href="/proxy"`, `href="/nodes"`, `href="/groups"`} {
 		if !strings.Contains(body, shown) {
 			t.Errorf("в меню нет %s", shown)
 		}

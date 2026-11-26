@@ -125,5 +125,6 @@ func (s *Server) taskStart(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Log.Info("действие", "user", s.user(r), "op", "task_start", "kind", kind, "task", t.ID)
 	s.audit(r, "task_start", kind, "", t.ID)
+	s.syncAfterTask(selected(r), t.ID)
 	s.redirect(w, r, taskHref(t.ID), http.StatusSeeOther)
 }

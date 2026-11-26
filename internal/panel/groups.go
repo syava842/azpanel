@@ -120,6 +120,12 @@ func (s *Server) startJob(g store.Group, title string, fn func(ctx context.Conte
 
 // syncGroupLocked — копирование на реплики для вызова под замком группы.
 func (s *Server) syncGroupLocked(ctx context.Context, g store.Group) error {
+	return s.pushReplicas(ctx, g, nil)
+}
+
+// pushReplicas копирует расхождения основного на реплики группы (only —
+// только эти по id; nil — все), без force. Вызывается под замком группы.
+func (s *Server) pushReplicas(ctx context.Context, g store.Group, only map[int64]bool) error {
 	primary, replicas, err := s.groupMembers(ctx, g.ID)
 	if err != nil {
 		return err
@@ -129,6 +135,9 @@ func (s *Server) syncGroupLocked(ctx context.Context, g store.Group) error {
 	}
 	var errs []error
 	for _, m := range replicas {
+		if only != nil && !only[m.c.recID()] {
+			continue
+		}
 		if m.err != nil {
 			errs = append(errs, fmt.Errorf("«%s»: %w", m.name, m.err))
 			continue
@@ -847,10 +856,8 @@ func rewriteOvpn(data []byte, remotes []string) []byte {
 }
 
 // groupRemotes — список remote группы узла.
-// Группы — отложенная возможность: без panel.experimental оставшаяся в базе
-// группа профили не переписывает (как и копирование на реплики).
 func (s *Server) groupRemotes(ctx context.Context, nodeID int64) []string {
-	if s.Store == nil || nodeID == 0 || !s.Experimental {
+	if s.Store == nil || nodeID == 0 {
 		return nil
 	}
 	rec, ok, err := s.nodeRec(ctx, nodeID)

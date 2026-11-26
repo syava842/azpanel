@@ -158,8 +158,9 @@ type Server struct {
 	// строка — бот не запущен, привязка в панели скрыта.
 	BotName func() string
 
-	// Experimental — panel.experimental: отложенные возможности (узлы, группы,
-	// Telegram-бот, самообновление azpanel) показаны и работают.
+	// Experimental — panel.experimental: отложенные возможности (Telegram-бот,
+	// виды профилей клиента, самообновление azpanel) показаны и работают. Узлы
+	// и группы синхронизации от флага не зависят.
 	Experimental bool
 
 	pages      map[string]*template.Template

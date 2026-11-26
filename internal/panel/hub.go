@@ -282,10 +282,12 @@ func nodeScopedPattern(pattern string) bool {
 		return false
 	}
 	switch {
-	case path == "/{$}", path == "/monitor", path == "/tasks":
+	case path == "/{$}", path == "/monitor":
 		return true
 	}
-	for _, p := range []string{"/clients", "/routing", "/settings/antizapret", "/tasks/", "/antizapret/", "/telemt", "/warp", "/update", "/proxy"} {
+	// "/tasks", а не "/tasks/": иначе префикс "/tasks//" не совпадал, и
+	// /tasks/start и /tasks/{id} шли на локальный узел мимо выбранного.
+	for _, p := range []string{"/clients", "/routing", "/settings/antizapret", "/tasks", "/antizapret/", "/telemt", "/warp", "/update", "/proxy"} {
 		if path == p || strings.HasPrefix(path, p+"/") {
 			return true
 		}
@@ -308,16 +310,6 @@ func (s *Server) scoped(pattern string, h http.HandlerFunc) http.HandlerFunc {
 		if err != nil {
 			s.errorPage(w, r, http.StatusInternalServerError, "узлы не прочитаны")
 			return
-		}
-		if !s.Experimental {
-			// Узлы отложены: работаем только с локальным, ?node= и cookie не действуют.
-			local := recs[:0:0]
-			for _, n := range recs {
-				if n.ID == store.LocalNode {
-					local = append(local, n)
-				}
-			}
-			recs = local
 		}
 		var want int64
 		fromQuery := false
@@ -390,7 +382,7 @@ type nodeSwitch struct {
 // реплики. Переключатель виден, когда узлов больше одного.
 func (s *Server) switchData(r *http.Request, d map[string]any) {
 	c := selected(r)
-	if c == nil || s.Store == nil || !s.Experimental {
+	if c == nil || s.Store == nil {
 		return
 	}
 	recs, err := s.nodeRecs(r.Context())
