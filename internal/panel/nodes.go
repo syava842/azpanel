@@ -276,7 +276,7 @@ func (s *Server) installCommand(ctx context.Context, rec store.NodeRec) (string,
 	if err != nil {
 		return "", false
 	}
-	return nodeapi.InstallCommand(key), true
+	return nodeapi.InstallCommand(key, s.Version), true
 }
 
 func (s *Server) nodePage(w http.ResponseWriter, r *http.Request) {

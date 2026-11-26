@@ -41,6 +41,9 @@ func (w *Wizard) runNode(a Answers) error {
 	if err := w.preflight(a); err != nil {
 		return err
 	}
+	if err := w.panelHere(); err != nil {
+		return err
+	}
 	key, err := w.nodeKey()
 	if err != nil {
 		return err
@@ -71,6 +74,24 @@ func (w *Wizard) runNode(a Answers) error {
 		return err
 	}
 	w.nodeReport(a, p)
+	return nil
+}
+
+// panelHere: на сервере уже стоит панель (install.env с MODE=panel+node или
+// юнит azpanel-panel) — отказ до изменений. Режим node переписал бы конфиг и
+// токен агента под чужую панель, и своя панель потеряла бы свой узел.
+func (w *Wizard) panelHere() error {
+	const msg = "На этом сервере стоит панель; узел для другой панели ставится на отдельный сервер. Ничего не изменено"
+	if data, err := w.Host.ReadFile(filepath.Join(paths.Etc(), "install.env")); err == nil {
+		if kv, err := ParseEnvFile(data); err == nil && kv[KeyMode] == ModePanelNode {
+			return errors.New(msg)
+		}
+	}
+	// ReadFile, а не Stat: юнит — обычный файл, а его чтение подменяется в
+	// тестах по имени.
+	if _, err := w.Host.ReadFile(filepath.Join(w.unitDirNote(), panelUnitName)); err == nil {
+		return errors.New(msg)
+	}
 	return nil
 }
 

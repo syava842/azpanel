@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/netip"
 	"os"
+	"regexp"
 	"runtime"
 	"strings"
 )
@@ -71,12 +72,25 @@ const SetupURL = "https://raw.githubusercontent.com/syava842/azpanel/main/script
 // стучится панель.
 const NodeAgentPort = 9100
 
+// reRelease — номер релиза, который понимает setup.sh (AZPANEL_VERSION).
+var reRelease = regexp.MustCompile(`^v?([0-9]+\.[0-9]+\.[0-9]+)$`)
+
 // InstallCommand — команда установки узла по ключу, которую показывает
 // панель: тип установки и ключ — переменными окружения (не аргументами
 // azpanel), установщик — setup.sh, мастер — без вопросов. Ключ состоит из
 // «azn1.» и base64url, кавычки нужны только от случайностей вставки.
-func InstallCommand(key string) string {
-	return "AZPANEL_MODE=node " + NodeKeyEnv + "='" + key + "' bash -c \"$(curl -fsSL " + SetupURL + ")\" -- --non-interactive"
+//
+// Команда начинается с пробела: bash с HISTCONTROL=ignorespace или
+// ignoreboth (умолчание Ubuntu и Debian) не пишет её в историю, и ключ не
+// остаётся в ~/.bash_history. panelVersion — версия панели: релиз (1.2.3)
+// подставляется в AZPANEL_VERSION, чтобы узел встал той же версии, что
+// панель; сборка не из релиза (-pre, +коммит, dev) — без неё, последний релиз.
+func InstallCommand(key, panelVersion string) string {
+	ver := ""
+	if m := reRelease.FindStringSubmatch(panelVersion); m != nil {
+		ver = "AZPANEL_VERSION=" + m[1] + " "
+	}
+	return " AZPANEL_MODE=node " + ver + NodeKeyEnv + "='" + key + "' bash -c \"$(curl -fsSL " + SetupURL + ")\" -- --non-interactive"
 }
 
 // maxNodeKeyInput — ключ узла короче 200 байт; больше читать незачем.

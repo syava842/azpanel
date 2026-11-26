@@ -24,6 +24,13 @@ aarch64 | arm64) arch=arm64 ;;
 *) die "архитектура $(uname -m) не поддерживается" ;;
 esac
 
+# Ключ узла (AZPANEL_NODE_KEY) нужен только мастеру azpanel install: из
+# окружения скрипта он убирается сразу, чтобы не дойти до установщика
+# AntiZapret, apt-get и прочих дочерних процессов (их окружение видно в
+# /proc/<pid>/environ и попадает в журналы), и возвращается перед запуском мастера.
+node_key=${AZPANEL_NODE_KEY:-}
+unset AZPANEL_NODE_KEY
+
 installed=""
 for b in /root/azpanel/bin/azpanel /opt/azpanel/bin/azpanel; do
 	if [ -x "$b" ]; then installed=$b; break; fi
@@ -117,4 +124,6 @@ echo "Подпись и сумма проверены."
 
 # Мастер копирует себя в /root/azpanel/bin и ставит ссылку /usr/local/bin/azpanel.
 # Вопросы читаются с терминала, даже если скрипт пришёл через трубу.
+[ -z "$node_key" ] || export AZPANEL_NODE_KEY="$node_key"
+unset node_key
 with_tty "$tmp/azpanel" install "$@"

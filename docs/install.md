@@ -90,9 +90,16 @@ AZPANEL_DOMAIN=vpn.example.com AZPANEL_ADMIN=admin AZPANEL_ADMIN_PASSWORD='па�
    root:
 
    ```bash
-   AZPANEL_MODE=node AZPANEL_NODE_KEY='azn1.…' \
+    AZPANEL_MODE=node AZPANEL_VERSION=1.2.3 AZPANEL_NODE_KEY='azn1.…' \
      bash -c "$(curl -fsSL https://raw.githubusercontent.com/syava842/azpanel/main/scripts/setup.sh)" -- --non-interactive
    ```
+
+   Команда начинается с пробела: bash с `HISTCONTROL=ignorespace` или
+   `ignoreboth` (умолчание Ubuntu и Debian) не запишет её с ключом в
+   историю — копируйте её целиком. `AZPANEL_VERSION` — версия панели (узел
+   ставится той же версии; у панели не из релиза переменной нет — ставится
+   последний релиз). Ключ setup.sh передаёт только мастеру azpanel:
+   установщик AntiZapret и apt-get его не получают.
 
    Если azpanel на сервере уже стоит: те же переменные перед
    `azpanel install --non-interactive`. Без ключа мастер с терминалом

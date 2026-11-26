@@ -152,3 +152,31 @@ func TestWizardNodePortBusy(t *testing.T) {
 		t.Fatalf("занятый порт: %v, изменения %v", err, e.mut)
 	}
 }
+
+// На сервере с панелью (install.env MODE=panel+node или юнит azpanel-panel)
+// узел для другой панели не ставится: отказ до любых изменений.
+func TestWizardNodeRefusesOnPanelServer(t *testing.T) {
+	_, s := testNodeKey(t)
+	for name, file := range map[string][2]string{
+		"install.env": {"install.env", "MODE=panel+node\n"},
+		"юнит":        {"azpanel-panel.service", "[Unit]\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newWizEnv(t, "", false, map[string]string{"AZPANEL_MODE": "node", nodeapi.NodeKeyEnv: s})
+			e.files[file[0]] = file[1]
+			err := e.w.Run()
+			if err == nil || !strings.Contains(err.Error(), "На этом сервере стоит панель; узел для другой панели ставится на отдельный сервер") {
+				t.Fatalf("ждали отказ: %v\n%s", err, e.out)
+			}
+			if len(e.mut) != 0 {
+				t.Fatalf("изменения до отказа: %v", e.mut)
+			}
+		})
+	}
+	// MODE=node от прошлой установки узла — не помеха (переустановка узла).
+	e := newWizEnv(t, "", false, map[string]string{"AZPANEL_MODE": "node", nodeapi.NodeKeyEnv: s})
+	e.files["install.env"] = "MODE=node\n"
+	if err := e.w.Run(); err != nil {
+		t.Fatalf("переустановка узла: %v\n%s", err, e.out)
+	}
+}
