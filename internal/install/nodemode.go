@@ -33,6 +33,9 @@ type nodePlan struct {
 	cfg   config.Config
 	steps []step
 	fp    string // отпечаток сертификата агента, известен после шага
+	// reused — ключ не задан, токен и адрес панели взяты у прежней установки
+	// узла (existingNodeKey).
+	reused bool
 }
 
 // runNode — мастер в режиме node: ключ, проверки, итог, подтверждение,
@@ -44,17 +47,28 @@ func (w *Wizard) runNode(a Answers) error {
 	if err := w.panelHere(); err != nil {
 		return err
 	}
-	key, err := w.nodeKey()
-	if err != nil {
-		return err
-	}
 	cfg, err := w.Host.LoadConfig()
 	if err != nil {
 		return fmt.Errorf("текущий конфиг: %w", err)
 	}
+	key, reused := w.existingNodeKey(cfg)
+	if !reused {
+		if key, err = w.nodeKey(); err != nil {
+			return err
+		}
+	}
+	listenTLS := cfg.Node.ListenTLS
 	cfg, err = nodeConfig(cfg, key.PanelIP)
 	if err != nil {
 		return err
+	}
+	if reused {
+		// Повторная установка подключённого узла: порт агента — прежний.
+		cfg.Node.ListenTLS = listenTLS
+		if err := cfg.Validate(); err != nil {
+			return fmt.Errorf("прежний конфиг узла неверен: %w. Ничего не изменено", err)
+		}
+		w.printf("  Ключ узла не задан: узел уже подключён — беру прежние токен (%s) и адрес панели %s.\n", paths.SecretsFile(), key.PanelIP)
 	}
 	if err := w.nodePortsFree(); err != nil {
 		return err
@@ -64,7 +78,7 @@ func (w *Wizard) runNode(a Answers) error {
 			a.Address = ip
 		}
 	}
-	p := &nodePlan{key: key, cfg: cfg}
+	p := &nodePlan{key: key, cfg: cfg, reused: reused}
 	w.nodeSteps(a, p)
 	w.nodeSummary(a, p)
 	if err := w.confirm(); err != nil {
@@ -75,6 +89,40 @@ func (w *Wizard) runNode(a Answers) error {
 	}
 	w.nodeReport(a, p)
 	return nil
+}
+
+// existingNodeKey — «ключ» прежней установки узла для повторного azpanel
+// install без ключа: install.env с MODE=node, NODE_TOKEN в secrets.env,
+// listen_tls и ровно один адрес в allow_ips конфига. Чего-то нет или задан
+// ключ (AZPANEL_NODE_KEY, AZPANEL_NODE_KEY_FILE — он заменяет прежний) —
+// false, и ключ спрашивается как при первой установке.
+func (w *Wizard) existingNodeKey(cfg config.Config) (nodeapi.NodeKey, bool) {
+	if w.Getenv(nodeapi.NodeKeyEnv) != "" || w.Getenv(nodeapi.NodeKeyFileEnv) != "" {
+		return nodeapi.NodeKey{}, false
+	}
+	data, err := w.Host.ReadFile(filepath.Join(paths.Etc(), "install.env"))
+	if err != nil {
+		return nodeapi.NodeKey{}, false
+	}
+	if kv, err := ParseEnvFile(data); err != nil || kv[KeyMode] != ModeNode {
+		return nodeapi.NodeKey{}, false
+	}
+	if cfg.Node.ListenTLS == "" || len(cfg.Node.AllowIPs) != 1 {
+		return nodeapi.NodeKey{}, false
+	}
+	data, err = w.Host.ReadFile(paths.SecretsFile())
+	if err != nil {
+		return nodeapi.NodeKey{}, false
+	}
+	sec, err := secrets.Parse(data)
+	if err != nil {
+		return nodeapi.NodeKey{}, false
+	}
+	k := nodeapi.NodeKey{PanelIP: cfg.Node.AllowIPs[0], Token: sec[secrets.NodeToken]}
+	if _, err := k.Encode(); err != nil { // проверка адреса и токена
+		return nodeapi.NodeKey{}, false
+	}
+	return k, true
 }
 
 // panelHere: на сервере уже стоит панель (install.env с MODE=panel+node или
@@ -214,7 +262,11 @@ func (w *Wizard) nodeSummary(a Answers, p *nodePlan) {
 	if n.APIListen != "" {
 		w.printf("  API агента на этом сервере: %s\n", n.APIListen)
 	}
-	w.printf("  токен API из ключа узла — в %s (прежний заменяется)\n", paths.SecretsFile())
+	if p.reused {
+		w.printf("  токен API — прежний, из %s\n", paths.SecretsFile())
+	} else {
+		w.printf("  токен API из ключа узла — в %s (прежний заменяется)\n", paths.SecretsFile())
+	}
 	w.printf("  сертификат агента — %s (создаётся, если его нет)\n", filepath.Join(paths.Etc(), "tls", agenttls.CertFile))
 	if a.Firewall {
 		w.printf("  правило iptables для TCP %d\n", nodeTLSPort)

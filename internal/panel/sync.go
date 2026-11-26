@@ -62,6 +62,10 @@ var (
 	// записи осталось то же расхождение (одно уведомление вместо записи и
 	// doall каждые 5 минут).
 	pushBackoffMax = 6 * time.Hour
+	// busyNoticeAfter — сколько узел группы может быть занят подряд
+	// (nodeapi.ErrBusy), прежде чем об этом придёт уведомление: открытое и
+	// брошенное меню client.sh держит автокопирование бесконечно.
+	busyNoticeAfter = time.Hour
 )
 
 func (c *conn) syncer() (SyncNode, bool) {
@@ -171,6 +175,21 @@ type groupReport struct {
 	PrimaryErr  string
 	PrimaryBusy bool // основной занят (nodeapi.ErrBusy)
 	Replicas    []replicaReport
+	// primaryName — имя основного, для текста о занятом узле.
+	primaryName string
+}
+
+// busyWho — какой узел занят: «Основной «X»» или «Реплика «Y»».
+func (g groupReport) busyWho() string {
+	if g.PrimaryBusy {
+		return "Основной «" + g.primaryName + "»"
+	}
+	for _, r := range g.Replicas {
+		if r.Busy {
+			return "Реплика «" + r.Name + "»"
+		}
+	}
+	return "Основной «" + g.primaryName + "»"
 }
 
 // busy: основной или реплика заняты задачей или скриптом AntiZapret — набор
@@ -251,7 +270,7 @@ func (s *Server) verifyGroup(ctx context.Context, g store.Group) (groupReport, e
 	if err != nil {
 		return groupReport{}, err
 	}
-	rep := groupReport{At: s.now(), Replicas: make([]replicaReport, len(replicas))}
+	rep := groupReport{At: s.now(), Replicas: make([]replicaReport, len(replicas)), primaryName: primary.name}
 	ps, ok := primary.syncerOrErr()
 	if !ok {
 		rep.PrimaryErr = "основной «" + primary.name + "»: " + primary.errText()
@@ -694,6 +713,11 @@ type groupRuntime struct {
 	// backoff — реплики, у которых после записи по таймеру осталось
 	// расхождение: подпись отличий и время записи.
 	backoff map[int64]pushBackoff
+	// busySince — с какого прохода таймера узел группы занят подряд;
+	// busyMark — текст отметки о долгой занятости (снимается первым свободным
+	// проходом).
+	busySince time.Time
+	busyMark  string
 }
 
 type pushBackoff struct {
@@ -819,6 +843,40 @@ func (s *Server) noteBackoff(gid int64, written map[int64]bool, after groupRepor
 	}
 }
 
+// noteBusy — проход таймера застал узел who занятым. Занят подряд дольше
+// busyNoticeAfter — отметка группы и одно уведомление.
+func (s *Server) noteBusy(ctx context.Context, g store.Group, who string) {
+	rt := s.runtime(g.ID)
+	now := s.now()
+	s.hub.mu.Lock()
+	if rt.busySince.IsZero() {
+		rt.busySince = now
+	}
+	long := now.Sub(rt.busySince) >= busyNoticeAfter
+	s.hub.mu.Unlock()
+	if !long {
+		return
+	}
+	text := who + " занят больше часа (идёт задача или открыт client.sh/doall) — автокопирование ждёт."
+	s.hub.mu.Lock()
+	rt.mark, rt.busyMark = text, text
+	s.hub.mu.Unlock()
+	s.notifyOnce(ctx, bot.KindSyncMismatch, "sync_mismatch:"+groupKey(g.ID), "busy:"+who, "Группа «"+g.Name+"»: "+text)
+}
+
+// noteFree — проход застал узлы свободными: счёт занятости сначала,
+// отметка о долгой занятости снимается.
+func (s *Server) noteFree(gid int64) {
+	rt := s.runtime(gid)
+	s.hub.mu.Lock()
+	defer s.hub.mu.Unlock()
+	rt.busySince = time.Time{}
+	if rt.busyMark != "" && rt.mark == rt.busyMark {
+		rt.mark = ""
+	}
+	rt.busyMark = ""
+}
+
 // watchGroup — проход таймера по группе. Сверка; разошёлся набор файлов —
 // копирование расхождений с основного на эти реплики тем же путём, что после
 // изменения в панели (без force: защита от удаления ключевых файлов и
@@ -841,8 +899,10 @@ func (s *Server) watchGroup(ctx context.Context, g store.Group) error {
 	}
 	if rep.busy() {
 		s.Log.Info("узел группы занят, проход таймера пропущен", "group", g.Name)
+		s.noteBusy(ctx, g, rep.busyWho())
 		return nil
 	}
+	s.noteFree(g.ID)
 	only := map[int64]bool{}
 	for _, r := range rep.Replicas {
 		if r.Err == "" && len(r.Diffs) > 0 && !s.backedOff(g.ID, r) {
@@ -856,6 +916,7 @@ func (s *Server) watchGroup(ctx context.Context, g store.Group) error {
 	out := s.pushReplicas(ctx, g, only)
 	if out.busy && len(out.errs) == 0 && len(out.identity) == 0 {
 		s.Log.Info("узел группы занят, копирование по таймеру отложено", "group", g.Name)
+		s.noteBusy(ctx, g, rep.busyWho())
 		return nil
 	}
 	again, err := s.verifyGroup(ctx, g)

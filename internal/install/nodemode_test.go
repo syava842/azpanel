@@ -180,3 +180,57 @@ func TestWizardNodeRefusesOnPanelServer(t *testing.T) {
 		t.Fatalf("переустановка узла: %v\n%s", err, e.out)
 	}
 }
+
+// Повторный azpanel install на подключённом узле без ключа: ключ не
+// спрашивается, токен и адрес панели — прежние, порт агента — из конфига.
+// С ключом — ключ заменяет прежнее; на неподключённом без ключа — ошибка.
+func TestWizardNodeReinstallWithoutKey(t *testing.T) {
+	oldTok := strings.Repeat("ab", 32)
+	connected := func(t *testing.T, env map[string]string) *wizEnv {
+		t.Helper()
+		e := newWizEnv(t, "", false, env)
+		e.files["install.env"] = "MODE=node\n"
+		e.files["secrets.env"] = secrets.NodeToken + "=" + oldTok + "\n"
+		e.cfg.Node.ListenTLS = "0.0.0.0:9443"
+		e.cfg.Node.AllowIPs = []string{"198.51.100.4"}
+		return e
+	}
+	e := connected(t, map[string]string{"AZPANEL_MODE": "node"})
+	if err := e.w.Run(); err != nil {
+		t.Fatalf("%v\n%s", err, e.out)
+	}
+	if e.secrets[secrets.NodeToken] != oldTok {
+		t.Fatalf("токен: %v", e.secrets)
+	}
+	n := e.written.Node
+	if n.ListenTLS != "0.0.0.0:9443" || !slices.Equal(n.AllowIPs, []string{"198.51.100.4"}) {
+		t.Fatalf("порт и белый список не прежние: %q %v", n.ListenTLS, n.AllowIPs)
+	}
+	if out := e.out.String(); strings.Contains(out, "Ключ узла (из панели") || strings.Contains(out, oldTok) {
+		t.Fatalf("спросил ключ или показал токен:\n%s", out)
+	}
+
+	// С ключом — ключ заменяет прежние токен и адрес панели.
+	k, s := testNodeKey(t)
+	e = connected(t, map[string]string{"AZPANEL_MODE": "node", nodeapi.NodeKeyEnv: s})
+	if err := e.w.Run(); err != nil {
+		t.Fatalf("%v\n%s", err, e.out)
+	}
+	if e.secrets[secrets.NodeToken] != k.Token || !slices.Equal(e.written.Node.AllowIPs, []string{k.PanelIP}) {
+		t.Fatalf("ключ не заменил прежнее: %v %v", e.secrets, e.written.Node.AllowIPs)
+	}
+
+	// Неподключённый (нет токена или белого списка) без ключа и без терминала — ошибка.
+	for name, spoil := range map[string]func(e *wizEnv){
+		"нет токена":     func(e *wizEnv) { delete(e.files, "secrets.env") },
+		"нет allow_ips":  func(e *wizEnv) { e.cfg.Node.AllowIPs = nil },
+		"не режим node":  func(e *wizEnv) { delete(e.files, "install.env") },
+		"нет listen_tls": func(e *wizEnv) { e.cfg.Node.ListenTLS = "" },
+	} {
+		e := connected(t, map[string]string{"AZPANEL_MODE": "node"})
+		spoil(e)
+		if err := e.w.Run(); err == nil || !strings.Contains(err.Error(), "нужен ключ узла") || len(e.mut) != 0 {
+			t.Fatalf("%s: %v, изменения %v", name, err, e.mut)
+		}
+	}
+}

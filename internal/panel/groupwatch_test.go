@@ -455,3 +455,57 @@ func TestGroupWatchBacksOffSameLeftover(t *testing.T) {
 		t.Fatalf("после 6 часов не записано: %d", applies())
 	}
 }
+
+// Основной занят подряд дольше часа — одно уведомление и отметка группы;
+// первый свободный проход отметку снимает.
+func TestGroupWatchNotifiesLongBusy(t *testing.T) {
+	g, grp := alignedGroup(t)
+	var clock atomic.Int64
+	clock.Store(time.Now().Unix())
+	g.srv.Now = func() time.Time { return time.Unix(clock.Load(), 0) }
+	before := outboxLen(t, g.testEnv)
+	g.primary.mu.Lock()
+	g.primary.busy = 1000
+	g.primary.mu.Unlock()
+	tick := func(after time.Duration) {
+		clock.Add(int64(after / time.Second))
+		g.srv.verifyAllGroups(context.Background())
+	}
+	tick(0)
+	tick(59 * time.Minute)
+	if n := outboxLen(t, g.testEnv); n != before {
+		t.Fatalf("уведомление раньше часа: %d", n-before)
+	}
+	tick(2 * time.Minute)
+	tick(10 * time.Minute)
+	kinds, texts := outboxTexts(t, g.testEnv)
+	if len(kinds) != before+1 || !strings.Contains(texts[len(texts)-1], "Основной «") || !strings.Contains(texts[len(texts)-1], "занят больше часа (идёт задача или открыт client.sh/doall) — автокопирование ждёт") {
+		t.Fatalf("уведомления: %v %v", kinds, texts)
+	}
+	// Страницу не открываем: подставное время старит сеанс входа.
+	mark := func() string {
+		rt := g.srv.runtime(grp.ID)
+		g.srv.hub.mu.Lock()
+		defer g.srv.hub.mu.Unlock()
+		return rt.mark
+	}
+	if !strings.Contains(mark(), "занят больше часа") {
+		t.Fatalf("группа не помечена: %q", mark())
+	}
+	g.primary.mu.Lock()
+	g.primary.busy = 0
+	g.primary.mu.Unlock()
+	tick(time.Minute)
+	if mark() != "" {
+		t.Fatalf("отметка не снята свободным проходом: %q", mark())
+	}
+	// Счёт занятости начался заново: короткая занятость уведомления не даёт.
+	g.primary.mu.Lock()
+	g.primary.busy = 1000
+	g.primary.mu.Unlock()
+	tick(time.Minute)
+	tick(30 * time.Minute)
+	if n := outboxLen(t, g.testEnv); n != before+1 {
+		t.Fatalf("лишнее уведомление после короткой занятости: %d", n-before)
+	}
+}
