@@ -20,6 +20,9 @@ func TestIdentityPath(t *testing.T) {
 		"/etc/openvpn/easyrsa3/pki/crl.pem":                       false,
 		"/etc/openvpn/easyrsa3/pki/issued/bob.crt":                false,
 		"/etc/openvpn/easyrsa3/pki/private/bob.key":               false,
+		"/etc/openvpn/easyrsa3/pki/issued/homeserver.crt":         false,
+		"/etc/openvpn/easyrsa3/pki/private/homeserver.key":        false,
+		"/etc/openvpn/easyrsa3/pki/reqs/server2.req":              false,
 		"/etc/wireguard/antizapret.conf":                          false, // сверяется по ключу интерфейса
 		"/root/antizapret/client/openvpn/vpn/server-key":          false,
 		"/root/antizapret/config/include-hosts.txt":               false,

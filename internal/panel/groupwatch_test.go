@@ -509,3 +509,35 @@ func TestGroupWatchNotifiesLongBusy(t *testing.T) {
 		t.Fatalf("лишнее уведомление после короткой занятости: %d", n-before)
 	}
 }
+
+// Клиент со «server» в имени — не сертификат сервера: его перевыпуск и
+// удаление копируются, автокопирование не останавливается.
+func TestGroupWatchCopiesClientNamedServer(t *testing.T) {
+	const crt = "/etc/openvpn/easyrsa3/pki/issued/homeserver.crt"
+	const key = "/etc/openvpn/easyrsa3/pki/private/homeserver.key"
+	g := groupEnv(t)
+	g.enableNotify()
+	g.primary.set(pathCA, "CA основного")
+	g.primary.set(crt, "сертификат 1")
+	g.primary.set(key, "ключ 1")
+	grp := g.makeGroup(t)
+	g.call(t, gpath(grp, "/align/"+strconv.FormatInt(g.repID, 10)), nil)
+	before := outboxLen(t, g.testEnv)
+
+	g.primary.set(crt, "сертификат 2") // перевыпуск
+	g.srv.verifyAllGroups(context.Background())
+	if v, _ := g.replica.get(crt); v != "сертификат 2" {
+		t.Fatalf("перевыпуск не скопирован: %q", v)
+	}
+	g.primary.mu.Lock() // удаление клиента
+	delete(g.primary.files, crt)
+	delete(g.primary.files, key)
+	g.primary.mu.Unlock()
+	g.srv.verifyAllGroups(context.Background())
+	if _, ok := g.replica.get(crt); ok {
+		t.Fatal("удаление клиента homeserver не скопировано")
+	}
+	if n := outboxLen(t, g.testEnv); n != before {
+		t.Fatalf("уведомление: %d → %d", before, n)
+	}
+}
