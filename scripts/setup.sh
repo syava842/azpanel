@@ -11,7 +11,7 @@ set -euo pipefail
 REPO=syava842/azpanel
 # Открытый ключ релизов (тот же, что internal/update/pubkey.go).
 PUBKEY='-----BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEAKVItcPAHlFlFBhxN8LKupG+lRQD0wyGn8seVvaMpYdk=
+MCowBQYDK2VwAyEAh3Y3KfWx+YBxlk5ZNEpV0lM5eiwH0BlbSlvwp1syeNE=
 -----END PUBLIC KEY-----'
 
 die() { echo "azpanel setup: $*" >&2; exit 1; }

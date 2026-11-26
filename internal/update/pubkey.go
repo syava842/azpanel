@@ -10,7 +10,7 @@ import (
 // PEM вшит в scripts/setup.sh (сверяет TestSetupScriptKeyMatches).
 // scripts/release.sh сверяет его с закрытым ключом и отказывается
 // публиковать релиз с пустым или чужим.
-const releasePublicKeyHex = "29522d70f007945945061c4df0b2aea46fa54500f4c321a7f2c795bda32961d9"
+const releasePublicKeyHex = "87763729f5b1f98071964e59344a55d253397a2c07d0195b4a5bf0a75b3278d1"
 
 // ReleasePublicKey - открытый ключ релизов, вшитый в бинарник. С пустым или
 // неверной длины ключом Verify всегда отказывает.
