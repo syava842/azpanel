@@ -82,7 +82,7 @@ func TestNodeAddFlowKeyProbeConfirmConnect(t *testing.T) {
 	}
 	page := get(e, c, rec.Header().Get("Location"))
 	body := page.Body.String()
-	if !strings.Contains(body, "azpanel install --non-interactive AZPANEL_MODE=node AZPANEL_NODE_KEY=azn1.") {
+	if !strings.Contains(body, "AZPANEL_MODE=node AZPANEL_NODE_KEY=&#39;azn1.") || !strings.Contains(body, "scripts/setup.sh)&#34; -- --non-interactive") {
 		t.Fatalf("нет команды установки: %s", body)
 	}
 	nodes, _ := e.st.Nodes(context.Background())

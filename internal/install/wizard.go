@@ -60,6 +60,9 @@ type Host struct {
 	WaitPanel       func(url string) error
 	CreateAdmin     func(login, password string, mustChange bool) error
 	OpenFirewall    func(port int) error
+	// AgentCert создаёт сертификат TLS-порта агента (etc/tls/node.crt), если
+	// его нет, и возвращает отпечаток SHA-256 (hex).
+	AgentCert func() (string, error)
 }
 
 // Wizard — мастер установки (azpanel install).
@@ -125,6 +128,9 @@ func (w *Wizard) Run() error {
 	if !w.Experimental {
 		a.Telegram, a.TelegramToken, a.TelegramChat = false, "", 0 // бот отложен: ответы о нём не берутся
 	}
+	if a.Mode == ModeNode {
+		return w.runNode(a)
+	}
 	if a.Mode != ModePanelNode {
 		return fmt.Errorf("%w: «%s». Ничего не изменено", ErrNotYet, modeTitle(a.Mode))
 	}
@@ -183,17 +189,35 @@ func (w *Wizard) Run() error {
 		return err
 	}
 	w.summary(a, p)
-	if w.Interactive && !w.AssumeYes {
-		ok, err := w.yesno("Применить? Сейчас на сервере ничего не изменено", false)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return errors.New("установка отменена, ничего не изменено")
-		}
+	if err := w.confirm(); err != nil {
+		return err
 	}
+	if err := w.apply(p.steps); err != nil {
+		return err
+	}
+	w.report(a, p)
+	return nil
+}
+
+// confirm — подтверждение перед изменениями (кроме --yes и без вопросов).
+func (w *Wizard) confirm() error {
+	if !w.Interactive || w.AssumeYes {
+		return nil
+	}
+	ok, err := w.yesno("Применить? Сейчас на сервере ничего не изменено", false)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errors.New("установка отменена, ничего не изменено")
+	}
+	return nil
+}
+
+// apply выполняет шаги по порядку; на сбое печатает, что уже сделано.
+func (w *Wizard) apply(steps []step) error {
 	var done []string
-	for _, s := range p.steps {
+	for _, s := range steps {
 		w.printf("→ %s\n", s.name)
 		if err := s.do(); err != nil {
 			w.printf("\nУстановка прервана на шаге «%s». Уже выполнено: %s.\n", s.name, doneList(done))
@@ -202,7 +226,6 @@ func (w *Wizard) Run() error {
 		}
 		done = append(done, s.name)
 	}
-	w.report(a, p)
 	return nil
 }
 

@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	nodeDefaultPort  = 9100
+	nodeDefaultPort  = nodeapi.NodeAgentPort
 	proxyDefaultPort = 9101
 	metaKeyIP        = "node_key_ip:" // + id: адрес панели из ключа узла
 )
@@ -276,7 +276,7 @@ func (s *Server) installCommand(ctx context.Context, rec store.NodeRec) (string,
 	if err != nil {
 		return "", false
 	}
-	return "azpanel install --non-interactive AZPANEL_MODE=node AZPANEL_NODE_KEY=" + key, true
+	return nodeapi.InstallCommand(key), true
 }
 
 func (s *Server) nodePage(w http.ResponseWriter, r *http.Request) {
