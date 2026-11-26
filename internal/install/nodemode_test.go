@@ -234,3 +234,30 @@ func TestWizardNodeReinstallWithoutKey(t *testing.T) {
 		}
 	}
 }
+
+// Переустановка с прежним listen_tls не на 9100: файрвол и итоговые строки —
+// с фактическим портом.
+func TestWizardNodeReinstallUsesActualPort(t *testing.T) {
+	e := newWizEnv(t, "", false, map[string]string{"AZPANEL_MODE": "node", "AZPANEL_FIREWALL": "y"})
+	e.files["install.env"] = "MODE=node\n"
+	e.files["secrets.env"] = secrets.NodeToken + "=" + strings.Repeat("ab", 32) + "\n"
+	e.cfg.Node.ListenTLS = "0.0.0.0:9443"
+	e.cfg.Node.AllowIPs = []string{"198.51.100.4"}
+	opened := 0
+	e.w.Host.OpenFirewall = func(p int) error { opened = p; return nil }
+	if err := e.w.Run(); err != nil {
+		t.Fatalf("%v\n%s", err, e.out)
+	}
+	if opened != 9443 {
+		t.Fatalf("файрвол открыт для %d", opened)
+	}
+	out := e.out.String()
+	for _, want := range []string{"правило iptables для TCP 9443", "Откройте TCP 9443 для 198.51.100.4", "203.0.113.7:9443"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("в выводе нет %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "9100") {
+		t.Fatalf("в выводе порт по умолчанию:\n%s", out)
+	}
+}

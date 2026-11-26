@@ -36,6 +36,19 @@ type nodePlan struct {
 	// reused — ключ не задан, токен и адрес панели взяты у прежней установки
 	// узла (existingNodeKey).
 	reused bool
+	// port — фактический TLS-порт агента: при переустановке — прежний из
+	// listen_tls, иначе NodeAgentPort.
+	port int
+}
+
+// tlsPort — порт из listen_tls; не разобрать — порт по умолчанию.
+func tlsPort(listen string) int {
+	if _, ps, err := net.SplitHostPort(listen); err == nil {
+		if n, err := strconv.Atoi(ps); err == nil && n > 0 {
+			return n
+		}
+	}
+	return nodeTLSPort
 }
 
 // runNode — мастер в режиме node: ключ, проверки, итог, подтверждение,
@@ -78,7 +91,7 @@ func (w *Wizard) runNode(a Answers) error {
 			a.Address = ip
 		}
 	}
-	p := &nodePlan{key: key, cfg: cfg, reused: reused}
+	p := &nodePlan{key: key, cfg: cfg, reused: reused, port: tlsPort(cfg.Node.ListenTLS)}
 	w.nodeSteps(a, p)
 	w.nodeSummary(a, p)
 	if err := w.confirm(); err != nil {
@@ -248,7 +261,7 @@ func (w *Wizard) nodeSteps(a Answers, p *nodePlan) {
 		return nil
 	})
 	if a.Firewall {
-		add("файрвол", func() error { return h.OpenFirewall(nodeTLSPort) })
+		add("файрвол", func() error { return h.OpenFirewall(p.port) })
 	}
 }
 
@@ -269,7 +282,7 @@ func (w *Wizard) nodeSummary(a Answers, p *nodePlan) {
 	}
 	w.printf("  сертификат агента — %s (создаётся, если его нет)\n", filepath.Join(paths.Etc(), "tls", agenttls.CertFile))
 	if a.Firewall {
-		w.printf("  правило iptables для TCP %d\n", nodeTLSPort)
+		w.printf("  правило iptables для TCP %d\n", p.port)
 	}
 	w.printf("\n")
 }
@@ -281,7 +294,7 @@ func (w *Wizard) nodeReport(a Answers, p *nodePlan) {
 	if a.Address != "" {
 		addr = bracketHost(a.Address)
 	}
-	w.printf("  В панели: Узлы → этот узел → адрес %s:%d → «Подключить», сверьте отпечаток.\n", addr, nodeTLSPort)
-	w.printf("Откройте TCP %d для %s: по нему панель обращается к агенту.\n", nodeTLSPort, p.key.PanelIP)
+	w.printf("  В панели: Узлы → этот узел → адрес %s:%d → «Подключить», сверьте отпечаток.\n", addr, p.port)
+	w.printf("Откройте TCP %d для %s: по нему панель обращается к агенту.\n", p.port, p.key.PanelIP)
 	w.printf("Проверка установки: azpanel doctor\n")
 }
