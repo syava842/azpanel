@@ -43,7 +43,8 @@ func azSetupMap() map[string]string {
 		"SSH_PROTECTION": "y", "ATTACK_PROTECTION": "y", "SCAN_PROTECTION": "y",
 		"TORRENT_GUARD": "y", "RESTRICT_FORWARD": "y", "CLIENT_ISOLATION": "y",
 		"OPENVPN_HOST": "vpn.example.com", "WIREGUARD_HOST": "",
-		"ROUTE_ALL": "n", "CLOUDFLARE_INCLUDE": "y", "TELEGRAM_INCLUDE": "y", "WHATSAPP_INCLUDE": "y",
+		"DEFAULT_IP": "203.0.113.5",
+		"ROUTE_ALL":  "n", "CLOUDFLARE_INCLUDE": "y", "TELEGRAM_INCLUDE": "y", "WHATSAPP_INCLUDE": "y",
 		"ANTIZAPRET_WARP_PRIVATE_KEY": "SECRETKEY", "RECONNECT_WARP": "y", "TXQUEUELEN": "5000",
 	}
 }
@@ -470,7 +471,7 @@ func TestAZStartBuildsTaskWithEnvAndStdin(t *testing.T) {
 		}
 	}
 	in, err := os.ReadFile(filepath.Join(e.data, "azupdate", "stdin"))
-	if err != nil || string(in) != "1380\n\nvpn.example.com\n\n" {
+	if err != nil || string(in) != "1380\n\nvpn.example.com\n\n203.0.113.5\n\n\n" {
 		t.Fatalf("ввод setup.sh: %q %v", in, err)
 	}
 	setupSh, _ := os.ReadFile(filepath.Join(e.data, "azupdate", "setup.sh"))

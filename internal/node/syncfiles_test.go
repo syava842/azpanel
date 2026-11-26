@@ -562,3 +562,34 @@ func TestIsWarpAccountKey(t *testing.T) {
 		}
 	}
 }
+
+// Ключи, привязанные к самому серверу (адрес и интерфейс входа/выхода), на
+// реплику не переносятся: остаются значения реплики, а хеш setup их не видит.
+func TestMergeSetupKeepsServerBoundKeys(t *testing.T) {
+	incoming := "ANTIZAPRET_WARP=3\nOPENVPN_HOST=vpn.example\nDEFAULT_INTERFACE=eth0\nDEFAULT_IP=10.0.0.1\n" +
+		"ANTIZAPRET_OUT_INTERFACE=eth1\nANTIZAPRET_OUT_IP=10.0.0.2\nVPN_OUT_INTERFACE=eth2\nVPN_OUT_IP=10.0.0.3\n"
+	local := "ANTIZAPRET_WARP=n\nDEFAULT_INTERFACE=ens3\nDEFAULT_IP=192.0.2.9\nVPN_OUT_IP=192.0.2.10\n"
+	got := string(MergeSetup([]byte(incoming), []byte(local)))
+	for _, want := range []string{"ANTIZAPRET_WARP=3", "OPENVPN_HOST=vpn.example", "DEFAULT_INTERFACE=ens3", "DEFAULT_IP=192.0.2.9", "VPN_OUT_IP=192.0.2.10"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("в setup нет %q:\n%s", want, got)
+		}
+	}
+	for _, bad := range []string{"eth0", "eth1", "eth2", "10.0.0.", "ANTIZAPRET_WARP=n"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("в setup остался %q:\n%s", bad, got)
+		}
+	}
+	if strings.Contains(string(StripWarpAccount([]byte(incoming))), "OUT_IP") {
+		t.Error("StripWarpAccount оставил ключ сервера")
+	}
+	for k, want := range map[string]bool{
+		"DEFAULT_IP": true, "DEFAULT_INTERFACE": true, "ANTIZAPRET_OUT_IP": true,
+		"ANTIZAPRET_OUT_INTERFACE": true, "VPN_OUT_IP": true, "VPN_OUT_INTERFACE": true,
+		"OPENVPN_HOST": false, "WIREGUARD_HOST": false, "CLIENT_IP": false,
+	} {
+		if IsServerBoundSetupKey(k) != want {
+			t.Errorf("%s: %v, ждали %v", k, !want, want)
+		}
+	}
+}

@@ -82,7 +82,7 @@ var setupKeys = map[string]SetupKey{
 	"CLEAR_DNS_CACHE": yn("Сбрасывать кэш DNS после обновления списков", onlyDo),
 	// up.sh:273 — адрес WARP берётся при регистрации аккаунта (ключи WARP
 	// пусты), поэтому меняется только переустановкой; пусто — по умолчанию.
-	"WARP_ENDPOINT": fixed("Адрес Cloudflare WARP (хост:порт)"),
+	"WARP_ENDPOINT": fixed("Адрес Cloudflare WARP (адрес:порт)"),
 
 	// update.sh:140-153 и parse.sh:82-99 — списки и правила блокировки рекламы.
 	"ANTIZAPRET_ADBLOCK": yn("Блокировка рекламы в режиме AntiZapret", onlyDo),
@@ -129,6 +129,12 @@ var setupKeys = map[string]SetupKey{
 	// client.sh:59-68, 104, 146, 190, 277 — адрес сервера в именах и конфигах профилей.
 	"OPENVPN_HOST":   {Kind: SetupHost, Apply: onlyPro, Editable: true, Title: "Адрес сервера в профилях OpenVPN", Hint: "домен или IP; пусто — IP сервера"},
 	"WIREGUARD_HOST": {Kind: SetupHost, Apply: onlyPro, Editable: true, Title: "Адрес сервера в профилях WireGuard", Hint: "домен или IP; пусто — IP сервера"},
+
+	// setup.sh спрашивает вводом (пусто — определить автоматически); значение
+	// попадает в setup, который подключается через source, поэтому вид host.
+	"DEFAULT_IP":        {Kind: SetupHost, Apply: reinst, Title: "Адрес входа/выхода сервера", Hint: "IPv4 или домен; пусто — определяется автоматически"},
+	"ANTIZAPRET_OUT_IP": {Kind: SetupHost, Apply: reinst, Title: "Адрес выхода режима AntiZapret", Hint: "IPv4 или домен; пусто — определяется автоматически"},
+	"VPN_OUT_IP":        {Kind: SetupHost, Apply: reinst, Title: "Адрес выхода полного VPN", Hint: "IPv4 или домен; пусто — определяется автоматически"},
 
 	// Адресация читается всеми скриптами (up.sh:46, parse.sh:154, down.sh:39):
 	// смена ломает уже выданные профили и правила — повторный setup.sh.

@@ -307,6 +307,24 @@ func IsWarpAccountKey(key string) bool {
 	return false
 }
 
+// serverBoundSetupKeys — ключи setup, привязанные к самому серверу (адрес и
+// интерфейс входа/выхода, их записывает setup.sh при установке): основной
+// сервер и реплика стоят на разных адресах, поэтому на реплику они не
+// переносятся и остаются своими.
+var serverBoundSetupKeys = map[string]bool{
+	"DEFAULT_IP": true, "DEFAULT_INTERFACE": true,
+	"ANTIZAPRET_OUT_IP": true, "ANTIZAPRET_OUT_INTERFACE": true,
+	"VPN_OUT_IP": true, "VPN_OUT_INTERFACE": true,
+}
+
+// IsServerBoundSetupKey — ключ setup, свойственный только своему серверу.
+func IsServerBoundSetupKey(key string) bool { return serverBoundSetupKeys[key] }
+
+// isReplicaOwnSetupKey — ключ, который реплика оставляет себе при синхронизации.
+func isReplicaOwnSetupKey(key string) bool {
+	return IsWarpAccountKey(key) || IsServerBoundSetupKey(key)
+}
+
 func setupLineKey(line string) (string, bool) {
 	k, _, ok := strings.Cut(strings.TrimSpace(line), "=")
 	if !ok || k == "" || strings.HasPrefix(k, "#") {
@@ -315,11 +333,12 @@ func setupLineKey(line string) (string, bool) {
 	return strings.TrimSpace(k), true
 }
 
-// StripWarpAccount убирает из setup строки аккаунта WARP.
+// StripWarpAccount убирает из setup строки аккаунта WARP и ключи, привязанные
+// к самому серверу (IsServerBoundSetupKey).
 func StripWarpAccount(data []byte) []byte {
 	var out bytes.Buffer
 	for _, line := range splitKeepEOL(data) {
-		if k, ok := setupLineKey(line); ok && IsWarpAccountKey(k) {
+		if k, ok := setupLineKey(line); ok && isReplicaOwnSetupKey(k) {
 			continue
 		}
 		out.WriteString(line)
@@ -328,14 +347,15 @@ func StripWarpAccount(data []byte) []byte {
 }
 
 // MergeSetup — setup реплики после синхронизации: всё из присланного, кроме
-// строк аккаунта WARP, которые остаются свои (локальные).
+// строк аккаунта WARP и ключей, привязанных к серверу (адреса и интерфейсы
+// входа/выхода), которые остаются свои (локальные).
 func MergeSetup(incoming, local []byte) []byte {
 	out := StripWarpAccount(incoming)
 	if len(out) > 0 && out[len(out)-1] != '\n' {
 		out = append(out, '\n')
 	}
 	for _, line := range splitKeepEOL(local) {
-		if k, ok := setupLineKey(line); ok && IsWarpAccountKey(k) {
+		if k, ok := setupLineKey(line); ok && isReplicaOwnSetupKey(k) {
 			if !strings.HasSuffix(line, "\n") {
 				line += "\n"
 			}

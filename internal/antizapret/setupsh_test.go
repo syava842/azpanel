@@ -38,6 +38,7 @@ func fullSetup() map[string]string {
 		"RECONNECT_WARP": "y", "TXQUEUELEN": "5000",
 		"FLOOD_PROTECTION": "n", "CLEAR_DNS_CACHE": "n", "CLEAR_HOSTS": "n",
 		"WARP_ENDPOINT": "162.159.192.7:500",
+		"DEFAULT_IP":    "203.0.113.5", "ANTIZAPRET_OUT_IP": "", "VPN_OUT_IP": "203.0.113.6",
 	}
 	return m
 }
@@ -77,7 +78,7 @@ func TestPlanSetupShEnvAndStdin(t *testing.T) {
 	if env["MTU"] != "" || env["OPENVPN_HOST"] != "" {
 		t.Fatal("MTU и адреса идут вводом, не окружением")
 	}
-	if p.Stdin != "1380\n162.159.192.7:500\nvpn.example.com\nwg.example.com\n" {
+	if p.Stdin != "1380\n162.159.192.7:500\nvpn.example.com\nwg.example.com\n203.0.113.5\n\n203.0.113.6\n" {
 		t.Fatalf("ввод: %q", p.Stdin)
 	}
 	if !sort.StringsAreSorted(p.Env) {
@@ -174,9 +175,10 @@ func TestShPromptsMatchSetupSh(t *testing.T) {
 func TestCheckSetupShQuestionsCatchesDrift(t *testing.T) {
 	text := readSetupSh(t)
 	cases := map[string]string{
-		"новый вопрос":     strings.Replace(text, "until [[ \"$ROUTE_ALL\" =~ (y|n) ]]", "until [[ \"$ROUTE_ALL\" =~ (y|n|a) ]]", 1),
-		"нет вопроса":      strings.Replace(text, "until [[ \"$TORRENT_GUARD\" =~ (y|n) ]]", "until [[ \"$NEW_ASK\" =~ (y|n) ]]", 1),
-		"ввод переставлен": strings.Replace(text, "OPENVPN_HOST\ndo", "OPENVPN_HOST_X\ndo", 1),
+		"новый вопрос":        strings.Replace(text, "until [[ \"$ROUTE_ALL\" =~ (y|n) ]]", "until [[ \"$ROUTE_ALL\" =~ (y|n|a) ]]", 1),
+		"нет вопроса":         strings.Replace(text, "until [[ \"$TORRENT_GUARD\" =~ (y|n) ]]", "until [[ \"$NEW_ASK\" =~ (y|n) ]]", 1),
+		"ввод переставлен":    strings.Replace(text, "OPENVPN_HOST\ndo", "OPENVPN_HOST_X\ndo", 1),
+		"адрес выхода сменён": strings.Replace(text, "-e ANTIZAPRET_OUT_IP\n", "-e ANTIZAPRET_OUT_IP_X\n", 1),
 	}
 	for name, mod := range cases {
 		if mod == text {
@@ -201,7 +203,9 @@ func TestSetupShFacts(t *testing.T) {
 		}
 		return i
 	}
-	if !(idx("-i \"$MTU\" MTU") < idx("WARP_MTU") && idx("OPENVPN_HOST\ndo") < idx("WIREGUARD_HOST\ndo")) {
+	if !(idx("-i \"$MTU\" MTU") < idx("WARP_MTU") && idx("OPENVPN_HOST\ndo") < idx("WIREGUARD_HOST\ndo") &&
+		idx("WIREGUARD_HOST\ndo") < idx("-e DEFAULT_IP\n") && idx("-e DEFAULT_IP\n") < idx("-e ANTIZAPRET_OUT_IP\n") &&
+		idx("-e ANTIZAPRET_OUT_IP\n") < idx("-e VPN_OUT_IP\n")) {
 		t.Fatal("порядок вопросов ввода изменился")
 	}
 	if !strings.HasSuffix(strings.TrimSpace(text), "reboot") {
@@ -224,7 +228,7 @@ func TestPlanDrivesRealQuestionSection(t *testing.T) {
 	}
 	section := text[start:end]
 	script := "getent() { echo 1.2.3.4; }\nMTU=1300\n" + section +
-		"\necho \"RESULT $MTU|$WARP_MTU|$OPENVPN_HOST|$WIREGUARD_HOST|$ROUTE_ALL|$DISCORD_INCLUDE\"\n"
+		"\necho \"RESULT $MTU|$WARP_MTU|$OPENVPN_HOST|$WIREGUARD_HOST|$ROUTE_ALL|$DISCORD_INCLUDE|$DEFAULT_IP|$ANTIZAPRET_OUT_IP|$VPN_OUT_IP\"\n"
 	dir := t.TempDir()
 	path := dir + "/q.sh"
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
@@ -240,7 +244,7 @@ func TestPlanDrivesRealQuestionSection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bash: %v\n%s", err, out)
 	}
-	if !strings.Contains(string(out), "RESULT 1380|1300|vpn.example.com|wg.example.com|y|y") {
+	if !strings.Contains(string(out), "RESULT 1380|1300|vpn.example.com|wg.example.com|y|y|203.0.113.5||203.0.113.6") {
 		t.Fatalf("секция вопросов отработала не так:\n%s", out)
 	}
 }
@@ -315,7 +319,7 @@ func TestPlanSetupShDNSAndWarpEndpoint(t *testing.T) {
 	}
 	m = fullSetup()
 	delete(m, "WARP_ENDPOINT")
-	if p := PlanSetupSh(m, nil); len(p.Problems) != 0 || p.Stdin != "1380\n\nvpn.example.com\nwg.example.com\n" {
+	if p := PlanSetupSh(m, nil); len(p.Problems) != 0 || p.Stdin != "1380\n\nvpn.example.com\nwg.example.com\n203.0.113.5\n\n203.0.113.6\n" {
 		t.Fatalf("без адреса WARP: %v %q", p.Problems, p.Stdin)
 	}
 	for _, bad := range []string{"$(id):500", "a b:1", "host", "host:port", "x:1\ny"} {
@@ -323,6 +327,38 @@ func TestPlanSetupShDNSAndWarpEndpoint(t *testing.T) {
 		m["WARP_ENDPOINT"] = bad
 		if p := PlanSetupSh(m, nil); len(p.Problems) == 0 || strings.Contains(p.Stdin, bad) {
 			t.Errorf("WARP_ENDPOINT=%q принят: %q", bad, p.Stdin)
+		}
+	}
+}
+
+// 26.11.2026: адреса входа/выхода DEFAULT_IP, ANTIZAPRET_OUT_IP, VPN_OUT_IP —
+// последние три строки ввода; значение берётся из setup, пусто — автоопределение;
+// небезопасное значение отвергается и в ввод не попадает.
+func TestPlanSetupShOutIPs(t *testing.T) {
+	p := PlanSetupSh(fullSetup(), nil)
+	lines := strings.Split(strings.TrimRight(p.Stdin, "\n"), "\n")
+	if len(lines) != len(SetupShStdinKeys) {
+		t.Fatalf("строк ввода %d, ключей %d", len(lines), len(SetupShStdinKeys))
+	}
+	tail := SetupShStdinKeys[len(SetupShStdinKeys)-3:]
+	if strings.Join(tail, ",") != "DEFAULT_IP,ANTIZAPRET_OUT_IP,VPN_OUT_IP" {
+		t.Fatalf("порядок ввода: %v", SetupShStdinKeys)
+	}
+	m := fullSetup()
+	delete(m, "DEFAULT_IP")
+	if p := PlanSetupSh(m, nil); len(p.Problems) != 0 || !strings.HasSuffix(p.Stdin, "\n\n\n203.0.113.6\n") {
+		t.Fatalf("без DEFAULT_IP: %v %q", p.Problems, p.Stdin)
+	}
+	for _, k := range []string{"DEFAULT_IP", "ANTIZAPRET_OUT_IP", "VPN_OUT_IP"} {
+		for _, bad := range []string{"$(id)", "1.2.3.4;rm", "a b", "::1", "x\ny"} {
+			m := fullSetup()
+			m[k] = bad
+			if p := PlanSetupSh(m, nil); len(p.Problems) == 0 || strings.Contains(p.Stdin, bad) {
+				t.Errorf("%s=%q принят: %q", k, bad, p.Stdin)
+			}
+		}
+		if !SetupShTakes(k) {
+			t.Errorf("SetupShTakes(%s) = false", k)
 		}
 	}
 }
