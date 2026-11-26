@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// Как работает setup.sh (testdata/setup.sh — коммит 4923aac от 17.11.2026) и
+// Как работает setup.sh (testdata/setup.sh — коммит b988532 от 26.11.2026) и
 // что из этого берёт агент:
 //
 //   - Первый вопрос — MTU OpenVPN/WireGuard: «read … MTU» стоит БЕЗ проверки
@@ -17,8 +17,11 @@ import (
 //     стандартного ввода. Так же всегда спрашиваются адрес WARP
 //     (WARP_ENDPOINT, пустая строка — по умолчанию) и адреса серверов
 //     OPENVPN_HOST и WIREGUARD_HOST (по строке на каждый, пустая строка —
-//     «пропустить»). Поэтому на стандартный ввод идут четыре строки: MTU,
-//     WARP_ENDPOINT, OPENVPN_HOST, WIREGUARD_HOST — в этом порядке.
+//     «пропустить»), а после вопросов «Include» — адреса входа/выхода
+//     DEFAULT_IP, ANTIZAPRET_OUT_IP, VPN_OUT_IP (пустая строка — определить
+//     автоматически). Поэтому на стандартный ввод идут семь строк: MTU,
+//     WARP_ENDPOINT, OPENVPN_HOST, WIREGUARD_HOST, DEFAULT_IP,
+//     ANTIZAPRET_OUT_IP, VPN_OUT_IP — в этом порядке.
 //   - Все остальные вопросы устроены как «until [[ "$KEY" =~ шаблон ]]; do read …»:
 //     если переменная окружения подходит под шаблон, вопрос пропускается.
 //   - Опасность: стандартный ввод закончился (EOF), а переменная не подошла —
@@ -131,13 +134,19 @@ const (
 	shKeyWarpEndpoint  = "WARP_ENDPOINT"
 	shKeyOpenVPNHost   = "OPENVPN_HOST"
 	shKeyWireGuardHost = "WIREGUARD_HOST"
+	shKeyDefaultIP     = "DEFAULT_IP"
+	shKeyAZOutIP       = "ANTIZAPRET_OUT_IP"
+	shKeyVPNOutIP      = "VPN_OUT_IP"
 )
 
 // SetupShStdinKeys — ключи, ответы на которые идут стандартным вводом, по
 // строке в этом порядке.
-var SetupShStdinKeys = []string{shKeyMTU, shKeyWarpEndpoint, shKeyOpenVPNHost, shKeyWireGuardHost}
+var SetupShStdinKeys = []string{
+	shKeyMTU, shKeyWarpEndpoint, shKeyOpenVPNHost, shKeyWireGuardHost,
+	shKeyDefaultIP, shKeyAZOutIP, shKeyVPNOutIP,
+}
 
-// warpEndpointRe — адрес WARP «хост:порт»: setup.sh пишет его в setup,
+// warpEndpointRe — адрес WARP «адрес:порт»: setup.sh пишет его в setup,
 // который подключается через «source», поэтому только безопасные знаки.
 var warpEndpointRe = regexp.MustCompile(`^[A-Za-z0-9.-]{1,253}:[0-9]{1,5}$`)
 
@@ -146,7 +155,7 @@ type SetupShPlan struct {
 	// Env — пары KEY=VALUE для окружения, по алфавиту. Без SETUP_DATE, без
 	// ключей с секретами и без MTU/адресов (они идут вводом).
 	Env []string
-	// Stdin — MTU, WARP_ENDPOINT, OPENVPN_HOST, WIREGUARD_HOST — по строке.
+	// Stdin — ответы по SetupShStdinKeys, по строке на ключ.
 	Stdin string
 	// Notes — какие ключи взяты по умолчанию setup.sh.
 	Notes []string
@@ -214,7 +223,20 @@ func PlanSetupSh(setup, overrides map[string]string) SetupShPlan {
 		p.Problems = append(p.Problems, fmt.Sprintf("%s=%q: нужен вид хост:порт (латиница, цифры, точка, дефис) или пусто", shKeyWarpEndpoint, warp))
 		warp = ""
 	}
-	p.Stdin = mtu + "\n" + warp + "\n" + hosts[0] + "\n" + hosts[1] + "\n"
+	// DEFAULT_IP, ANTIZAPRET_OUT_IP, VPN_OUT_IP: пусто — setup.sh определит
+	// адрес сам; значение при обновлении — нынешнее из setup узла. Оно
+	// попадает в файл setup (source), поэтому проверка та же, что у адресов
+	// серверов.
+	ips := [3]string{}
+	for i, k := range []string{shKeyDefaultIP, shKeyAZOutIP, shKeyVPNOutIP} {
+		h, err := checkHost(values[k])
+		if err != nil {
+			p.Problems = append(p.Problems, fmt.Sprintf("%s=%q: %v", k, values[k], err))
+		}
+		ips[i] = h
+	}
+	p.Stdin = mtu + "\n" + warp + "\n" + hosts[0] + "\n" + hosts[1] + "\n" +
+		ips[0] + "\n" + ips[1] + "\n" + ips[2] + "\n"
 
 	env := map[string]string{}
 	for _, q := range shPrompts {
@@ -304,7 +326,8 @@ func (q shPrompt) describe() string {
 // данные аккаунтов WARP — он пишет сам.
 func SetupShTakes(key string) bool {
 	switch key {
-	case shKeyMTU, shKeyWarpEndpoint, shKeyOpenVPNHost, shKeyWireGuardHost:
+	case shKeyMTU, shKeyWarpEndpoint, shKeyOpenVPNHost, shKeyWireGuardHost,
+		shKeyDefaultIP, shKeyAZOutIP, shKeyVPNOutIP:
 		return true
 	}
 	for _, q := range shPrompts {
